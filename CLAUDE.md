@@ -33,7 +33,7 @@
 │   ├── unit/           # Vitest
 │   └── seo/            # Playwright: приёмочные SEO-тесты (см. ниже)
 ├── docs/
-│   └── seo-requirements.md   # Полное ТЗ — источник истины
+│   └── tz-site-admin.md   # Полное ТЗ — источник истины
 └── CLAUDE.md
 ```
 
