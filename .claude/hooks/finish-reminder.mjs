@@ -11,7 +11,7 @@ process.stdout.write(
     'Протокол завершения (skill finish-task):',
     '  1. pnpm verify зелёный целиком, вывод — в отчёт',
     '  2. pnpm test:seo до и после, если тронуты шаблон/роутинг/sitemap/коллекции',
-    '  3. вердикты url-guard и seo-auditor, где обязательны; reviewer — всегда',
+    '  3. вердикты url-guard, seo-auditor, perf-guard, где обязательны; reviewer — всегда',
     '  4. отчёт по шаблону, включая раздел «Требует решения человека»',
     '  5. published и index,follow — никогда не агентом',
     '',
