@@ -1,0 +1,14 @@
+{
+  "name": "@otkritka/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../scripts/not-scaffolded.mjs dev \"Astro в apps/web ещё не установлен\"",
+    "build": "node ../../scripts/not-scaffolded.mjs build \"Astro в apps/web ещё не установлен\""
+  },
+  "dependencies": {
+    "@otkritka/shared": "workspace:*",
+    "@otkritka/images": "workspace:*"
+  }
+}

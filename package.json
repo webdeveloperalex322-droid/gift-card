@@ -1,0 +1,33 @@
+{
+  "name": "otkritka",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node scripts/not-scaffolded.mjs dev \"apps/web (Astro) и apps/cms (Payload) ещё не установлены\"",
+    "build": "node scripts/not-scaffolded.mjs build \"apps/web (Astro) и apps/cms (Payload) ещё не установлены\"",
+    "generate:types": "node scripts/not-scaffolded.mjs generate:types \"payload generate:types появится вместе с apps/cms\"",
+    "check": "tsc -b tsconfig.json && eslint .",
+    "test": "vitest run",
+    "test:seo": "node scripts/seo-gate.mjs",
+    "verify": "pnpm run check && pnpm run test && pnpm run test:seo"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@otkritka/images": "workspace:*",
+    "@otkritka/shared": "workspace:*",
+    "@types/node": "^24.10.1",
+    "eslint": "^9.39.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.0",
+    "vitest": "^3.2.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@otkritka/cms",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../scripts/not-scaffolded.mjs dev \"Payload в apps/cms ещё не установлен\"",
+    "build": "node ../../scripts/not-scaffolded.mjs build \"Payload в apps/cms ещё не установлен\"",
+    "generate:types": "node ../../scripts/not-scaffolded.mjs generate:types \"payload generate:types появится вместе с конфигом Payload\""
+  },
+  "dependencies": {
+    "@otkritka/shared": "workspace:*",
+    "@otkritka/images": "workspace:*"
+  }
+}
