@@ -48,7 +48,7 @@
  */
 import type { Field } from 'payload';
 
-import { OUTPUT_FORMATS, isOutputFormat } from '@otkritka/images';
+import { type OutputFormat, OUTPUT_FORMATS, isOutputFormat } from '@otkritka/images';
 
 /**
  * Поля строки варианта, которые попадают в зеркало.
@@ -60,8 +60,16 @@ export const MIRRORED_VARIANT_FIELD_NAMES = ['key', 'format', 'width', 'height']
 
 /** Строка зеркала: ровно то, из чего собирается `<picture>`. */
 export interface MirroredVariant {
-  /** Формат вывода: `avif` | `webp` | `jpeg`. Набор закрыт `OUTPUT_FORMATS`. */
-  readonly format: string;
+  /**
+   * Формат вывода. Тип — `OutputFormat` из `@otkritka/images`, а НЕ `string`:
+   * значение уже сужено `isOutputFormat` при чтении, поле в схеме — `select` с
+   * тем же закрытым набором, и сгенерированный тип Payload описывает его как
+   * `'avif' | 'webp' | 'jpeg'`. Объявление `string` здесь (находка ревизии от
+   * 2026-08-22) отдавало бы потребителю зеркала описание СЛАБЕЕ, чем у
+   * источника, — ровно то расхождение между описаниями одного поля, от которого
+   * этот модуль и защищает.
+   */
+  readonly format: OutputFormat;
   /** ФАКТИЧЕСКАЯ высота файла в пикселях. Атрибут `height` берётся отсюда. */
   readonly height: number;
   /** Ключ объекта в хранилище. Публичный путь — `derivativePublicPath(key)`. */

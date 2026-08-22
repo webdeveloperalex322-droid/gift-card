@@ -540,6 +540,44 @@ describe('блокировка перевода в review при похожем 
     expect(refusalOf(error)).toEqual({ rule: 'visual-duplicate-unresolved', status: 400 });
   });
 
+  it('подмена изображения у ОПУБЛИКОВАННОЙ карточки блокируется без решения', async () => {
+    // Находка ревизии от 2026-08-22: калитка выходила по «статус не менялся»,
+    // поэтому поставить визуальный дубль на уже опубликованную страницу можно
+    // было молча — оставался только warn в журнале. Здесь проверяется ПРОВОДКА
+    // признака `imageChanged` из хука в правило: без неё тест на самом правиле
+    // (`duplicates.test.ts`) остался бы зелёным, а дыра — открытой.
+    const { req } = stand({
+      cards: [similarCard],
+      images: { '100': image, '200': { id: 200, pHash: 'fffffffffffffff8' } },
+      user: ADMIN,
+    });
+
+    const error = await (beforeValidate({
+      // Статус не меняется: карточка была и остаётся published.
+      data: { image: 200, status: 'published' },
+      operation: 'update',
+      originalDoc: { ...PUBLISHED_CARD, image: 100 },
+      req,
+    }) as Promise<unknown>).catch((caught: unknown) => caught);
+
+    expect(refusalOf(error)).toEqual({ rule: 'visual-duplicate-unresolved', status: 400 });
+  });
+
+  it('сохранение опубликованной карточки БЕЗ смены изображения проходит', async () => {
+    // Иначе на калитке падала бы и пересинхронизация зеркала после замены
+    // байтов, и любая правка текста опубликованной страницы.
+    const { req } = stand({ cards: [similarCard], images: { '100': image }, user: ADMIN });
+
+    const result = (await beforeValidate({
+      data: { image: 100, status: 'published', title: 'Другой заголовок' },
+      operation: 'update',
+      originalDoc: { ...PUBLISHED_CARD, image: 100 },
+      req,
+    })) as Doc;
+
+    expect((result.visualDuplicate as Doc).similar).toEqual([{ card: 42, distance: 4 }]);
+  });
+
   it('своя же запись похожей не считается', async () => {
     const { req } = stand({
       cards: [{ id: 8, pHash: 'ffffffffffffffff' }],

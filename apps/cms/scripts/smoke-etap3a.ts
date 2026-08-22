@@ -345,6 +345,49 @@ async function main(): Promise<void> {
     );
 
     /* --------------------------------------------------------------- */
+    /* Удаление изображения: отказ, пока на него ссылается карточка     */
+    /* --------------------------------------------------------------- */
+
+    // Путь удаления — вторая половина той же дыры, что и замена байтов.
+    // Связь `cards.image` живёт в `cards_rels` с `onDelete: 'cascade'`, поэтому
+    // без отказа в `beforeDelete` поле карточки обнулилось бы МОЛЧА (минуя все
+    // хуки карточки), а зеркало путей осталось бы с ключами удалённых файлов:
+    // опубликованная страница отдавала бы 200 с `<img src>` в никуда.
+    let deleteRefusal = '';
+    let deleteRule: unknown = null;
+    try {
+      await payload.delete({
+        collection: 'card-images',
+        id: image.id,
+        overrideAccess: false,
+        user: admin,
+      });
+    } catch (error) {
+      deleteRefusal = error instanceof Error ? error.message : String(error);
+      deleteRule = (error as { data?: { rule?: unknown } }).data?.rule ?? null;
+    }
+    record(
+      'удаление изображения ОТКЛОНЕНО: на него ссылается опубликованная карточка',
+      deleteRefusal !== '' && deleteRule === 'image-in-use',
+      `rule=${String(deleteRule)}; ${deleteRefusal.slice(0, 160)}`,
+    );
+
+    const survived = await payload.findByID({ collection: 'card-images', id: image.id });
+    const cardAfterRefusal = await payload.findByID({ collection: 'cards', id: card.id });
+    record(
+      'после отказа и запись изображения, и зеркало карточки целы',
+      survived.id === image.id &&
+        keysOf(cardAfterRefusal.derivative?.variants).length > 0 &&
+        cardAfterRefusal.image !== null,
+      `вариантов в зеркале ${String((cardAfterRefusal.derivative?.variants ?? []).length)}, ` +
+        `image=${String(
+          typeof cardAfterRefusal.image === 'object' && cardAfterRefusal.image !== null
+            ? cardAfterRefusal.image.id
+            : cardAfterRefusal.image,
+        )}`,
+    );
+
+    /* --------------------------------------------------------------- */
     /* Снятие с публикации: анониму карточки больше нет вовсе           */
     /* --------------------------------------------------------------- */
 
@@ -371,6 +414,67 @@ async function main(): Promise<void> {
       'у карточки вне published аноним не получает ни зеркала, ни самой записи',
       anonymousDraft.docs.length === 0,
       `документов у анонима ${String(anonymousDraft.docs.length)}`,
+    );
+
+    /* --------------------------------------------------------------- */
+    /* Удаление изображения: круг — ВСЕ карточки, не только published    */
+    /* --------------------------------------------------------------- */
+
+    let draftRefusalRule: unknown = null;
+    try {
+      await payload.delete({
+        collection: 'card-images',
+        id: image.id,
+        overrideAccess: false,
+        user: admin,
+      });
+    } catch (error) {
+      draftRefusalRule = (error as { data?: { rule?: unknown } }).data?.rule ?? null;
+    }
+    record(
+      'отказ стоит и для черновика: у него зеркало осталось бы таким же мёртвым',
+      draftRefusalRule === 'image-in-use',
+      `rule=${String(draftRefusalRule)}`,
+    );
+
+    // Отвязка — то самое действие, которое отказ и требует от редактора. Делается
+    // она уже НЕ на опубликованной странице: карточка снята с публикации выше,
+    // поэтому опубликованный URL ни на миг не остаётся без изображения.
+    await payload.update({
+      collection: 'cards',
+      id: card.id,
+      data: { image: null },
+      overrideAccess: false,
+      user: admin,
+    });
+    const unlinked = await payload.findByID({ collection: 'cards', id: card.id });
+    record(
+      'после отвязки зеркало карточки опустело: мёртвых ключей не осталось',
+      (unlinked.derivative?.variants ?? []).length === 0 && unlinked.derivative?.revision === null,
+      `вариантов ${String((unlinked.derivative?.variants ?? []).length)}, revision=${String(
+        unlinked.derivative?.revision,
+      )}`,
+    );
+
+    let deletedAfterUnlink = false;
+    try {
+      await payload.delete({
+        collection: 'card-images',
+        id: image.id,
+        overrideAccess: false,
+        user: admin,
+      });
+      deletedAfterUnlink = true;
+      created.cardImages = created.cardImages.filter((id) => id !== image.id);
+    } catch (error) {
+      console.log(
+        `  отказ после отвязки: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    record(
+      'после отвязки удаление проходит — отказ не превратился в тупик',
+      deletedAfterUnlink,
+      `запись #${String(image.id)} удалена`,
     );
   } finally {
     /* --------------------------------------------------------------- */

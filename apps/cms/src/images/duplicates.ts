@@ -123,25 +123,59 @@ export interface VisualDuplicateGate {
   readonly decisionFor: unknown;
   /** Отпечаток НАЙДЕННОГО СЕЙЧАС набора: {@link similarFingerprint}. */
   readonly fingerprint: string;
+  /**
+   * Меняется ли СВЯЗЬ `cards.image` этой операцией.
+   *
+   * Поле обязательное, а не «необязательное со значением по умолчанию»:
+   * забытый параметр тогда снимал бы калитку молча, и заметить это можно было бы
+   * только по двум страницам с одной картинкой в выдаче.
+   */
+  readonly imageChanged: boolean;
   readonly nextStatus: unknown;
   readonly previousStatus: unknown;
   readonly similar: readonly SimilarMatch[];
 }
 
+/** Статусы, в которых страница уже видна проверяющему или поиску. */
+function isForwardStatus(status: unknown): boolean {
+  return status === 'review' || status === 'published';
+}
+
 /**
- * Блокирует переход в `review`/`published`, пока редактор не решил, дубль это
- * или нет.
+ * Блокирует появление второй страницы с той же картинкой, пока редактор не
+ * решил, дубль это или нет.
  *
- * Проверка стоит на ПЕРЕХОДЕ, а не на каждом сохранении: править черновик с
- * похожим изображением никто не запрещает — запрещено вести его дальше молча.
+ * ДВА СЛУЧАЯ, оба обязательные:
+ *
+ *   1. ПЕРЕХОД `draft → review → published`. Править черновик с похожим
+ *      изображением никто не запрещает — запрещено вести его дальше молча.
+ *   2. ПОДМЕНА ИЗОБРАЖЕНИЯ у записи, которая уже в `review` или `published`.
+ *      Этот случай был открыт (находка ревизии от 2026-08-22): проверка
+ *      выходила по `!statusChanged`, поэтому поставить визуальный дубль на уже
+ *      опубликованную карточку можно было без единого вопроса — оставалось
+ *      только предупреждение в журнале, которого никто не читает. Норма при
+ *      этом одна и та же: «в каталоге не появляются две страницы с одной
+ *      картинкой» (ТЗ §6.7 п. 4), и от того, менялся ли при этом статус, она не
+ *      зависит.
+ *
+ * ЧТО СЮДА НАМЕРЕННО НЕ ПОПАЛО: замена БАЙТОВ записи изображения
+ * (`card-images`, Э2-06) при неизменной связи. Там pHash карточки тоже меняется,
+ * но приходит это изменение через пересинхронизацию зеркала
+ * (`upload-hooks.ts`), где сохранение карточки идёт с пустыми данными и
+ * подтверждение редактора передать физически нечем: отказ на этой фазе завалил
+ * бы всю операцию замены байтов с сообщением про постороннюю карточку.
+ * Зафиксировано как открытый вопрос (`docs/otkrytye-voprosy.md`, Э3-03a-C), а не
+ * закрыто здесь по догадке.
  *
  * @throws ContentRuleError с кодом `visual-duplicate-unresolved`.
  */
 export function assertVisualDuplicateResolved(gate: VisualDuplicateGate): void {
   const statusChanged = gate.nextStatus !== gate.previousStatus;
-  const goingForward = gate.nextStatus === 'review' || gate.nextStatus === 'published';
+  const goingForward = isForwardStatus(gate.nextStatus);
+  const swapOnVisiblePage =
+    gate.imageChanged && goingForward && isForwardStatus(gate.previousStatus);
 
-  if (!statusChanged || !goingForward || gate.similar.length === 0) {
+  if ((!statusChanged && !swapOnVisiblePage) || !goingForward || gate.similar.length === 0) {
     return;
   }
 
@@ -150,7 +184,12 @@ export function assertVisualDuplicateResolved(gate: VisualDuplicateGate): void {
     .join(', ');
   const preamble =
     `Изображение визуально похоже на уже существующие открытки: ${list}. ` +
-    'Круг поиска — published и review (ТЗ §6.7 п. 4).';
+    'Круг поиска — published и review (ТЗ §6.7 п. 4).' +
+    (swapOnVisiblePage && !statusChanged
+      ? ` Карточка уже в статусе «${String(gate.previousStatus)}», и изображение меняется ` +
+        'у неё на месте — решение требуется тем же порядком, что и при переводе дальше по ' +
+        'статусам: страница уже видна, поэтому дубль появился бы сразу.'
+      : '');
 
   if (gate.decision === 'duplicate') {
     throw new ContentRuleError(

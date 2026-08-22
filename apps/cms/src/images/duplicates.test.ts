@@ -96,6 +96,7 @@ describe('блокировка перевода в review', () => {
         decision: null,
         decisionFor: null,
         fingerprint: similarFingerprint({ hash: HASH, ids: [] }),
+        imageChanged: false,
         nextStatus: 'review',
         previousStatus: 'draft',
         similar: [],
@@ -109,6 +110,7 @@ describe('блокировка перевода в review', () => {
         decision: null,
         decisionFor: null,
         fingerprint,
+        imageChanged: false,
         nextStatus: 'review',
         previousStatus: 'draft',
         similar,
@@ -127,6 +129,7 @@ describe('блокировка перевода в review', () => {
         decision: null,
         decisionFor: null,
         fingerprint,
+        imageChanged: false,
         nextStatus: 'published',
         previousStatus: 'review',
         similar,
@@ -140,6 +143,7 @@ describe('блокировка перевода в review', () => {
         decision: 'unique',
         decisionFor: fingerprint,
         fingerprint,
+        imageChanged: false,
         nextStatus: 'review',
         previousStatus: 'draft',
         similar,
@@ -155,6 +159,7 @@ describe('блокировка перевода в review', () => {
         decision: 'unique',
         decisionFor: similarFingerprint({ hash: NEAR, ids: [2] }),
         fingerprint,
+        imageChanged: false,
         nextStatus: 'review',
         previousStatus: 'draft',
         similar,
@@ -168,6 +173,7 @@ describe('блокировка перевода в review', () => {
         decision: 'duplicate',
         decisionFor: fingerprint,
         fingerprint,
+        imageChanged: false,
         nextStatus: 'review',
         previousStatus: 'draft',
         similar,
@@ -181,8 +187,114 @@ describe('блокировка перевода в review', () => {
         decision: null,
         decisionFor: null,
         fingerprint,
+        imageChanged: false,
         nextStatus: 'draft',
         previousStatus: 'draft',
+        similar,
+      }),
+    ).not.toThrow();
+  });
+
+  it('смена изображения у draft не блокируется: страницы ещё нет', () => {
+    expect(() =>
+      assertVisualDuplicateResolved({
+        decision: null,
+        decisionFor: null,
+        fingerprint,
+        imageChanged: true,
+        nextStatus: 'draft',
+        previousStatus: 'draft',
+        similar,
+      }),
+    ).not.toThrow();
+  });
+});
+
+/**
+ * Подмена изображения без смены статуса (находка ревизии от 2026-08-22).
+ *
+ * Прежняя версия выходила по `!statusChanged`, поэтому поставить визуальный
+ * дубль на УЖЕ ОПУБЛИКОВАННУЮ карточку можно было молча: калитка не срабатывала
+ * вовсе, оставалось только предупреждение в журнале. Норма при этом ровно та же
+ * — две страницы с одной картинкой недопустимы (ТЗ §6.7 п. 4).
+ */
+describe('подмена изображения у записи, которая уже видна', () => {
+  const similar = [{ distance: 4, id: 2 }];
+  const fingerprint = similarFingerprint({ hash: HASH, ids: [2] });
+
+  it('published → published со сменой изображения блокируется без решения', () => {
+    try {
+      assertVisualDuplicateResolved({
+        decision: null,
+        decisionFor: null,
+        fingerprint,
+        imageChanged: true,
+        nextStatus: 'published',
+        previousStatus: 'published',
+        similar,
+      });
+      throw new Error('подмена прошла, хотя должна была быть заблокирована');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ContentRuleError);
+      expect((error as ContentRuleError).rule).toBe('visual-duplicate-unresolved');
+      // Сообщение обязано объяснить, ПОЧЕМУ спрашивают при неизменном статусе.
+      expect((error as ContentRuleError).message).toContain('published');
+    }
+  });
+
+  it('review → review со сменой изображения блокируется так же', () => {
+    expect(() =>
+      assertVisualDuplicateResolved({
+        decision: null,
+        decisionFor: null,
+        fingerprint,
+        imageChanged: true,
+        nextStatus: 'review',
+        previousStatus: 'review',
+        similar,
+      }),
+    ).toThrow(ContentRuleError);
+  });
+
+  it('решение «уникально» для этого набора подмену открывает', () => {
+    expect(() =>
+      assertVisualDuplicateResolved({
+        decision: 'unique',
+        decisionFor: fingerprint,
+        fingerprint,
+        imageChanged: true,
+        nextStatus: 'published',
+        previousStatus: 'published',
+        similar,
+      }),
+    ).not.toThrow();
+  });
+
+  it('сохранение published БЕЗ смены изображения не блокируется', () => {
+    // Иначе пересинхронизация зеркала после замены байтов (upload-hooks) и любая
+    // правка текста опубликованной карточки падали бы на калитке.
+    expect(() =>
+      assertVisualDuplicateResolved({
+        decision: null,
+        decisionFor: null,
+        fingerprint,
+        imageChanged: false,
+        nextStatus: 'published',
+        previousStatus: 'published',
+        similar,
+      }),
+    ).not.toThrow();
+  });
+
+  it('снятие с публикации не блокируется: назад калитка не стоит', () => {
+    expect(() =>
+      assertVisualDuplicateResolved({
+        decision: null,
+        decisionFor: null,
+        fingerprint,
+        imageChanged: true,
+        nextStatus: 'draft',
+        previousStatus: 'published',
         similar,
       }),
     ).not.toThrow();

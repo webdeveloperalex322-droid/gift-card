@@ -25,6 +25,14 @@
  *     новых файлов: удалить прежние раньше значит на время оставить запись,
  *     ссылающуюся на несуществующие файлы. Пересинхронизация зеркала стоит
  *     МЕЖДУ ними — см. {@link resyncMirroredCards};
+ *   - `beforeDelete` — ОТКАЗ, если на изображение ссылается хоть одна карточка.
+ *     Почему отказ, а не уборка: связь `cards.image` живёт в `cards_rels` с
+ *     `onDelete: 'cascade'`
+ *     (`@payloadcms/drizzle/dist/schema/build.js`), поэтому удаление записи
+ *     изображения МОЛЧА обнуляет поле у карточки, а зеркало
+ *     (`cards.derivative.variants[]`) остаётся заполненным ключами уже удалённых
+ *     файлов. Опубликованная страница после этого отдаёт 200 с `<img src>` в
+ *     никуда. См. {@link rejectDeleteWhileReferenced};
  *   - `afterDelete` — удаление и производных, и оригинала удалённой записи.
  *     Имя файла при этом НЕ освобождается: реестр `image-name-claims` строк не
  *     теряет, поэтому суффикс `-N` после удаления не переиспользуется.
@@ -41,6 +49,7 @@ import {
   type CollectionAfterChangeHook,
   type CollectionAfterDeleteHook,
   type CollectionBeforeChangeHook,
+  type CollectionBeforeDeleteHook,
   type File,
   type PayloadRequest,
   type TypeWithID,
@@ -74,6 +83,18 @@ const RETIRED_CONTEXT_KEY = 'otkritka:retiredImageObjects';
  * пространстве не появится).
  */
 const PENDING_CONTEXT_KEY = 'otkritka:pendingImageObjects';
+
+/**
+ * Ключ признака «обход карточек оборвался по пределу».
+ *
+ * Ставит {@link resyncMirroredCards}, читает {@link retireReplacedObjects}: при
+ * обрыве уборка прежних объектов ПРОПУСКАЕТСЯ. Иначе часть карточек осталась бы
+ * и с зеркалом на прежние ключи, и без файлов по этим ключам — то есть
+ * гарантированно без изображений на опубликованной странице до ручного
+ * пересохранения. Лишние файлы в хранилище дешевле отсутствующих: они занимают
+ * место, но ни одна страница из-за них не ломается.
+ */
+const RESYNC_TRUNCATED_CONTEXT_KEY = 'otkritka:imageMirrorResyncTruncated';
 
 interface RetiredObjects {
   readonly derivativeKeys: readonly string[];
@@ -217,6 +238,13 @@ async function assertReplacementAllowed(args: {
 }
 
 export interface UploadHookOptions {
+  /**
+   * Пределы обхода карточек при пересинхронизации зеркала. Параметр существует
+   * для тестов: и многостраничный обход, и ветка обрыва проверяются на
+   * маленьких значениях, а не созданием тысячи карточек. Продуктовый путь берёт
+   * {@link MIRROR_RESYNC_LIMITS}.
+   */
+  readonly resync?: Partial<MirrorResyncLimits>;
   /** Хранилище. Параметр существует для тестов; продуктовый путь берёт из окружения. */
   readonly storage?: ImageStorage;
 }
@@ -362,7 +390,15 @@ function writePendingObjects(
   };
 }
 
-/** Удаляет объекты, оставшиеся после замены изображения. */
+/**
+ * Удаляет объекты, оставшиеся после замены изображения.
+ *
+ * Уборка ПРОПУСКАЕТСЯ, если обход карточек оборвался по пределу
+ * ({@link resyncMirroredCards}): у части карточек зеркало осталось на прежних
+ * ключах, и удаление файлов по этим ключам оставило бы уже опубликованные
+ * страницы вовсе без изображений. Лишние файлы в хранилище — потерянное место;
+ * отсутствующие файлы — сломанная страница в индексе.
+ */
 function retireReplacedObjects(
   options: UploadHookOptions,
 ): CollectionAfterChangeHook<ImageRecord> {
@@ -372,6 +408,17 @@ function retireReplacedObjects(
       return doc;
     }
     delete req.context[RETIRED_CONTEXT_KEY];
+
+    if (req.context[RESYNC_TRUNCATED_CONTEXT_KEY] === true) {
+      delete req.context[RESYNC_TRUNCATED_CONTEXT_KEY];
+      req.payload.logger.error(
+        `[card-images] Уборка прежних файлов ПРОПУЩЕНА нарочно: обход карточек оборвался, ` +
+          `и часть зеркал указывает на эти ${String(retired.derivativeKeys.length)} ключей. ` +
+          'Удалить их можно только после ручной пересинхронизации оставшихся карточек — ' +
+          'иначе опубликованные страницы остались бы без изображений.',
+      );
+      return doc;
+    }
 
     const storage = options.storage ?? imageStorage();
     for (const key of retired.derivativeKeys) {
@@ -399,10 +446,24 @@ function retireReplacedObjects(
  * не `hasMany`, — но уникальность этой связи ничем не обеспечена, и молчаливое
  * усечение обхода оставило бы часть карточек с зеркалом на УДАЛЁННЫЕ файлы.
  * Поэтому обход постраничный по курсору, а достижение предела — громкое
- * предупреждение, а не тихий выход.
+ * предупреждение плюс отказ от уборки прежних файлов, а не тихий выход.
+ *
+ * Форма — интерфейс с инъекцией через {@link UploadHookOptions}, а не две
+ * модульные константы (находка ревизии от 2026-08-22): пока значения были
+ * захардкожены, ни многостраничный обход, ни ветка обрыва не покрывались
+ * тестами вовсе — «громко, а не молча» было заявлено, но не доказано.
  */
-const MIRROR_RESYNC_PAGE_SIZE = 100;
-const MIRROR_RESYNC_MAX_CARDS = 1000;
+export interface MirrorResyncLimits {
+  /** Жёсткий предел числа пересохранённых карточек за одну операцию. */
+  readonly maxCards: number;
+  /** Сколько карточек читается одним запросом. */
+  readonly pageSize: number;
+}
+
+export const MIRROR_RESYNC_LIMITS: MirrorResyncLimits = {
+  maxCards: 1000,
+  pageSize: 100,
+};
 
 /**
  * Обновляет зеркало у карточек, ссылающихся на это изображение (задача Э3-03a).
@@ -432,7 +493,7 @@ const MIRROR_RESYNC_MAX_CARDS = 1000;
  * удаления прежних. Обратный порядок оставлял бы промежуток, в котором зеркало
  * карточки указывает на уже удалённые объекты.
  */
-function resyncMirroredCards(): CollectionAfterChangeHook<ImageRecord> {
+function resyncMirroredCards(limits: MirrorResyncLimits): CollectionAfterChangeHook<ImageRecord> {
   return async ({ doc, operation, previousDoc, req }) => {
     if (operation !== 'update') {
       return doc;
@@ -453,22 +514,24 @@ function resyncMirroredCards(): CollectionAfterChangeHook<ImageRecord> {
     for (;;) {
       // Тип страницы объявлен ЯВНО по той же причине, что в поиске визуальных
       // дублей: иначе вывод типа замыкается на сужение `cursor` (TS7022).
-      const page: { docs: { id: number | string; slug?: string | null }[] } =
-        await req.payload.find({
-          collection: 'cards',
-          depth: 0,
-          limit: MIRROR_RESYNC_PAGE_SIZE,
-          overrideAccess: true,
-          req,
-          select: { slug: true },
-          sort: 'id',
-          where: {
-            and: [
-              { image: { equals: doc.id } },
-              ...(cursor === null ? [] : [{ id: { greater_than: cursor } }]),
-            ],
-          },
-        });
+      const page: {
+        docs: { id: number | string; slug?: string | null }[];
+        hasNextPage?: boolean | null;
+      } = await req.payload.find({
+        collection: 'cards',
+        depth: 0,
+        limit: limits.pageSize,
+        overrideAccess: true,
+        req,
+        select: { slug: true },
+        sort: 'id',
+        where: {
+          and: [
+            { image: { equals: doc.id } },
+            ...(cursor === null ? [] : [{ id: { greater_than: cursor } }]),
+          ],
+        },
+      });
 
       for (const card of page.docs) {
         // Пустые данные: зеркало пишет хук карточки, перечитывая изображение.
@@ -484,10 +547,17 @@ function resyncMirroredCards(): CollectionAfterChangeHook<ImageRecord> {
       }
 
       const last = page.docs.at(-1);
-      if (last === undefined || page.docs.length < MIRROR_RESYNC_PAGE_SIZE) {
+      // Признак «есть ещё» берётся у Payload, а не выводится из размера страницы
+      // (находка ревизии от 2026-08-22). При числе карточек, КРАТНОМ размеру
+      // страницы, последняя страница приходит полной, и правило
+      // «полная страница ⇒ есть ещё» давало ложную тревогу: обход завершился
+      // полностью, а в журнал шло «часть карточек осталась с зеркалом на
+      // удалённые файлы». Ложная тревога об этом дефекте не лучше молчания —
+      // после первой же она перестаёт читаться как настоящая.
+      if (last === undefined || page.hasNextPage !== true) {
         break;
       }
-      if (touched.length >= MIRROR_RESYNC_MAX_CARDS) {
+      if (touched.length >= limits.maxCards) {
         truncated = true;
         break;
       }
@@ -502,14 +572,101 @@ function resyncMirroredCards(): CollectionAfterChangeHook<ImageRecord> {
     );
 
     if (truncated) {
+      // Признак читает `retireReplacedObjects`: прежние файлы остаются на месте.
+      req.context[RESYNC_TRUNCATED_CONTEXT_KEY] = true;
       req.payload.logger.error(
-        `[card-images] Обход карточек ОБОРВАН по пределу ${String(MIRROR_RESYNC_MAX_CARDS)}: ` +
-          'часть карточек осталась с зеркалом на удалённые файлы. Требуется ручная ' +
-          'пересинхронизация — молчать об этом нельзя, на страницах не будет изображений.',
+        `[card-images] Обход карточек ОБОРВАН по пределу ${String(limits.maxCards)}: ` +
+          'часть карточек осталась с зеркалом на ПРЕЖНИЕ ключи. Уборка прежних файлов ' +
+          'пропущена нарочно, поэтому эти страницы продолжают показывать старую картинку, ' +
+          'а не пустое место. Требуется ручная пересинхронизация: пересохраните оставшиеся ' +
+          'карточки, после чего прежние файлы можно удалить.',
       );
     }
 
     return doc;
+  };
+}
+
+/** Сколько ссылающихся карточек перечисляется в тексте отказа. */
+const REFERENCE_SAMPLE_SIZE = 5;
+
+/**
+ * ОТКАЗ удалить изображение, на которое ссылается хоть одна карточка (задача
+ * Э3-03a, находка ревизии от 2026-08-22).
+ *
+ * ЧТО БЫЛО ОТКРЫТО. Пересинхронизация зеркала закрывала только путь ЗАМЕНЫ
+ * байтов. Путь удаления оставался открытым: `afterDelete` сносил файлы, связь
+ * `cards.image` обнулялась каскадом на уровне базы
+ * (`cards_rels` создаётся с `onDelete: 'cascade'`,
+ * `@payloadcms/drizzle/dist/schema/build.js`) — то есть БЕЗ единого хука
+ * карточки, — а зеркало `cards.derivative.variants[]` оставалось заполненным
+ * ключами удалённых файлов. Опубликованная страница отдавала 200 с `<img src>`
+ * в никуда: ровно тот дефект, от которого зеркало и заводилось.
+ *
+ * ПОЧЕМУ ОТКАЗ, А НЕ ПЕРЕСИНХРОНИЗАЦИЯ. Рассматривались два варианта.
+ *
+ *   1. Пересинхронизировать зеркало в `afterDelete` до удаления объектов. К
+ *      этому моменту каскад уже обнулил `cards.image`, поэтому пересохранение
+ *      карточки записало бы ПУСТОЕ зеркало: опубликованная страница осталась бы
+ *      без главного изображения — без битой ссылки, но и без картинки, и
+ *      молча. Для страницы, чей смысл — одна открытка, это не спасение, а
+ *      другой вид того же дефекта. Вдобавок удаление изображения решало бы за
+ *      человека судьбу опубликованного URL, а это решение «301 или 404»
+ *      (ТЗ §8.2).
+ *   2. Отказать. Удаление файла, который стоит на странице, — решение о
+ *      странице, а не уборка мусора: сначала человек решает, что происходит с
+ *      карточкой (другое изображение, снятие с публикации, удаление с 301 или
+ *      404), и только потом файл становится ненужным. Отказ выбран.
+ *
+ * Круг — ВСЕ карточки, а не только публиковавшиеся. У черновика зеркало точно
+ * так же осталось бы с мёртвыми ключами, и всплыло бы это при публикации — то
+ * есть в момент, когда страница уже отдаётся наружу.
+ *
+ * Образец формы отказа — `rejectDeleteWithChildren` в `../collections/collections.ts`:
+ * тот же код возврата, тот же машинный признак в `data.rule` и обязательное
+ * указание, КУДА идти отвязывать.
+ */
+function rejectDeleteWhileReferenced(): CollectionBeforeDeleteHook {
+  return async ({ id, req }) => {
+    const referencing = await req.payload.find({
+      collection: 'cards',
+      depth: 0,
+      limit: REFERENCE_SAMPLE_SIZE,
+      overrideAccess: true,
+      req,
+      select: { slug: true, status: true },
+      sort: 'id',
+      where: { image: { equals: id } },
+    });
+
+    const total = typeof referencing.totalDocs === 'number'
+      ? referencing.totalDocs
+      : referencing.docs.length;
+    if (total === 0) {
+      return;
+    }
+
+    const sample = referencing.docs
+      .map((card) => {
+        const record = asRecord(card);
+        const slug = readString(record.slug) ?? `#${String(record.id)}`;
+        return `${slug} (${readString(record.status) ?? 'без статуса'})`;
+      })
+      .join(', ');
+
+    throw new APIError(
+      `На это изображение ссылаются карточки (${String(total)}): ${sample}` +
+        `${total > referencing.docs.length ? ' и другие' : ''}. Удаление обнулило бы у них ` +
+        'поле «Изображение» КАСКАДОМ, минуя хуки, а зеркало путей (derivative.variants) ' +
+        'осталось бы с ключами удалённых файлов — опубликованная страница отдавала бы 200 ' +
+        'с картинкой в никуда. Сначала решите судьбу самих карточек: поставьте другое ' +
+        'изображение, снимите с публикации или удалите карточку (для опубликованного URL ' +
+        'при этом решается, 301 это или 404). После того как ни одна карточка на файл не ' +
+        'ссылается, удаление проходит.',
+      400,
+      { rule: 'image-in-use' },
+      true,
+    );
   };
 }
 
@@ -542,15 +699,24 @@ export interface UploadHooks {
   readonly afterChange: CollectionAfterChangeHook<ImageRecord>[];
   readonly afterDelete: CollectionAfterDeleteHook<ImageRecord>[];
   readonly beforeChange: CollectionBeforeChangeHook<ImageRecord>[];
+  readonly beforeDelete: CollectionBeforeDeleteHook[];
 }
 
 export function cardImageUploadHooks(options: UploadHookOptions = {}): UploadHooks {
+  const resyncLimits: MirrorResyncLimits = { ...MIRROR_RESYNC_LIMITS, ...options.resync };
   return {
     // Порядок значим: записать новое → перевести на него зеркало карточек →
     // убрать прежнее. Любая другая расстановка оставляет промежуток, в котором
     // запись или зеркало ссылаются на файлы, которых нет.
-    afterChange: [writePendingObjects(options), resyncMirroredCards(), retireReplacedObjects(options)],
+    afterChange: [
+      writePendingObjects(options),
+      resyncMirroredCards(resyncLimits),
+      retireReplacedObjects(options),
+    ],
     afterDelete: [deleteStoredObjects(options)],
+    // Отказ стоит ДО удаления записи: после него связь уже обнулена каскадом, и
+    // отменять нечего.
+    beforeDelete: [rejectDeleteWhileReferenced()],
     // Хранилище этой фазе больше не нужно: она только считает, а пишет
     // `writePendingObjects` из afterChange.
     beforeChange: [runPipelineOnUpload()],

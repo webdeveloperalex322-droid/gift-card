@@ -27,10 +27,12 @@
  *      (ТЗ §6.3). Право проверяется и на уровне поля (`cardImageFieldAccess`,
  *      молчаливый отказ Payload), и здесь — громко, потому что молчаливый
  *      отказ внешний клиент принял бы за успех;
- *   3. **блокировка перевода в `review` при визуально похожем изображении.**
+ *   3. **блокировка перевода в `review` при визуально похожем изображении — и
+ *      подмены изображения у записи, которая уже в `review`/`published`.**
  *      Похожие ищутся среди `published` и `review` (ТЗ §6.7 п. 4), решение
  *      принимает редактор, а не порог. Правило и отпечаток набора — в
- *      `./duplicates.ts`.
+ *      `./duplicates.ts`; второй случай там же и по той же норме: две страницы
+ *      с одной картинкой недопустимы независимо от того, менялся ли статус.
  *
  * Подтверждение решения (`visualDuplicate.confirm`) устроено как одноразовый
  * флаг операции — тем же приёмом, что подтверждение смены URL в Э1-09.
@@ -273,8 +275,12 @@ function mirrorImageAndGuardDuplicates(
 
     const imageId = readRelationId(next.image);
     const previousImageId = readRelationId(previous.image);
+    // Признак нужен калитке дублей: подмена изображения у карточки, которая уже
+    // в review или published, требует решения редактора так же, как перевод
+    // дальше по статусам (`assertVisualDuplicateResolved`).
+    const imageChanged = operation === 'update' && imageId !== previousImageId;
 
-    if (operation === 'update' && imageId !== previousImageId && !canReplaceImage(req.user, previous)) {
+    if (imageChanged && !canReplaceImage(req.user, previous)) {
       rethrow(imageChangeRefusal());
     }
 
@@ -385,6 +391,7 @@ function mirrorImageAndGuardDuplicates(
         decision,
         decisionFor,
         fingerprint,
+        imageChanged,
         nextStatus: next.status,
         previousStatus: previous.status,
         similar,
