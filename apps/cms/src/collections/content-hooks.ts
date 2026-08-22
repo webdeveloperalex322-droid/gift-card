@@ -14,7 +14,7 @@ import { findYearInSlug } from '@otkritka/shared';
 import { hasBeenPublished } from '../access/policies';
 import { yearInPathRefusal } from '../seo/paths';
 import { ensureSingleRedirect, releaseRedirectsFrom } from './redirect-sync';
-import { describeHistoryAuthor, diffSeoFields } from './seo-history-diff';
+import { describeHistoryAuthor, diffSeoFields, readAuthorUserId } from './seo-history-diff';
 import {
   ContentRuleError,
   type ContentRuleCode,
@@ -150,24 +150,6 @@ export function collectFieldNames(fields: readonly Field[]): ReadonlySet<string>
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null ? { ...value } : {};
-}
-
-/**
- * Идентификатор пользователя в том виде, в каком его принимает связь коллекции.
- *
- * Идентификаторы в этой базе числовые (`defaultIDType: number` в сгенерированных
- * типах), но `req.user.id` объявлен шире. Строковое числовое значение приводится,
- * а не отбрасывается: потерять автора изменения в журнале аудита хуже, чем
- * выполнить одно приведение.
- */
-function readUserId(value: number | string | null): number | null {
-  if (typeof value === 'number') {
-    return value;
-  }
-  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
-    return Number(value);
-  }
-  return null;
 }
 
 /** Поля, из-за которых стоит читать документ в `beforeOperation`. */
@@ -457,7 +439,7 @@ function recordSeoHistory(
     }
 
     const author = describeHistoryAuthor(req.user);
-    const changedBy = readUserId(author.userId);
+    const changedBy = readAuthorUserId(author.userId);
     const changedAt = new Date().toISOString();
     const documentPath = options.pathOf(next);
 

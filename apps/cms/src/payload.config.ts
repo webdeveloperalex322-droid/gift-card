@@ -15,6 +15,7 @@ import { Redirects } from './collections/redirects';
 import { SeoHistory } from './collections/seo-history';
 import { Users } from './collections/users';
 import { adminPath, loadEnvFiles, requireEnv } from './env.mjs';
+import { SiteSettings } from './globals/site-settings';
 import { MAX_UPLOAD_BYTES } from './images/upload-validation';
 import { seedFirstAdmin } from './seed-first-admin';
 
@@ -84,6 +85,13 @@ export default buildConfig({
   // Редактор объявлен явно: без него Payload не собирает текстовые поля, а
   // коллекции контента (Э1-04, Э1-05) состоят из них целиком.
   editor: lexicalEditor(),
+
+  // Глобалы. «Настройки сайта» (Э3-00) — единственное место, где живут значения,
+  // вынесенные решениями человека из кода в админку: данные организации (Ч-17),
+  // лицензия изображений (Ч-10), тексты служебных страниц (Ч-19) и рекламные
+  // места (Ч-11). Все поля пустые по умолчанию: пустое поле — команда шаблону
+  // промолчать, а не повод подставить правдоподобную заглушку.
+  globals: [SiteSettings],
 
   onInit: seedFirstAdmin,
 

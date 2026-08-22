@@ -163,6 +163,29 @@ export interface HistoryActor {
   readonly role?: string | null;
 }
 
+/**
+ * Идентификатор автора в том виде, в каком его принимает связь с `users`.
+ *
+ * Идентификаторы в этой базе числовые (`defaultIDType: number` в сгенерированных
+ * типах), но `req.user.id` объявлен шире. Строковое числовое значение
+ * приводится, а не отбрасывается: потерять автора изменения в журнале аудита
+ * хуже, чем выполнить одно приведение.
+ *
+ * Живёт рядом с {@link describeHistoryAuthor}, а не в вызывающем коде, потому что
+ * автора записывают уже два места — хуки контентных коллекций (`seo-history`) и
+ * глобал настроек (Э3-00, группа `audit`). Две копии этого приведения означали
+ * бы, что в одном журнале автор есть, а в другом он однажды потеряется.
+ */
+export function readAuthorUserId(value: number | string | null): number | null {
+  if (typeof value === 'number') {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+  return null;
+}
+
 export function describeHistoryAuthor(
   user: HistoryActor | null | undefined,
 ): HistoryAuthor {
