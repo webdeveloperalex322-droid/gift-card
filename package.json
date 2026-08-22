@@ -20,6 +20,7 @@
     "@eslint/js": "^9.39.0",
     "@otkritka/images": "workspace:*",
     "@otkritka/shared": "workspace:*",
+    "@playwright/test": "^1.62.1",
     "@types/node": "catalog:",
     "eslint": "^9.39.0",
     "eslint-plugin-astro": "^1.7.0",
