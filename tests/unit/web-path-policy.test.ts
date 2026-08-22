@@ -1,41 +1,51 @@
 /**
- * Правило завершающего слеша в apps/web (задача Э3-01).
+ * Решение по цели запроса в apps/web: правило завершающего слеша, отказ от
+ * вторых адресов одного материала и отсутствие цепочек редиректов.
  *
- * Проверяется ЧИСТАЯ функция решения, а не middleware: middleware — тонкая
- * обёртка над ней (`apps/web/src/middleware.ts`), и ровно поэтому решение можно
- * проверить без поднятого сервера. Норма — `CLAUDE.md`, раздел «Правила URL»:
- * решение Ч-21 (форма БЕЗ завершающего слеша), одиночный 301, цепочки
- * редиректов запрещены.
+ * Проверяется ЧИСТАЯ функция, а не сервер: и входной сервер
+ * (`apps/web/src/server/front-door.ts`), и middleware Astro
+ * (`apps/web/src/middleware.ts`) — тонкие обёртки над ней. Норма — `CLAUDE.md`,
+ * раздел «Правила URL»: решение Ч-21 (форма БЕЗ завершающего слеша), одиночный
+ * 301, цепочки редиректов запрещены, один материал — один путь.
  *
- * Ключевые инварианты, которые здесь закодированы:
- *   - у любого редиректа статус ровно 301, и повторный прогон результата даёт
- *     «рендерить» — то есть цепочки нет по построению, а не по обещанию;
+ * Ключевые инварианты, закодированные здесь:
+ *   - у любого редиректа статус ровно 301, и повторный прогон его цели даёт не
+ *     редирект — то есть цепочки нет по построению, а не по обещанию;
+ *   - `location` никогда не начинается с `//` (иначе это открытый редирект);
+ *   - процентное кодирование не создаёт ни второго адреса, ни смены числа
+ *     сегментов: `%2F`, `%5C`, `%2e` и битое кодирование отклоняются;
+ *   - `.html` и `/index.html` адресами страниц не являются;
  *   - URL файлов не нормализуются (предикат `isPageRoute` из `@otkritka/shared`,
  *     локальной копии правила в apps/web нет);
  *   - путь админки берётся из `PAYLOAD_ADMIN_PATH`; тест с нестандартным
  *     значением доказывает, что `/admin` не захардкожен;
  *   - хост в абсолютный URL попадает только из `SITE_URL`, и пустое значение
  *     валит сборку внятной ошибкой (хост фикстуры — синтетический).
+ *
+ * Отдельно проверяется отображение «канонический путь → файл в `dist/client`»:
+ * оно парное к `build.format: 'file'` и определяет, что именно отдаёт статика.
  */
 import { describe, expect, it } from 'vitest';
 
 import { canonicalUrlFor } from '../../apps/web/src/routing/canonical.js';
 import {
   adminRoutePrefix,
-  decideRequestPath,
+  clientFileForPath,
+  decideRequestTarget,
+  immutableCacheControlFor,
   PERMANENT_REDIRECT_STATUS,
-  type PathDecision,
+  type TargetDecision,
 } from '../../apps/web/src/routing/path-policy.js';
 
 /** Путь админки по умолчанию в фикстурах: значение из .env.example. */
 const ADMIN = '/admin';
 
-function decide(pathname: string, adminPath = ADMIN, search = ''): PathDecision {
-  return decideRequestPath({ adminPath, pathname, search });
+function decide(target: string, adminPath = ADMIN): TargetDecision {
+  return decideRequestTarget({ adminPath, target });
 }
 
 /** Location редиректа; падает, если решение оказалось другим. */
-function redirectLocation(decision: PathDecision): string {
+function redirectLocation(decision: TargetDecision): string {
   if (decision.action !== 'redirect') {
     throw new Error(`ожидался редирект, получено «${decision.action}»`);
   }
@@ -49,15 +59,15 @@ describe('правило завершающего слеша: маршруты �
 
     expect(decision.action).toBe('redirect');
     expect(redirectLocation(decision)).toBe('/otkrytki/8-marta');
-    // Цепочки нет: результат редиректа сам уже канонический.
-    expect(decide('/otkrytki/8-marta').action).toBe('render');
+    // Цепочки нет: цель редиректа сама уже канонична.
+    expect(decide('/otkrytki/8-marta').action).toBe('serve');
   });
 
   it('пагинация подборки со слешем — одиночный 301', () => {
     const decision = decide('/podborki/prazdniki/8-marta/page/2/');
 
     expect(redirectLocation(decision)).toBe('/podborki/prazdniki/8-marta/page/2');
-    expect(decide('/podborki/prazdniki/8-marta/page/2').action).toBe('render');
+    expect(decide('/podborki/prazdniki/8-marta/page/2').action).toBe('serve');
   });
 
   it('статус редиректа ровно 301 — ни 302, ни 308', () => {
@@ -70,7 +80,7 @@ describe('правило завершающего слеша: маршруты �
   });
 
   it('корень — единственное исключение, остаётся собой', () => {
-    expect(decide('/').action).toBe('render');
+    expect(decide('/')).toEqual({ action: 'serve', pathname: '/', search: '' });
   });
 
   it('канонический путь любой глубины редиректа не даёт', () => {
@@ -81,54 +91,125 @@ describe('правило завершающего слеша: маршруты �
       '/podborki/prazdniki/8-marta/mame',
       '/podborki/prazdniki/8-marta/mame/page/3',
     ]) {
-      expect(decide(path), path).toEqual({ action: 'render' });
+      expect(decide(path), path).toEqual({ action: 'serve', pathname: path, search: '' });
     }
   });
 
   it('строка запроса переносится в Location без изменений', () => {
-    const decision = decide('/search/', ADMIN, '?q=tyulpany');
+    expect(redirectLocation(decide('/search/?q=tyulpany'))).toBe('/search?q=tyulpany');
+  });
 
-    expect(redirectLocation(decision)).toBe('/search?q=tyulpany');
+  it('строка запроса на каноническом пути сохраняется в решении, а не теряется', () => {
+    expect(decide('/otkrytki?page=2')).toEqual({
+      action: 'serve',
+      pathname: '/otkrytki',
+      search: '?page=2',
+    });
   });
 });
 
-describe('повторные слеши: один 301 сразу в каноническую форму', () => {
+describe('повторные и ведущие слеши', () => {
   it('завершающий двойной слеш не порождает цепочку', () => {
-    const decision = decide('/otkrytki//');
-
-    expect(redirectLocation(decision)).toBe('/otkrytki');
-    expect(decide('/otkrytki').action).toBe('render');
+    expect(redirectLocation(decide('/otkrytki//'))).toBe('/otkrytki');
+    expect(decide('/otkrytki').action).toBe('serve');
   });
 
   it('несколько слешей подряд в конце дают тот же единственный редирект', () => {
     expect(redirectLocation(decide('/otkrytki////'))).toBe('/otkrytki');
   });
 
-  it('повторный слеш в середине: один 301 по правилу Astro, дальше 404 без второго шага', () => {
-    // Цель редиректа совпадает с целью самого Astro (он повторные слеши в
-    // середине не схлопывает), поэтому второго 301 не возникает.
-    const decision = decide('/podborki//prazdniki///8-marta/');
-    const location = redirectLocation(decision);
-
-    expect(location).toBe('/podborki//prazdniki///8-marta');
-    expect(decide(location).action).toBe('not-found');
+  it('путь только из слешей сводится к корню одним переходом', () => {
+    // Прежняя сборка отвечала здесь ТРЕМЯ переходами: статический обработчик
+    // адаптера снимал ровно один слеш за ответ, а промежуточные Location были
+    // протокольно-относительными («//», «///»).
+    for (const target of ['//', '///', '////']) {
+      expect(redirectLocation(decide(target)), target).toBe('/');
+      expect(decide('/').action).toBe('serve');
+    }
   });
 
-  it('пустой сегмент внутри пути — 404, а не редирект', () => {
-    const decision = decide('/otkrytki//8-marta');
-
-    expect(decision.action).toBe('not-found');
-    if (decision.action !== 'not-found') {
-      throw new Error('ожидалось not-found');
+  it('пустой сегмент внутри пути — 404 и без завершающего слеша, и с ним', () => {
+    // Порядок шагов: проверка пустого сегмента ДО снятия хвостового слеша.
+    // Иначе «/podborki//prazdniki/» получал бы 301 на адрес, который сам же
+    // отвечает 404 — переход в никуда.
+    for (const target of ['/otkrytki//8-marta', '/podborki//prazdniki/', '/podborki//prazdniki']) {
+      const decision = decide(target);
+      expect(decision.action, target).toBe('not-found');
     }
-    expect(decision.reason).toMatch(/цепочк/i);
   });
 
   it('ведущий двойной слеш не превращается в Location на чужой хост', () => {
-    const location = redirectLocation(decide('//evil.example/otkrytki/'));
+    // Схлопывание дало бы 301 на выдуманный «/evil.example/otkrytki». Отказ не
+    // порождает Location вовсе — инвариант «Location не начинается с //»
+    // держится по построению, а не проверкой строки.
+    const decision = decide('//evil.example/otkrytki/');
 
-    expect(location.startsWith('//')).toBe(false);
-    expect(location).toBe('/evil.example/otkrytki');
+    expect(decision.action).toBe('not-found');
+  });
+});
+
+describe('процентное кодирование не создаёт ни второго адреса, ни смены сегментов', () => {
+  it('%2F и %5C отклоняются как 400, а не превращаются в разделитель пути', () => {
+    // Ровно этот путь уходил в бесконечный цикл 301 на прежней сборке:
+    // /%2F -> Location /%2F/ -> Location /%2F -> ...
+    for (const target of ['/%2F', '/%2f', '/%2F/', '/otkrytki/%2F/8-marta', '/%5C', '/%5cevil']) {
+      const decision = decide(target);
+      expect(decision.action, target).toBe('bad-request');
+    }
+  });
+
+  it('битое процентное кодирование отклоняется, а не роняет обработчик', () => {
+    for (const target of ['/%', '/%zz', '/otkrytki/%E0%A4%A']) {
+      expect(decide(target).action, target).toBe('bad-request');
+    }
+  });
+
+  it('dot-сегменты отклоняются, а не сворачиваются', () => {
+    // Свёртка на сервере дала бы второй адрес той же страницы, а «..» — ещё и
+    // попытку выйти за корень статики.
+    for (const target of ['/%2e', '/%2E', '/.', '/..', '/otkrytki/../otkrytki', '/otkrytki/./']) {
+      expect(decide(target).action, target).toBe('bad-request');
+    }
+  });
+
+  it('управляющие символы в сегменте отклоняются', () => {
+    for (const target of ['/%00', '/%09otkrytki', '/%0A']) {
+      expect(decide(target).action, target).toBe('bad-request');
+    }
+  });
+
+  it('процентный псевдоним канонического адреса — 404, а не редирект', () => {
+    // Редирект здесь означал бы, что у материала сколько угодно входных
+    // адресов, каждый со своим 301. Канонические адреса сайта кодирования не
+    // содержат вовсе.
+    for (const target of ['/robots%2Etxt', '/otkrytki%2D8-marta', '/%6Ftkrytki']) {
+      expect(decide(target).action, target).toBe('not-found');
+    }
+  });
+
+  it('фрагмент и абсолютная форма цели отклоняются', () => {
+    for (const target of ['/otkrytki#kotiki', 'http://evil.example/otkrytki', '*', 'otkrytki']) {
+      expect(decide(target).action, target).toBe('bad-request');
+    }
+  });
+});
+
+describe('у страницы нет второго адреса с расширением .html', () => {
+  it('/index.html — не адрес главной', () => {
+    // Замерено на прежней сборке: /index.html отдавал 200 с содержимым главной,
+    // то есть второй адрес одного материала.
+    expect(decide('/index.html').action).toBe('not-found');
+  });
+
+  it('файл заранее отрендеренной страницы адресом не является', () => {
+    for (const target of ['/o-proekte.html', '/OTKRYTKI.HTML', '/podborki/prazdniki/8-marta.html']) {
+      expect(decide(target).action, target).toBe('not-found');
+    }
+  });
+
+  it('страницы 404 и 500 недоступны как файлы', () => {
+    expect(decide('/404.html').action).toBe('not-found');
+    expect(decide('/500.html').action).toBe('not-found');
   });
 });
 
@@ -139,8 +220,9 @@ describe('URL файлов не нормализуются', () => {
       '/sitemap.xml',
       '/sitemap-cards.xml',
       '/media/cards/a1b2c3/otkrytka-mame-na-8-marta-640.webp',
+      '/_astro/index.abc123.css',
     ]) {
-      expect(decide(path), path).toEqual({ action: 'render' });
+      expect(decide(path), path).toEqual({ action: 'serve', pathname: path, search: '' });
     }
   });
 
@@ -148,8 +230,12 @@ describe('URL файлов не нормализуются', () => {
     expect(redirectLocation(decide('/media/a.b/otkrytki/'))).toBe('/media/a.b/otkrytki');
   });
 
-  it('файловый URL со слешем наше правило не трогает — им занимается Astro', () => {
-    expect(decide('/robots.txt/')).toEqual({ action: 'render' });
+  it('URL файла с завершающим слешем — 404, а не 301 на файл', () => {
+    // Правило слеша описывает маршруты СТРАНИЦ. Редирект на URL файла означал
+    // бы, что постоянный адрес файла перестал быть постоянным.
+    const decision = decide('/robots.txt/');
+
+    expect(decision.action).toBe('not-found');
   });
 });
 
@@ -158,6 +244,12 @@ describe('инвариант: цель редиректа никогда не р
     '/',
     '//',
     '///',
+    '////',
+    '/%2F',
+    '/%2F/',
+    '/%2e',
+    '/index.html',
+    '/x.html',
     '/otkrytki',
     '/otkrytki/',
     '/otkrytki//',
@@ -174,36 +266,50 @@ describe('инвариант: цель редиректа никогда не р
     '/media/cards/a1b2c3/otkrytka-640.webp',
     '/administrator/',
     '/search/',
+    '/search/?q=x',
   ];
 
-  it('на всём корпусе путей глубина редиректа не превышает одного шага', () => {
-    for (const path of CORPUS) {
-      const first = decide(path);
+  it('на всём корпусе целей глубина перехода не превышает одного шага', () => {
+    for (const target of CORPUS) {
+      const first = decide(target);
       if (first.action !== 'redirect') {
         continue;
       }
       const second = decide(first.location);
-      expect(second.action, `${path} -> ${first.location}`).not.toBe('redirect');
+      expect(second.action, `${target} -> ${first.location}`).not.toBe('redirect');
     }
   });
 
   it('Location редиректа никогда не начинается с двойного слеша', () => {
-    for (const path of CORPUS) {
-      const decision = decide(path);
+    for (const target of CORPUS) {
+      const decision = decide(target);
       if (decision.action !== 'redirect') {
         continue;
       }
-      expect(decision.location.startsWith('//'), path).toBe(false);
-      expect(decision.location.startsWith('/'), path).toBe(true);
+      expect(decision.location.startsWith('//'), target).toBe(false);
+      expect(decision.location.startsWith('/'), target).toBe(true);
+    }
+  });
+
+  it('на корпусе нет ни одного решения вне известного множества', () => {
+    // Замкнутость множества ответов — это и есть отсутствие цикла: любой путь
+    // за один шаг приходит в состояние, которое переходов больше не порождает.
+    const allowed = ['serve', 'redirect', 'not-found', 'bad-request', 'not-served'];
+    for (const target of CORPUS) {
+      expect(allowed, target).toContain(decide(target).action);
     }
   });
 });
 
 describe('маршруты админки Astro не обслуживает и не нормализует', () => {
   it('сам путь админки и всё под ним — вне зоны Astro', () => {
-    for (const path of [ADMIN, `${ADMIN}/`, `${ADMIN}/collections/cards`, `${ADMIN}/collections/cards/`]) {
-      const decision = decide(path);
-      expect(decision.action, path).toBe('not-served');
+    for (const path of [
+      ADMIN,
+      `${ADMIN}/`,
+      `${ADMIN}/collections/cards`,
+      `${ADMIN}/collections/cards/`,
+    ]) {
+      expect(decide(path).action, path).toBe('not-served');
     }
   });
 
@@ -238,10 +344,41 @@ describe('путь админки читается из окружения, де
   });
 
   it('пустое значение валит запуск, а не подставляет /admin', () => {
-    expect(() => adminRoutePrefix({ PAYLOAD_ADMIN_PATH: '' })).toThrowError(
-      /PAYLOAD_ADMIN_PATH/,
-    );
+    expect(() => adminRoutePrefix({ PAYLOAD_ADMIN_PATH: '' })).toThrowError(/PAYLOAD_ADMIN_PATH/);
     expect(() => adminRoutePrefix({})).toThrowError(/PAYLOAD_ADMIN_PATH/);
+  });
+});
+
+describe('отображение канонического пути в файл dist/client', () => {
+  it('корень отдаётся index.html, страница — <путь>.html (build.format: file)', () => {
+    expect(clientFileForPath('/')).toBe('index.html');
+    expect(clientFileForPath('/o-proekte')).toBe('o-proekte.html');
+    expect(clientFileForPath('/podborki/prazdniki/8-marta')).toBe(
+      'podborki/prazdniki/8-marta.html',
+    );
+  });
+
+  it('URL файла отображается сам в себя, без добавления расширения', () => {
+    expect(clientFileForPath('/robots.txt')).toBe('robots.txt');
+    expect(clientFileForPath('/_astro/index.abc123.css')).toBe('_astro/index.abc123.css');
+  });
+
+  it('ни одно отображение не начинается со слеша и не содержит dot-сегментов', () => {
+    // Относительность имени — часть защиты статики: абсолютный путь или «..»
+    // вывели бы отдачу за корень dist/client.
+    for (const path of ['/', '/otkrytki', '/robots.txt', '/media/cards/a1/x-640.webp']) {
+      const file = clientFileForPath(path);
+      expect(file.startsWith('/'), path).toBe(false);
+      expect(file.split('/'), path).not.toContain('..');
+    }
+  });
+
+  it('неизменяемый Cache-Control ставится только артефактам сборки', () => {
+    expect(immutableCacheControlFor('/_astro/index.abc123.css')).toBe(
+      'public, max-age=31536000, immutable',
+    );
+    expect(immutableCacheControlFor('/robots.txt')).toBeUndefined();
+    expect(immutableCacheControlFor('/otkrytki')).toBeUndefined();
   });
 });
 

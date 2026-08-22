@@ -22,7 +22,13 @@ export default tseslint.config(
     // из tsconfig.json. vitest.config.ts лежит вне них, поэтому разрешён явно.
     // `.tsx` включён вместе с `.ts`: маршруты админки Payload в apps/cms —
     // компоненты React, и без этого шаблона они не линтовались бы вовсе.
-    files: ['**/*.ts', '**/*.tsx'],
+    // `.mts` перечислен явно: шаблон `**/*.ts` его НЕ покрывает, а без
+    // упоминания файл не подходит ни под один блок конфига и `eslint .`
+    // молча его пропускает. Такой файл в проекте есть — точка входа
+    // собранного сервера apps/web (`src/server/entry.mts`): только из `.mts`
+    // tsc даёт на выходе `.mjs`, а имя `dist/server/entry.mjs` — контракт
+    // сборки.
+    files: ['**/*.ts', '**/*.tsx', '**/*.mts'],
     extends: [tseslint.configs.recommendedTypeChecked],
     languageOptions: {
       parserOptions: {

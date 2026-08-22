@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "astro": "astro",
-    "build": "astro build",
+    "build": "astro build && tsc -b tsconfig.node.json",
     "check": "astro check",
     "dev": "astro dev",
     "preview": "astro preview",
     "smoke:slash": "node ./scripts/smoke-trailing-slash.mjs",
+    "start": "node ./dist/server/entry.mjs",
     "sync": "astro sync"
   },
   "dependencies": {
