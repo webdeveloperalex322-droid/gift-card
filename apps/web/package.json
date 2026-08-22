@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@astrojs/node": "^11.1.4",
+    "@otkritka/cms": "workspace:*",
     "@otkritka/images": "workspace:*",
     "@otkritka/shared": "workspace:*",
     "astro": "^7.2.4"

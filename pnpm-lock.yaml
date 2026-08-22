@@ -105,6 +105,9 @@ importers:
       '@astrojs/node':
         specifier: ^11.1.4
         version: 11.1.4(astro@7.2.4(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.3)(@types/node@24.13.3)(sass@1.77.4)(tsx@4.22.4)(yaml@2.9.0))
+      '@otkritka/cms':
+        specifier: workspace:*
+        version: link:../cms
       '@otkritka/images':
         specifier: workspace:*
         version: link:../../packages/images

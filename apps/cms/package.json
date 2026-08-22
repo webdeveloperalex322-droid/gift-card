@@ -3,6 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./types": "./src/payload-types.ts",
+    "./site-settings-rules": "./src/globals/site-settings-rules.ts"
+  },
   "scripts": {
     "build": "next build",
     "check": "tsc --noEmit",
