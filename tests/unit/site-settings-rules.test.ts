@@ -1,6 +1,5 @@
 /**
- * Правила глобала «Настройки сайта» (задача Э3-00): предикаты «выводить или
- * промолчать».
+ * Правила настроек сайта (задача Э3-00): предикаты «выводить или промолчать».
  *
  * Негативные проверки здесь важнее позитивных. Каждое из четырёх решений
  * человека — Ч-17 (Organization), Ч-10 (лицензия), Ч-19/Ч-23 (служебные
@@ -9,18 +8,21 @@
  * Значит проверять нужно прежде всего пустой и полупустой вход: именно на нём
  * рождается фиктивная разметка, запрещённая п. 23 ТЗ.
  *
- * Тестируются чистые функции без Payload и без базы: ровно они станут
- * единственной трактовкой этих решений и для `apps/cms`, и для `apps/web`.
+ * Тестируются чистые функции без Payload и без базы: ровно они — единственная
+ * трактовка этих решений и для `apps/cms`, и для `apps/web`. Модуль живёт в
+ * `packages/shared`, поэтому и тест лежит здесь: юнит-тесты общих пакетов
+ * собраны в `tests/unit/` (composite-проект `tests/tsconfig.json`), а рядом с
+ * кодом тесты держит только `apps/cms`, который в этот проект не входит.
  */
 import { describe, expect, it } from 'vitest';
 
-import { isReservedPath } from '@otkritka/shared';
-
 import {
   AD_SLOT_POSITIONS,
+  INFO_PAGE_INDEXING_FIELD,
   INFO_PAGE_KEYS,
   INFO_PAGE_MIN_TEXT_LENGTH,
   INFO_PAGE_PATHS,
+  type InfoPageFacts,
   MAX_AD_SLOTS_PER_POSITION,
   SITE_SETTINGS_SLUG,
   aiDisclosureText,
@@ -31,13 +33,14 @@ import {
   isImageLicenseComplete,
   isInfoPageIndexable,
   isOrganizationJsonLdRendered,
+  isReservedPath,
   organizationJsonLd,
   organizationJsonLdGaps,
   renderableAdSlots,
   richTextPlainText,
   validateAdSlotRows,
   validateSiteRootPath,
-} from './site-settings-rules';
+} from '@otkritka/shared';
 
 /** Лексический документ с заданным текстом — форма, которую пишет richText. */
 function richText(...paragraphs: readonly string[]): unknown {
@@ -174,7 +177,15 @@ describe('richTextPlainText: сколько на странице реально
   });
 });
 
-describe('Ч-19 и Ч-23: индексируемость служебной страницы — по наполненности', () => {
+describe('Ч-19 и Ч-23: индексируемость служебной страницы — решение плюс наполненность', () => {
+  /** Полностью наполненная страница БЕЗ решения человека об индексации. */
+  const filledContent = {
+    title: 'Условия использования',
+    h1: 'Условия использования',
+    metaDescription: 'Как можно использовать открытки проекта',
+    body: richText(longText),
+  } as const;
+
   it('пути страниц совпадают с реестром зарезервированных маршрутов', () => {
     // Реестр в packages/shared — единственный машинный источник путей. Эта
     // проверка связывает две записи об одном факте: расхождение обязано падать
@@ -188,38 +199,76 @@ describe('Ч-19 и Ч-23: индексируемость служебной ст
   it('пустая страница остаётся noindex и вне sitemap', () => {
     expect(isInfoPageIndexable({})).toBe(false);
     expect(infoPageIndexation({})).toEqual({
+      approved: false,
       gaps: ['title', 'metaDescription', 'body'],
       indexable: false,
       textLength: 0,
     });
   });
 
-  it('заглушка из пары фраз индексацию не открывает', () => {
+  it('ГЛАВНОЕ: наполненный текст без решения человека индексацию НЕ открывает', () => {
+    // Ровно та дыра, которую нашёл reviewer: право на index,follow вычислялось
+    // из длины текста, поэтому любой пишущий под admin — скрипт, миграция,
+    // будущая обёртка MCP — открывал страницу в индекс, не принимая такого
+    // решения. Переключение index/noindex — осознанное действие человека
+    // (п. 7.1 и п. 23 ТЗ), поэтому нужен ОТДЕЛЬНЫЙ выключатель.
+    const result = infoPageIndexation(filledContent);
+    expect(result.approved).toBe(false);
+    expect(result.gaps).toEqual([]);
+    expect(result.indexable).toBe(false);
+    expect(isInfoPageIndexable(filledContent)).toBe(false);
+  });
+
+  it('включённый выключатель на пустой странице тоже не открывает индексацию', () => {
+    // Вторая половина конъюнкции: решение человека не отменяет п. 5.1 —
+    // страница-заглушка в индекс не идёт, даже если выключатель включён.
+    const result = infoPageIndexation({ [INFO_PAGE_INDEXING_FIELD]: true });
+    expect(result.approved).toBe(true);
+    expect(result.gaps).toEqual(['title', 'metaDescription', 'body']);
+    expect(result.indexable).toBe(false);
+  });
+
+  it('включённый выключатель при коротком тексте не открывает индексацию', () => {
     const stub = {
+      [INFO_PAGE_INDEXING_FIELD]: true,
       title: 'Условия использования',
       metaDescription: 'Условия использования открыток',
       body: richText('Текст будет позже.'),
     };
     const result = infoPageIndexation(stub);
+    expect(result.approved).toBe(true);
     expect(result.indexable).toBe(false);
     expect(result.gaps).toEqual(['body']);
     expect(result.textLength).toBeLessThan(INFO_PAGE_MIN_TEXT_LENGTH);
   });
 
-  it('заполненная страница получает право на index,follow', () => {
-    const filled = {
-      title: 'Условия использования',
-      h1: 'Условия использования',
-      metaDescription: 'Как можно использовать открытки проекта',
-      body: richText(longText),
-    };
+  it('только конъюнкция «решение + наполненность» даёт право на index,follow', () => {
+    const filled = { ...filledContent, [INFO_PAGE_INDEXING_FIELD]: true };
     expect(isInfoPageIndexable(filled)).toBe(true);
-    expect(infoPageIndexation(filled).gaps).toEqual([]);
+    expect(infoPageIndexation(filled)).toEqual({
+      approved: true,
+      gaps: [],
+      indexable: true,
+      textLength: richTextPlainText(filledContent.body).length,
+    });
+  });
+
+  it('выключатель включается только значением true, а не «похожим на да»', () => {
+    // Строка «true», единица и объект приходят из REST-ответа и из форм; любое
+    // из них, принятое за согласие, вернуло бы вычисление права коду. Приведение
+    // типа здесь намеренное: проверяется поведение на данных, форма которых
+    // типом не гарантирована.
+    const withSwitch = (value: unknown): InfoPageFacts =>
+      ({ ...filledContent, [INFO_PAGE_INDEXING_FIELD]: value }) as InfoPageFacts;
+    for (const value of ['true', 1, {}, 'да', null, undefined, 0, '']) {
+      expect(infoPageIndexation(withSwitch(value)).indexable).toBe(false);
+    }
   });
 
   it('h1 не требуется: пустой H1 равен title — правило контентных коллекций', () => {
     expect(
       isInfoPageIndexable({
+        [INFO_PAGE_INDEXING_FIELD]: true,
         title: 'Контакты',
         metaDescription: 'Как связаться с проектом',
         body: richText(longText),
@@ -230,6 +279,7 @@ describe('Ч-19 и Ч-23: индексируемость служебной ст
   it('title без текста индексацию не открывает даже при заполненном description', () => {
     expect(
       isInfoPageIndexable({
+        [INFO_PAGE_INDEXING_FIELD]: true,
         title: 'Контакты',
         metaDescription: 'Как связаться',
         body: richText(''),

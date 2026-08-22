@@ -15,6 +15,16 @@
 import type { PayloadRequest } from 'payload';
 import { describe, expect, it } from 'vitest';
 
+import {
+  AD_SLOT_POSITIONS,
+  INFO_PAGE_INDEXING_FIELD,
+  INFO_PAGE_KEYS,
+  SITE_SETTINGS_SLUG,
+  isImageLicenseComplete,
+  isInfoPageIndexable,
+  isOrganizationJsonLdRendered,
+} from '@otkritka/shared';
+
 import { ROLES } from '../access/roles';
 import type { SiteSetting } from '../payload-types';
 import {
@@ -24,14 +34,6 @@ import {
   infoPageFacts,
   organizationFacts,
 } from './site-settings';
-import {
-  AD_SLOT_POSITIONS,
-  INFO_PAGE_KEYS,
-  SITE_SETTINGS_SLUG,
-  isImageLicenseComplete,
-  isInfoPageIndexable,
-  isOrganizationJsonLdRendered,
-} from './site-settings-rules';
 
 /* ------------------------------------------------------------------ */
 /* Вспомогательное: чтение конфига без знания union-типа Field         */
@@ -57,6 +59,24 @@ function fieldAt(path: string): Record<string, unknown> {
     current = next;
   }
   return asRecord(current);
+}
+
+/** Тело служебной страницы в форме, которую пишет richText. */
+type InfoPageBody = NonNullable<NonNullable<NonNullable<SiteSetting['infoPages']>['terms']>['body']>;
+
+function lexicalBody(text: string): InfoPageBody {
+  return {
+    root: {
+      type: 'root',
+      children: [
+        { type: 'paragraph', version: 1, children: [{ type: 'text', text, version: 1 }] },
+      ],
+      direction: 'ltr',
+      format: '',
+      indent: 0,
+      version: 1,
+    },
+  };
 }
 
 function requestOf(role: string | null, strategy?: string): PayloadRequest {
@@ -175,8 +195,16 @@ describe('Э3-00: все поля пустые по умолчанию', () => {
 
     // Никаких правдоподобных заглушек: ни названия организации, ни текста
     // страницы, ни размеров рекламного блока. Пустое поле — это сигнал «человек
-    // не заполнил», и шаблон обязан по нему промолчать.
-    expect(defaults).toEqual([{ path: 'adSlots.enabled', value: false }]);
+    // не заполнил», и шаблон обязан по нему промолчать. Значения по умолчанию
+    // есть только у выключателей, и каждое из них ЗАКРЫВАЮЩЕЕ.
+    expect(defaults).toEqual([
+      ...INFO_PAGE_KEYS.map((key) => ({
+        path: `infoPages.${key}.${INFO_PAGE_INDEXING_FIELD}`,
+        value: false,
+      })),
+      { path: 'adSlots.enabled', value: false },
+    ]);
+    expect(defaults.every((entry) => entry.value === false)).toBe(true);
   });
 
   it('на пустом глобале все предикаты говорят «не выводить»', () => {
@@ -194,9 +222,10 @@ describe('Э3-00: все поля пустые по умолчанию', () => {
     }
   });
 
-  it('состав служебной страницы — заголовок, H1, description и текст', () => {
+  it('состав служебной страницы — выключатель индексации, заголовок, H1, description и текст', () => {
     for (const key of INFO_PAGE_KEYS) {
       expect(childFields(fieldAt(`infoPages.${key}`)).map((field) => field.name)).toEqual([
+        INFO_PAGE_INDEXING_FIELD,
         'title',
         'h1',
         'metaDescription',
@@ -204,6 +233,86 @@ describe('Э3-00: все поля пустые по умолчанию', () => {
       ]);
       expect(fieldAt(`infoPages.${key}.body`).type).toBe('richText');
     }
+  });
+});
+
+describe('Э3-00: index,follow служебной страницы — отдельное решение человека', () => {
+  const switchPaths = INFO_PAGE_KEYS.map((key) => `infoPages.${key}.${INFO_PAGE_INDEXING_FIELD}`);
+
+  it('у каждой страницы есть свой выключатель-флажок, выключенный по умолчанию', () => {
+    for (const path of switchPaths) {
+      expect(fieldAt(path).type).toBe('checkbox');
+      expect(fieldAt(path).defaultValue).toBe(false);
+    }
+  });
+
+  it('ai-editor выключатель не переключает — ни в админке, ни через API', () => {
+    // Два слоя, и оба обязательны. Первый: access.update глобала отдаёт
+    // сервисному аккаунту Forbidden. Второй — вот этот, на уровне ПОЛЯ: если
+    // право записи в глобал однажды расширят (например, отдадут агенту правку
+    // каких-то текстов), выключатель обязан остаться закрытым сам по себе.
+    for (const path of switchPaths) {
+      expect(fieldAccess(path, 'create')({ req: requestOf(ROLES.aiEditor) })).toBe(false);
+      expect(fieldAccess(path, 'update')({ req: requestOf(ROLES.aiEditor) })).toBe(false);
+      expect(fieldAccess(path, 'update')({ req: requestOf(ROLES.aiEditor, 'api-key') })).toBe(false);
+      expect(fieldAccess(path, 'update')({ req: requestOf(null) })).toBe(false);
+      expect(fieldAccess(path, 'update')({ req: requestOf('editor') })).toBe(false);
+      expect(accessFn('update')({ req: requestOf(ROLES.aiEditor) })).toBe(false);
+    }
+  });
+
+  it('admin выключатель переключает: решение об индексации — его', () => {
+    for (const path of switchPaths) {
+      expect(fieldAccess(path, 'create')({ req: requestOf(ROLES.admin) })).toBe(true);
+      expect(fieldAccess(path, 'update')({ req: requestOf(ROLES.admin) })).toBe(true);
+    }
+  });
+
+  it('значение выключателя читается публично: по нему шаблон решает про robots', () => {
+    // Читать обязаны шаблоны Astro без аутентификации — иначе `apps/web` не
+    // узнает, ставить странице index,follow или noindex. Поэтому у поля
+    // объявлены только create и update: закрытое чтение сделало бы выключатель
+    // невидимым для рендера, и страница осталась бы noindex вопреки решению.
+    for (const path of switchPaths) {
+      expect(Object.keys(asRecord(fieldAt(path).access)).sort()).toEqual(['create', 'update']);
+    }
+  });
+
+  it('заполненный текст без выключателя индексацию НЕ открывает', () => {
+    // Тот же вход, что придёт из базы после правки текстов скриптом или
+    // миграцией под ролью admin: наполнение есть, решения человека нет.
+    const filled: SiteSetting = {
+      id: 1,
+      infoPages: {
+        terms: {
+          title: 'Условия использования',
+          metaDescription: 'Как можно использовать открытки проекта',
+          body: lexicalBody('Условия использования открыток проекта. '.repeat(20)),
+        },
+      },
+    };
+    expect(isInfoPageIndexable(infoPageFacts(filled, 'terms'))).toBe(false);
+  });
+
+  it('выключатель плюс наполнение — только вместе дают право на index,follow', () => {
+    const approvedAndFilled: SiteSetting = {
+      id: 1,
+      infoPages: {
+        terms: {
+          [INFO_PAGE_INDEXING_FIELD]: true,
+          title: 'Условия использования',
+          metaDescription: 'Как можно использовать открытки проекта',
+          body: lexicalBody('Условия использования открыток проекта. '.repeat(20)),
+        },
+      },
+    };
+    expect(isInfoPageIndexable(infoPageFacts(approvedAndFilled, 'terms'))).toBe(true);
+
+    const approvedButEmpty: SiteSetting = {
+      id: 1,
+      infoPages: { terms: { [INFO_PAGE_INDEXING_FIELD]: true } },
+    };
+    expect(isInfoPageIndexable(infoPageFacts(approvedButEmpty, 'terms'))).toBe(false);
   });
 });
 

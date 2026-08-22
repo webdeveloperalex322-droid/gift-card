@@ -4,8 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./types": "./src/payload-types.ts",
-    "./site-settings-rules": "./src/globals/site-settings-rules.ts"
+    "./types": "./src/payload-types.ts"
   },
   "scripts": {
     "build": "next build",

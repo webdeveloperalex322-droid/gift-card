@@ -9,21 +9,26 @@
  *
  * Запуск: pnpm --filter @otkritka/cms exec payload run ./scripts/smoke-etap3.ts
  *
- * Скрипт возвращает глобал в исходное ПУСТОЕ состояние и проверяет это отдельно.
- * Это не вежливость: заполненный текст служебной страницы по решению Ч-23 сам
- * открывает её в index,follow и вносит в sitemap — то есть смоук, забывший
- * убраться, опубликовал бы страницу-заглушку.
+ * Скрипт возвращает глобал в исходное ПУСТОЕ состояние и проверяет это отдельно,
+ * включая выключатель индексации служебных страниц. Это не вежливость: смоук
+ * пишет под ролью `admin`, то есть ровно тем правом, которым человек открывает
+ * страницу в индекс. Оставленный включённым выключатель плюс оставленный текст
+ * дали бы `index,follow` и место в sitemap странице-заглушке — и заметили бы это
+ * по индексу, а не по логу.
  */
 import { getPayload } from 'payload';
 
-import config from '../src/payload.config';
 import {
+  INFO_PAGE_INDEXING_FIELD,
   aiDisclosureText,
   imageLicenseJsonLd,
+  infoPageIndexation,
   isInfoPageIndexable,
   organizationJsonLd,
   renderableAdSlots,
-} from '../src/globals/site-settings-rules';
+} from '@otkritka/shared';
+
+import config from '../src/payload.config';
 import {
   adSlotFacts,
   imageLicenseFacts,
@@ -172,6 +177,15 @@ async function main(): Promise<void> {
       }),
     );
 
+    await expectRejected('ai-editor не переключает выключатель index,follow', () =>
+      payload.updateGlobal({
+        slug: 'site-settings',
+        data: { infoPages: { terms: { [INFO_PAGE_INDEXING_FIELD]: true } } },
+        overrideAccess: false,
+        user: aiEditor as UserArg,
+      }),
+    );
+
     await expectRejected('аноним не пишет в настройки', () =>
       payload.updateGlobal({
         slug: 'site-settings',
@@ -270,7 +284,7 @@ async function main(): Promise<void> {
     );
 
     /* --------------------------------------------------------------- */
-    /* 5. Ч-23: индексируемость переключает только реальный текст       */
+    /* 5. Ч-23: индексация = решение человека И реальный текст           */
     /* --------------------------------------------------------------- */
 
     record(
@@ -278,15 +292,44 @@ async function main(): Promise<void> {
       !isInfoPageIndexable(infoPageFacts(filled, 'terms')),
     );
 
+    // Главная проверка находки reviewer: под ролью `admin` пишет не только
+    // человек в админке, но и вот этот скрипт. Полное наполнение текстом БЕЗ
+    // включённого выключателя обязано оставить страницу вне индекса.
     const withText = await payload.updateGlobal({
       slug: 'site-settings',
       data: { infoPages: { terms: { body: lexical(longText) } } },
       overrideAccess: false,
       user: admin as UserArg,
     });
+    const afterText = infoPageIndexation(infoPageFacts(withText, 'terms'));
     record(
-      'наполненная страница получает право на index,follow',
-      isInfoPageIndexable(infoPageFacts(withText, 'terms')),
+      'наполненный текст БЕЗ решения человека индексацию не открывает',
+      !afterText.indexable && !afterText.approved && afterText.gaps.length === 0,
+      `approved=${String(afterText.approved)}, textLength=${String(afterText.textLength)}`,
+    );
+
+    // Обратный случай: решение человека без наполнения. Проверяется на пустой
+    // странице «Контакты», чтобы не трогать уже наполненные «Условия».
+    const approvedEmpty = await payload.updateGlobal({
+      slug: 'site-settings',
+      data: { infoPages: { contacts: { [INFO_PAGE_INDEXING_FIELD]: true } } },
+      overrideAccess: false,
+      user: admin as UserArg,
+    });
+    record(
+      'включённый выключатель на пустой странице индексацию не открывает',
+      !isInfoPageIndexable(infoPageFacts(approvedEmpty, 'contacts')),
+    );
+
+    const approvedAndFilled = await payload.updateGlobal({
+      slug: 'site-settings',
+      data: { infoPages: { terms: { [INFO_PAGE_INDEXING_FIELD]: true } } },
+      overrideAccess: false,
+      user: admin as UserArg,
+    });
+    record(
+      'решение человека плюс наполнение дают право на index,follow',
+      isInfoPageIndexable(infoPageFacts(approvedAndFilled, 'terms')),
     );
 
     /* --------------------------------------------------------------- */
@@ -316,9 +359,9 @@ async function main(): Promise<void> {
           license: null,
         },
         infoPages: {
-          about: { body: null, h1: null, metaDescription: null, title: null },
-          contacts: { body: null, h1: null, metaDescription: null, title: null },
-          terms: { body: null, h1: null, metaDescription: null, title: null },
+          about: { [INFO_PAGE_INDEXING_FIELD]: false, body: null, h1: null, metaDescription: null, title: null },
+          contacts: { [INFO_PAGE_INDEXING_FIELD]: false, body: null, h1: null, metaDescription: null, title: null },
+          terms: { [INFO_PAGE_INDEXING_FIELD]: false, body: null, h1: null, metaDescription: null, title: null },
         },
         organization: {
           email: null,
@@ -345,6 +388,12 @@ async function main(): Promise<void> {
       'после уборки служебные страницы снова noindex и вне sitemap',
       (['about', 'contacts', 'terms'] as const).every(
         (key) => !isInfoPageIndexable(infoPageFacts(reset, key)),
+      ),
+    );
+    record(
+      'после уборки выключатель index,follow снова выключен у всех трёх страниц',
+      (['about', 'contacts', 'terms'] as const).every(
+        (key) => infoPageIndexation(infoPageFacts(reset, key)).approved === false,
       ),
     );
     record(

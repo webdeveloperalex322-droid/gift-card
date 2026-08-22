@@ -1,17 +1,11 @@
 import type { ArrayFieldValidation, Field, FieldHook, GlobalConfig, TextFieldSingleValidation, TypeWithID } from 'payload';
 
 import {
-  adminOnlyAccess,
-  adminOnlyFieldAccess,
-  systemFieldAccess,
-} from '../access/policies';
-import { HISTORY_AUTHOR_ROLES, describeHistoryAuthor, readAuthorUserId } from '../collections/seo-history-diff';
-import type { SiteSetting } from '../payload-types';
-import {
   AD_SLOT_POSITIONS,
   AD_SLOT_POSITION_LABELS,
   type AdSlotFacts,
   IMAGE_LICENSE_REQUIRED,
+  INFO_PAGE_INDEXING_FIELD,
   INFO_PAGE_KEYS,
   INFO_PAGE_LABELS,
   INFO_PAGE_MIN_TEXT_LENGTH,
@@ -26,7 +20,15 @@ import {
   validateAdSlotRows,
   validateProfileUrl,
   validateSiteRootPath,
-} from './site-settings-rules';
+} from '@otkritka/shared';
+
+import {
+  adminOnlyAccess,
+  adminOnlyFieldAccess,
+  systemFieldAccess,
+} from '../access/policies';
+import { HISTORY_AUTHOR_ROLES, describeHistoryAuthor, readAuthorUserId } from '../collections/seo-history-diff';
+import type { SiteSetting } from '../payload-types';
 
 /**
  * Глобал «Настройки сайта» (задача Э3-00) — единственное место, где живут
@@ -44,10 +46,12 @@ import {
  *
  * ВСЕ ПОЛЯ ПУСТЫЕ ПО УМОЛЧАНИЮ. Ни одного правдоподобного значения в коде:
  * пустое поле — это сигнал «человек не заполнил», по которому шаблон обязан
- * промолчать (предикаты в `site-settings-rules.ts`). Единственный
- * `defaultValue` — `enabled: false` у рекламного места: дефолт закрывающий, он
- * не выводит блок, а прячет его, как `DEFAULT_ROBOTS` не открывает страницу в
- * индекс.
+ * промолчать (предикаты — в `@otkritka/shared`, файл `site-settings-rules.ts`;
+ * они лежат в общем пакете, потому что те же функции зовёт `apps/web`).
+ * Значения по умолчанию есть только у выключателей, и все они ЗАКРЫВАЮЩИЕ:
+ * `adSlots.enabled: false` (реклама не появляется сама) и
+ * `infoPages.*.allowIndexing: false` (служебная страница не открывается в
+ * индекс сама) — ровно как `DEFAULT_ROBOTS` не открывает страницу в индекс.
  *
  * ДОСТУП. Чтение публичное — глобал читают шаблоны Astro без аутентификации.
  * Запись — только роль `admin`. Для `ai-editor` запрет действует и в REST, и в
@@ -247,12 +251,47 @@ function infoPageGroup(key: InfoPageKey): Field {
     label: INFO_PAGE_LABELS[key],
     admin: {
       description:
-        `Тексты страницы ${INFO_PAGE_PATHS[key]}. Пока страница не наполнена реальным ` +
-        `текстом (минимум ${INFO_PAGE_MIN_TEXT_LENGTH} символов в теле плюс заполненные ` +
-        'title и description), она остаётся noindex и вне sitemap — таково условие ' +
-        'решения Ч-23. Текст-заглушка на индексируемой странице запрещён п. 23 ТЗ.',
+        `Тексты страницы ${INFO_PAGE_PATHS[key]} и решение об её индексации. В index,follow и ` +
+        'в sitemap страница попадает только при ДВУХ условиях сразу: ниже включён ' +
+        `выключатель «Открыть в index,follow» И страница наполнена (минимум ` +
+        `${INFO_PAGE_MIN_TEXT_LENGTH} символов в теле плюс заполненные title и description). ` +
+        'Иначе — noindex и вне sitemap, таково условие решения Ч-23. Текст-заглушка на ' +
+        'индексируемой странице запрещён п. 23 ТЗ.',
     },
     fields: [
+      {
+        // Отдельное решение человека, а не следствие заполненных полей.
+        //
+        // Прежняя версия выводила право на index,follow из длины текста, и это
+        // была дыра: под ролью `admin` пишет не только человек в админке, но и
+        // скрипт, миграция, смоук и будущая обёртка MCP — то есть заполнение
+        // текста открывало страницу в индекс, хотя решения об индексации никто
+        // не принимал. П. 7.1 и п. 23 ТЗ требуют, чтобы переключение
+        // index/noindex было отдельным осознанным действием человека.
+        //
+        // Доступ на уровне ПОЛЯ стоит вторым слоем к `access.update` глобала
+        // (там `ai-editor` уже получает Forbidden). Дублирование намеренное:
+        // право глобала однажды может понадобиться расширить — например,
+        // отдать сервисному аккаунту правку каких-то текстов, — и тогда
+        // выключатель обязан остаться закрытым сам по себе, а не потому, что
+        // рядом стоит другое правило.
+        name: INFO_PAGE_INDEXING_FIELD,
+        type: 'checkbox',
+        label: 'Открыть страницу в index,follow (решение человека)',
+        defaultValue: false,
+        access: {
+          create: adminOnlyFieldAccess,
+          update: adminOnlyFieldAccess,
+        },
+        admin: {
+          description:
+            'Включает индексацию страницы (решение Ч-23). По умолчанию выключен: дефолт ' +
+            'закрывающий, страница не уходит в индекс сама. Включение — осознанное действие ' +
+            'человека с ролью admin (п. 7.1 и п. 23 ТЗ), автоматике оно недоступно. Одного ' +
+            'включения мало: пока страница не наполнена, она остаётся noindex — выключатель ' +
+            'не отменяет требований п. 5.1 к полноценной странице.',
+        },
+      },
       {
         name: 'title',
         type: 'text',
@@ -295,8 +334,8 @@ const infoPagesGroup: Field = {
     description:
       'Тексты трёх страниц (решение Ч-19). Сами страницы — статические маршруты Astro, а не ' +
       'записи CMS: отдельной коллекции `pages` в модели данных нет, и реестр ' +
-      'зарезервированных маршрутов запрещает запись CMS с таким путём. Здесь только ' +
-      'содержимое, которое правит человек.',
+      'зарезервированных маршрутов запрещает запись CMS с таким путём. Здесь содержимое, ' +
+      'которое правит человек, и его же решение об индексации каждой страницы.',
   },
   fields: INFO_PAGE_KEYS.map((key) => infoPageGroup(key)),
 };

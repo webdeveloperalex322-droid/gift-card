@@ -23,7 +23,14 @@
  *     занятые целиком), запрет сегмента `page` на любой позиции; путь админки
  *     вычисляется из `PAYLOAD_ADMIN_PATH`, а не записан строкой;
  *   - `./env.ts` — тип среза окружения; окружение всегда аргумент с дефолтом,
- *     чтобы тесты не мутировали `process.env`.
+ *     чтобы тесты не мутировали `process.env`;
+ *   - `./site-settings-rules.ts` (задача Э3-00) — предикаты «выводить или
+ *     промолчать» для настроек сайта: `Organization` (Ч-17), лицензия
+ *     изображений (Ч-10), право служебной страницы на `index,follow`
+ *     (Ч-19/Ч-23), рекламные места (Ч-11). Живёт здесь, а не в `apps/cms`,
+ *     потому что тех же функций требует `apps/web`, а импорт из `payload`
+ *     сломал бы его сборку: в зависимостях этого пакета `payload` нет, поэтому
+ *     инвариант держится структурой, а не комментарием.
  *
  * Реализовано через TDD: тесты в `tests/unit/` (`slug`, `routes`, `site-url`,
  * `reserved-routes`), затем код.
@@ -54,6 +61,50 @@ export {
   pathSegments,
   TRAILING_SLASH,
 } from './routes.js';
+
+export {
+  AD_SLOT_POSITION_LABELS,
+  AD_SLOT_POSITIONS,
+  type AdSlotFacts,
+  type AdSlotPosition,
+  aiDisclosureText,
+  IMAGE_LICENSE_REQUIRED,
+  type ImageLicenseFacts,
+  type ImageLicenseField,
+  imageLicenseGaps,
+  type ImageLicenseJsonLd,
+  imageLicenseJsonLd,
+  INFO_PAGE_INDEXING_FIELD,
+  INFO_PAGE_KEYS,
+  INFO_PAGE_LABELS,
+  INFO_PAGE_MIN_TEXT_LENGTH,
+  INFO_PAGE_PATHS,
+  INFO_PAGE_REQUIRED,
+  type InfoPageFacts,
+  type InfoPageIndexation,
+  infoPageIndexation,
+  type InfoPageKey,
+  type InfoPageRequirement,
+  isAdSlotPosition,
+  isAdSlotRenderable,
+  isImageLicenseComplete,
+  isInfoPageIndexable,
+  isOrganizationJsonLdRendered,
+  MAX_AD_SLOTS_PER_POSITION,
+  ORGANIZATION_JSON_LD_REQUIRED,
+  type OrganizationFacts,
+  type OrganizationJsonLd,
+  organizationJsonLd,
+  organizationJsonLdGaps,
+  type OrganizationRequiredField,
+  type RenderableAdSlot,
+  renderableAdSlots,
+  richTextPlainText,
+  SITE_SETTINGS_SLUG,
+  validateAdSlotRows,
+  validateProfileUrl,
+  validateSiteRootPath,
+} from './site-settings-rules.js';
 
 export { buildAbsoluteUrl, resolveSiteOrigin, SITE_URL_ENV_KEY } from './site-url.js';
 
