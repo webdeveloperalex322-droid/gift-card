@@ -37,7 +37,21 @@
     "tsBuildInfoFile": "dist/tsconfig.node.tsbuildinfo",
     "types": ["node"]
   },
-  "include": ["src/routing/**/*.ts", "src/server/**/*.ts", "src/server/**/*.mts", "src/server-env.ts"],
+  //
+  // `src/seo/**` попадает сюда по тому же правилу: сборка цепочки крошек и
+  // разметки `BreadcrumbList` (Э3-03) — чистые функции без импортов Astro и
+  // Payload, поэтому их проверяет и компилирует этот проект, а юнит-тест из
+  // `tests/unit/` видит их через ссылку на него. Модули с импортом типов Payload
+  // (`src/data/**`) сюда НЕ входят: `@otkritka/cms/types` — это `.ts` чужого
+  // пакета, composite-проект такой файл принять не может, и тесты для них лежат
+  // рядом с исходниками (см. `src/data/data-access.test.ts`).
+  "include": [
+    "src/routing/**/*.ts",
+    "src/seo/**/*.ts",
+    "src/server/**/*.ts",
+    "src/server/**/*.mts",
+    "src/server-env.ts"
+  ],
   // `packages/images` добавлен вместе с отдачей `/media/...` (Э2-04b): контракт
   // публичного пути, формы ключа и заголовков кеширования живёт там
   // (`@otkritka/images/media`), а входной сервер обязан звать его, а не

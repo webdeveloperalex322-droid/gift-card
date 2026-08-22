@@ -43,9 +43,9 @@ import { payloadClient } from './payload-client.js';
 import {
   cardBySlugQuery,
   childCollectionsQuery,
+  collectionByIdQuery,
   collectionByPathQuery,
   collectionCardsQuery,
-  parentCollectionQuery,
   type PublicFindQuery,
   recentCardsQuery,
   type RecordId,
@@ -64,38 +64,11 @@ export interface CardsPage {
 }
 
 /**
- * Идентификатор связи из значения, которое отдаёт Payload.
- *
- * При `depth: 0` это число или строка; форма «объект с id» тоже разбирается —
- * тогда вызывающий не обязан знать, каким запросом получена запись.
+ * Разбор значений связей переехал в `./relations.ts` (задача Э3-03): он чистый,
+ * а этот модуль на загрузке тянет конфиг Payload. Реэкспорт сохранён, чтобы
+ * прежние импорты из слоя данных не менялись.
  */
-export function relationId(value: unknown): RecordId | null {
-  if (typeof value === 'number' || typeof value === 'string') {
-    return value;
-  }
-  if (typeof value === 'object' && value !== null && 'id' in value) {
-    const { id } = value;
-    if (typeof id === 'number' || typeof id === 'string') {
-      return id;
-    }
-  }
-  return null;
-}
-
-/** Идентификаторы связи «многие ко многим» в порядке, заданном редактором. */
-export function relationIds(value: unknown): readonly RecordId[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const ids: RecordId[] = [];
-  for (const item of value) {
-    const id = relationId(item);
-    if (id !== null) {
-      ids.push(id);
-    }
-  }
-  return ids;
-}
+export { relationId, relationIds } from './relations.js';
 
 /**
  * Канонический путь карточки. Собирается ЕДИНСТВЕННОЙ функцией проекта
@@ -167,20 +140,20 @@ export async function listChildCollections(
 }
 
 /**
- * Родительский узел подборки — для хлебных крошек и ссылки «вверх».
+ * Опубликованная подборка по идентификатору — родитель узла в крошках и
+ * ссылке «вверх», а также ОСНОВНАЯ подборка карточки (ТЗ §5.4).
  *
- * `null` означает и «узел верхнего уровня», и «родитель не опубликован». Разница
- * для публичной страницы отсутствует: ссылки нет в обоих случаях. Для человека
- * это разные ситуации, и вторая — сигнал о состоянии контента (опубликованный
- * узел под неопубликованным родителем), но решать её публикацией родителя может
- * только он.
+ * `null` означает сразу три вещи: идентификатора не передали (узел верхнего
+ * уровня, карточка без подборок), записи нет, запись не опубликована. Разница
+ * для публичной страницы отсутствует: ссылки нет во всех случаях. Для человека
+ * это разные ситуации, и «опубликованный узел под неопубликованным родителем» —
+ * сигнал о состоянии контента, но решать его публикацией родителя может только
+ * он.
  */
-export async function findParentCollection(
-  parentId: RecordId | null,
-): Promise<Collection | null> {
-  const { docs } = await findMany(parentCollectionQuery(parentId));
+export async function findCollectionById(id: RecordId | null): Promise<Collection | null> {
+  const { docs } = await findMany(collectionByIdQuery(id));
   const node = docs.at(0) as Collection | undefined;
-  return node === undefined ? null : assertPublicallyReadable(node, 'родительскую подборку');
+  return node === undefined ? null : assertPublicallyReadable(node, 'подборку по идентификатору');
 }
 
 /** Смежные подборки для обязательного блока перелинковки (решение Ч-04-8). */

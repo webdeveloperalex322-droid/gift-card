@@ -1,0 +1,108 @@
+---
+/**
+ * Хлебные крошки: видимая навигация плюс разметка `BreadcrumbList` (задача Э3-03).
+ *
+ * Компонент — ТОЛЬКО представление. Запросов он не делает и записи CMS не
+ * трогает: цепочка приходит готовой из слоя данных (`../data`, функции
+ * `collectionBreadcrumbTrail` и `cardBreadcrumbTrail`). Причина не в чистоте
+ * стиля: шаблон, который сам ходит в CMS, однажды сходит туда без параметров
+ * прав анонима, и разница будет видна не в сборке, а в индексе.
+ *
+ * Инварианты, закодированные здесь (`CLAUDE.md`, раздел «Рендеринг»; ТЗ §7.6):
+ *   - крошки печатаются на сервере: ни `client:*`, ни исполняемого `<script>`.
+ *     Страница полноценна при отключённом JS;
+ *   - навигация — только `<a href>` с путём от корня. Ни hash-маршрутов, ни
+ *     обработчиков, ни `<button>` в роли ссылки;
+ *   - текущая страница присутствует, но БЕЗ ссылки — `<span aria-current="page">`.
+ *
+ * ## Почему JSON-LD выводится этим же компонентом
+ *
+ * Требование «разметка соответствует видимому содержимому» проверяемо только
+ * если у видимой крошки и у элемента `itemListElement` ОДИН источник. Здесь он
+ * один — проп `trail`: `<a href>` и `name` берутся из одного значения, поэтому
+ * разойтись они не могут. Вынести разметку в шаблон страницы значило бы отдать
+ * это соответствие под присмотр четырёх шаблонов вместо одного.
+ *
+ * `is:inline` у `<script>` обязателен: без директивы Astro считает тег
+ * клиентским скриптом и обрабатывает его сборщиком. Тело подставляется
+ * `set:html` через `jsonLdScriptText` — он экранирует `<`, `>` и `&`, поэтому
+ * заголовок записи с последовательностью `</script>` тег не закрывает.
+ *
+ * Про `<nav>` без aria-label по умолчанию: подпись задана явно, потому что на
+ * странице карточки и подборки будет больше одного навигационного блока
+ * (перелинковка, пагинация), и вспомогательные технологии обязаны их различать.
+ */
+import {
+  breadcrumbListJsonLd,
+  type BreadcrumbTrail,
+  jsonLdScriptText,
+} from '../seo/breadcrumbs';
+import { serverEnv } from '../server-env';
+
+interface Props {
+  /**
+   * Готовая цепочка: главная первой, текущая страница последней и без ссылки.
+   * Собирается ТОЛЬКО функциями слоя данных — руками её собирать нельзя, иначе
+   * инварианты цепочки перестают быть проверяемыми в одном месте.
+   */
+  trail: BreadcrumbTrail;
+}
+
+const { trail } = Astro.props;
+
+// Абсолютные URL в разметке собираются из SITE_URL в РАНТАЙМЕ того сервера,
+// который отвечает (`serverEnv`), — так же, как self-canonical в BaseLayout.
+const jsonLd = jsonLdScriptText(breadcrumbListJsonLd(trail, serverEnv()));
+---
+
+<nav class="breadcrumbs" aria-label="Хлебные крошки">
+  <ol class="breadcrumbs__list">
+    {
+      trail.map((item) => (
+        <li class="breadcrumbs__item">
+          {
+            item.linked ? (
+              <a class="breadcrumbs__link" href={item.path}>
+                {item.label}
+              </a>
+            ) : (
+              <span class="breadcrumbs__current" aria-current="page">
+                {item.label}
+              </span>
+            )
+          }
+        </li>
+      ))
+    }
+  </ol>
+</nav>
+
+<script type="application/ld+json" is:inline set:html={jsonLd} />
+
+<style>
+  .breadcrumbs {
+    margin-block-end: 0.75rem;
+    font-size: 0.875rem;
+  }
+
+  .breadcrumbs__list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* Разделитель — оформление, поэтому он в CSS, а не в разметке: в тексте
+     ссылки и в `name` элемента BreadcrumbList ему места нет. */
+  .breadcrumbs__item + .breadcrumbs__item::before {
+    content: '/';
+    margin-inline-end: 0.5rem;
+    opacity: 0.6;
+  }
+
+  .breadcrumbs__current {
+    opacity: 0.75;
+  }
+</style>

@@ -46,8 +46,8 @@ import type { Collection } from '@otkritka/cms/types';
 import { createPngFixture } from '../../cms/src/images/png-fixture.js';
 import {
   findCardBySlug,
+  findCollectionById,
   findCollectionByPath,
-  findParentCollection,
   listChildCollections,
   listCollectionCards,
   listRecentCards,
@@ -341,7 +341,7 @@ async function main(): Promise<void> {
       `детей=${String(children.length)}`,
     );
 
-    const parent = await findParentCollection(relationIds([publishedNode?.parent]).at(0) ?? null);
+    const parent = await findCollectionById(relationIds([publishedNode?.parent]).at(0) ?? null);
     record('родитель узла читается', parent?.id === group.id, `id=${String(parent?.id)}`);
 
     const related = await listRelatedCollections(relationIds(publishedNode?.related));

@@ -12,19 +12,55 @@
  *     и обоснование выбора против HTTP-доступа под API-ключом;
  *   - `./read-scope.ts` — область чтения, постусловие по статусу, номер страницы;
  *   - `./queries.ts` — чистые запросы (что именно спрашивается у Payload);
- *   - `./content.ts` — выполнение запросов и типы результата.
+ *   - `./relations.ts` — разбор значений связей (чистый, конфиг CMS не тянет);
+ *   - `./content.ts` — выполнение запросов и типы результата;
+ *   - `./breadcrumbs.ts` — цепочка крошек из записей (задача Э3-03).
  *
  * Где этот слой работает: только внутри сборки Astro (Vite). Входной сервер
  * (`../server/*`) компилируется в настоящий Node ESM и импортировать конфиг
  * Payload — файл `.ts` из другого пакета — не может; там его и не нужно.
  */
 
+import type { Card } from '@otkritka/cms/types';
+
+import type { BreadcrumbTrail } from '../seo/breadcrumbs.js';
+import {
+  cardBreadcrumbs,
+  type CardCrumbSource,
+  type CollectionCrumbNode,
+  type CollectionReader,
+  collectionBreadcrumbs,
+} from './breadcrumbs.js';
+import { findCollectionById } from './content.js';
+
+/**
+ * Живое чтение подборок для крошек — права анонима, как и весь публичный рендер.
+ *
+ * Привязка живёт здесь, а не значением по умолчанию внутри `./breadcrumbs.ts`:
+ * тот модуль должен грузиться без конфига Payload, иначе его юнит-тест поднимал
+ * бы CMS ради проверки чистых адаптеров. Барьер слоя — правильное место для
+ * подстановки настоящей зависимости.
+ */
+const READ_COLLECTION: CollectionReader = findCollectionById;
+
+/** Крошки страницы подборки. Шаблоны Э3-06 и Э3-08 зовут эту функцию. */
+export function collectionBreadcrumbTrail(node: CollectionCrumbNode): Promise<BreadcrumbTrail> {
+  return collectionBreadcrumbs(node, READ_COLLECTION);
+}
+
+/** Крошки страницы карточки: цепочка её основной подборки (ТЗ §5.4). Шаблон Э3-05. */
+export function cardBreadcrumbTrail(
+  card: CardCrumbSource & Pick<Card, 'collections'>,
+): Promise<BreadcrumbTrail> {
+  return cardBreadcrumbs(card, READ_COLLECTION);
+}
+
 export {
   cardPath,
   type CardsPage,
   findCardBySlug,
+  findCollectionById,
   findCollectionByPath,
-  findParentCollection,
   listCollectionCards,
   listChildCollections,
   listRecentCards,

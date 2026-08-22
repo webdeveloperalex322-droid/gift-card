@@ -41,9 +41,9 @@ import { describe, expect, it } from 'vitest';
 import {
   cardBySlugQuery,
   childCollectionsQuery,
+  collectionByIdQuery,
   collectionByPathQuery,
   collectionCardsQuery,
-  parentCollectionQuery,
   type PublicCollectionSlug,
   type PublicFindQuery,
   recentCardsQuery,
@@ -184,7 +184,7 @@ describe('запросы к коллекциям', () => {
 
   it('дети, родитель и смежные подборки читаются по идентификаторам', () => {
     expect(required(childCollectionsQuery(7)).where).toEqual({ parent: { in: [7] } });
-    expect(required(parentCollectionQuery(7)).where).toEqual({ id: { in: [7] } });
+    expect(required(collectionByIdQuery(7)).where).toEqual({ id: { in: [7] } });
     expect(required(relatedCollectionsQuery([7, 9])).where).toEqual({ id: { in: [7, 9] } });
   });
 
@@ -219,7 +219,7 @@ describe('запросы к коллекциям', () => {
       collectionByPathQuery('/podborki/prazdniki/8-marta'),
       collectionCardsQuery({ collectionId: 1, page: 1 }),
       required(childCollectionsQuery(1)),
-      required(parentCollectionQuery(1)),
+      required(collectionByIdQuery(1)),
       required(relatedCollectionsQuery([1])),
       recentCardsQuery(4),
       seasonalCollectionsQuery(new Date()),
