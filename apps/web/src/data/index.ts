@@ -14,7 +14,12 @@
  *   - `./queries.ts` — чистые запросы (что именно спрашивается у Payload);
  *   - `./relations.ts` — разбор значений связей (чистый, конфиг CMS не тянет);
  *   - `./content.ts` — выполнение запросов и типы результата;
- *   - `./breadcrumbs.ts` — цепочка крошек из записей (задача Э3-03).
+ *   - `./breadcrumbs.ts` — цепочка крошек из записей (задача Э3-03);
+ *   - `./card-image.ts` — модель разметки изображения из зеркала производных
+ *     (задача Э3-04). Шаблоны её обычно не зовут: за них это делает компонент
+ *     `../components/CardImage.astro`. Прямой вызов нужен разметке JSON-LD
+ *     `ImageObject` (задача Э3-05), где тот же файл называется абсолютным
+ *     адресом.
  *
  * Где этот слой работает: только внутри сборки Astro (Vite). Входной сервер
  * (`../server/*`) компилируется в настоящий Node ESM и импортировать конфиг
@@ -54,6 +59,14 @@ export function cardBreadcrumbTrail(
 ): Promise<BreadcrumbTrail> {
   return cardBreadcrumbs(card, READ_COLLECTION);
 }
+
+export {
+  type CardImageSource,
+  cardImageAlt,
+  cardImageVariants,
+  type CardPictureInput,
+  cardPictureModel,
+} from './card-image.js';
 
 export {
   cardPath,
