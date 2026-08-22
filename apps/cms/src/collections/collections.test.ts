@@ -150,8 +150,20 @@ describe('collections: уникальность итогового пути', ()
   });
 
   it('путь собирается хуком коллекции, а не приходит из запроса', () => {
-    expect(Collections.hooks?.beforeChange).toHaveLength(1);
-    expect(Collections.hooks?.afterChange).toHaveLength(1);
+    // Сборка пути идёт ПЕРВОЙ в beforeChange, а пересборка путей потомков —
+    // первой в afterChange: общие хуки контента (Э1-07…Э1-09) обязаны работать
+    // с уже посчитанным путём, иначе 301 создался бы от старого адреса.
+    expect(Collections.hooks?.beforeChange?.[0]).toBeTypeOf('function');
+    expect(Collections.hooks?.afterChange?.[0]).toBeTypeOf('function');
+    expect(Collections.hooks?.beforeChange?.length).toBeGreaterThanOrEqual(2);
+    expect(Collections.hooks?.afterChange?.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('к коллекции подключены общие хуки контента: статус, история, редиректы', () => {
+    // Правила индексации у подборок и карточек должны быть одними и теми же,
+    // поэтому проверяется факт подключения ОБЩЕЙ фабрики, а не локальных копий.
+    expect(Collections.hooks?.beforeOperation).toHaveLength(1);
+    expect(Collections.hooks?.beforeValidate).toHaveLength(1);
   });
 
   it('удаление узла с вложенными перехватывается хуком', () => {

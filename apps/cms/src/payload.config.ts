@@ -5,9 +5,12 @@ import { postgresAdapter } from '@payloadcms/db-postgres';
 import { lexicalEditor } from '@payloadcms/richtext-lexical';
 import { buildConfig } from 'payload';
 
+import { reservedRoutes } from '@otkritka/shared';
+
 import { Cards } from './collections/cards';
 import { Collections } from './collections/collections';
 import { Redirects } from './collections/redirects';
+import { SeoHistory } from './collections/seo-history';
 import { Users } from './collections/users';
 import { adminPath, loadEnvFiles, requireEnv } from './env.mjs';
 import { seedFirstAdmin } from './seed-first-admin';
@@ -22,13 +25,27 @@ import { seedFirstAdmin } from './seed-first-admin';
  *
  * Что здесь ЕСТЬ: подключение к PostgreSQL, секрет, путь админки из окружения,
  * создание первого администратора и коллекции `users` (Э1-03), `cards` (Э1-04),
- * `collections` (Э1-05), `redirects` (Э1-06).
+ * `collections` (Э1-05), `redirects` (Э1-06), `seo-history` (Э1-07).
  *
- * Чего здесь НЕТ (отдельные задачи): коллекция `seo-history` (Э1-07), хуки
- * статусной модели (Э1-08) и неизменяемость slug с атомарным 301 (Э1-09).
+ * Хуки статусной модели (Э1-08) и неизменяемости URL (Э1-09) живут в самих
+ * коллекциях: конфиг о них не знает и знать не должен — правило принадлежит
+ * коллекции, а не точке сборки.
  */
 
 loadEnvFiles();
+
+/**
+ * Реестр зарезервированных маршрутов собирается ПРИ СТАРТЕ, а не при первой
+ * записи.
+ *
+ * `reservedRoutes` бросает, если `PAYLOAD_ADMIN_PATH` спорит с наполнением
+ * реестра (совпадает с контейнером или поглощает служебный маршрут). Такая
+ * конфигурация нерабочая целиком: админка и часть путей сайта претендуют на один
+ * префикс. Поймать это на первой попытке сохранить подборку — значит узнать об
+ * ошибке развёртывания из формы редактора; поэтому CMS не поднимается вовсе, и
+ * с тем же самым текстом ошибки.
+ */
+reservedRoutes();
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -45,7 +62,7 @@ export default buildConfig({
   },
 
   // Порядок влияет только на меню админки: сверху то, с чем работают чаще.
-  collections: [Cards, Collections, Redirects, Users],
+  collections: [Cards, Collections, Redirects, SeoHistory, Users],
 
   db: postgresAdapter({
     pool: {

@@ -44,21 +44,6 @@ export function buildCardPath(slug: string): string {
   return `${CARD_PATH_PREFIX}/${slug}`;
 }
 
-/**
- * Протокольно-относительный URL (`//example.test/x`).
- *
- * Проверка нужна отдельно от `looksLikeAbsoluteUrl` из `@otkritka/shared`: та
- * ищет схему (`https:`), а форма `//host/path` схемы не содержит и потому
- * проходит её насквозь. Для браузера и краулера это АБСОЛЮТНЫЙ адрес другого
- * хоста, а `canonicalizePath` схлопнул бы двойной слеш и превратил чужой хост в
- * первый сегмент пути — то есть ошибка стала бы невидимой. Проверку стоит
- * перенести в `packages/shared` рядом с `looksLikeAbsoluteUrl`; здесь она
- * находится потому, что пакет правит его владелец (см. отчёт задачи).
- */
-export function isProtocolRelativeUrl(value: string): boolean {
-  return value.trim().startsWith('//');
-}
-
 export interface ContentSlugOptions {
   /** Префикс пространства имён: {@link CARD_PATH_PREFIX} или путь родителя. */
   readonly prefix: string;

@@ -11,10 +11,10 @@
  * не требуют поднятой базы. Проверки выполняются на сервере, поэтому действуют
  * одинаково для админки, REST и GraphQL.
  *
- * Границы: перевод статуса с ГРОМКОЙ ошибкой и валидация полноты перед `review`
- * — Э1-08; неизменяемость slug и атомарная смена URL с 301 — Э1-09; запись
- * изменений в `seo-history` — Э1-07. Здесь только определения полей, дефолты и
- * те правила, которые являются частью access control.
+ * Границы: сами правила статусной модели и блокировки URL живут в
+ * `status-model.ts` (чистое ядро) и `content-hooks.ts` (проводка в Payload).
+ * Здесь только определения полей, дефолты и те проверки, которые являются частью
+ * определения поля.
  */
 import type {
   Field,
@@ -32,6 +32,7 @@ import {
 } from '@otkritka/shared';
 
 import {
+  adminOnlyFieldAccess,
   canSetIndexFollow,
   canonicalFieldAccess,
   contentStatusFieldAccess,
@@ -40,7 +41,9 @@ import {
   slugFieldAccess,
   systemFieldAccess,
 } from '../access/policies';
-import { isProtocolRelativeUrl, validateContentSlug } from '../seo/paths';
+import { validateContentSlug } from '../seo/paths';
+import { normalizeRedirectPath } from './redirects-plan';
+import { WITHDRAWAL_MODES } from './status-model';
 import {
   DEFAULT_ROBOTS,
   ROBOTS_DIRECTIVES,
@@ -140,7 +143,10 @@ export function validateCanonicalOverride(value: unknown): string | true {
 
   const raw = value.trim();
 
-  if (looksLikeAbsoluteUrl(raw) || isProtocolRelativeUrl(raw)) {
+  // Предикат общего пакета распознаёт обе формы абсолютного адреса: со схемой и
+  // протокольно-относительную (`//host/path`). Второй проверки рядом быть не
+  // должно — правило одно.
+  if (looksLikeAbsoluteUrl(raw)) {
     return (
       `«${raw}» — абсолютный URL. Canonical задаётся путём от корня: хост подставляет ` +
       'единственный хелпер из SITE_URL, и вписанный руками домен разошёлся бы с ним ' +
@@ -368,5 +374,149 @@ export function updatedContentAtField(): Field {
         'lastmod перестаёт что-либо означать для поисковика.',
       position: 'sidebar',
     },
+  };
+}
+
+/**
+ * Проверяет путь замены при снятии страницы с публикации.
+ *
+ * Правила ровно те же, что у поля `to` в `redirects`, и берутся оттуда же
+ * (`normalizeRedirectPath`): значение этого поля станет целью настоящего 301,
+ * поэтому вторая, «своя» проверка пути означала бы, что через это поле можно
+ * записать редирект, который сама коллекция редиректов не приняла бы.
+ */
+export function validateWithdrawalTarget(value: unknown, mode: unknown): string | true {
+  const filled = typeof value === 'string' && value.trim() !== '';
+
+  if (mode === '301' && !filled) {
+    return (
+      'Для решения 301 нужен путь замены: 301 — это перенос на конкретный URL. ' +
+      'Если замены нет, выберите 410 (удалено без замены) или 404.'
+    );
+  }
+  if (mode !== '301' && filled) {
+    return (
+      `Решение «${typeof mode === 'string' ? mode : 'без замены'}» означает, что замены ` +
+      'нет, поэтому путь замены должен быть пустым.'
+    );
+  }
+  if (!filled) {
+    return true;
+  }
+
+  try {
+    normalizeRedirectPath(value);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return true;
+}
+
+const validateWithdrawalTargetValue: TextFieldSingleValidation = (value, { siblingData }) =>
+  validateWithdrawalTarget(value, readStringField(siblingData, 'mode'));
+
+/**
+ * Решение о судьбе URL при снятии страницы с публикации (ТЗ §8.2: «с
+ * автоматическим предложением 301/404»).
+ *
+ * Поля хранятся в записи, а не передаются мимо неё, по двум причинам: решение
+ * должно быть видно в самой записи (по нему потом объясняют, почему адрес
+ * отдаёт 301), и внешний клиент обязан иметь возможность его передать — правило,
+ * доступное только через форму админки, для API не существует. Хук сбрасывает
+ * решение при возврате записи в публикацию, поэтому «прошлое решение» не
+ * применяется молча ко следующему снятию.
+ */
+export function withdrawalField(): Field {
+  return {
+    name: 'withdrawal',
+    type: 'group',
+    label: 'Снятие с публикации: судьба URL',
+    admin: {
+      description:
+        'Заполняется при переводе опубликованной записи в draft или review. Без ' +
+        'решения снятие с публикации отклоняется: этот URL уже известен поисковику, ' +
+        'и молчаливое исчезновение страницы — это либо потерянный вес ссылки, либо ' +
+        'мягкий 404.',
+    },
+    fields: [
+      {
+        name: 'mode',
+        type: 'select',
+        options: [
+          { label: '301 — страница переехала на другой URL', value: '301' },
+          { label: '410 — удалено без замены (явная запись в redirects)', value: '410' },
+          { label: '404 — снято без записи в redirects', value: '404' },
+        ],
+        access: { create: adminOnlyFieldAccess, update: adminOnlyFieldAccess },
+        admin: {
+          description:
+            'Снятие с публикации — действие администратора, поэтому и решение о судьбе ' +
+            `URL тоже: допустимы только ${WITHDRAWAL_MODES.join(' / ')}.`,
+        },
+      },
+      {
+        name: 'redirectTo',
+        type: 'text',
+        access: { create: adminOnlyFieldAccess, update: adminOnlyFieldAccess },
+        admin: {
+          description:
+            'Путь замены от корня сайта — только для 301. Абсолютный URL недопустим: ' +
+            'хост собирается единственным хелпером из SITE_URL.',
+        },
+        validate: validateWithdrawalTargetValue,
+      },
+    ],
+  };
+}
+
+/**
+ * Подтверждение смены URL (задача Э1-09).
+ *
+ * После первой публикации slug (а у подборки ещё parent и nodeKind) заблокирован
+ * для ВСЕХ, включая администратора. Разблокирует его только это подтверждение —
+ * и ровно на одну операцию: тем же сохранением создаётся одиночный 301 со старого
+ * пути на новый, в одной транзакции. Флаг сбрасывается хуком при каждом
+ * сохранении, поэтому «подтверждено однажды» не превращается в «разрешено
+ * навсегда».
+ *
+ * Почему подтверждение, а не отдельная ручка в интерфейсе: правило обязано
+ * работать одинаково в админке, в REST и в GraphQL. Кнопка существует только в
+ * админке, поле — везде.
+ */
+export function urlChangeField(): Field {
+  return {
+    name: 'urlChange',
+    type: 'group',
+    label: 'Смена URL (только вместе с 301)',
+    admin: {
+      description:
+        'URL опубликованной записи неизменяем. Чтобы перенести страницу, поставьте ' +
+        'подтверждение и в том же сохранении измените slug (у подборки — slug, ' +
+        'родителя или вид узла): 301 создастся автоматически, в той же транзакции. ' +
+        'Цепочки редиректов при этом схлопываются, а не выстраиваются.',
+    },
+    fields: [
+      {
+        name: 'confirm',
+        type: 'checkbox',
+        defaultValue: false,
+        access: { create: adminOnlyFieldAccess, update: adminOnlyFieldAccess },
+        admin: {
+          description:
+            'Подтверждаю смену URL: со старого пути будет создан одиночный 301. ' +
+            'Одноразовое: после сохранения флаг снимается.',
+        },
+      },
+      {
+        name: 'reason',
+        type: 'text',
+        access: { create: adminOnlyFieldAccess, update: adminOnlyFieldAccess },
+        admin: {
+          description:
+            'Причина переноса. Попадает в комментарий редиректа: через год именно он ' +
+            'объясняет, почему адрес отдаёт 301.',
+        },
+      },
+    ],
   };
 }

@@ -70,6 +70,7 @@ export interface Config {
     cards: Card;
     collections: Collection;
     redirects: Redirect;
+    'seo-history': SeoHistory;
     users: User;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
@@ -81,6 +82,7 @@ export interface Config {
     cards: CardsSelect<false> | CardsSelect<true>;
     collections: CollectionsSelect<false> | CollectionsSelect<true>;
     redirects: RedirectsSelect<false> | RedirectsSelect<true>;
+    'seo-history': SeoHistorySelect<false> | SeoHistorySelect<true>;
     users: UsersSelect<false> | UsersSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
@@ -186,6 +188,32 @@ export interface Card {
    */
   updatedContentAt?: string | null;
   /**
+   * Заполняется при переводе опубликованной записи в draft или review. Без решения снятие с публикации отклоняется: этот URL уже известен поисковику, и молчаливое исчезновение страницы — это либо потерянный вес ссылки, либо мягкий 404.
+   */
+  withdrawal?: {
+    /**
+     * Снятие с публикации — действие администратора, поэтому и решение о судьбе URL тоже: допустимы только 301 / 404 / 410.
+     */
+    mode?: ('301' | '410' | '404') | null;
+    /**
+     * Путь замены от корня сайта — только для 301. Абсолютный URL недопустим: хост собирается единственным хелпером из SITE_URL.
+     */
+    redirectTo?: string | null;
+  };
+  /**
+   * URL опубликованной записи неизменяем. Чтобы перенести страницу, поставьте подтверждение и в том же сохранении измените slug (у подборки — slug, родителя или вид узла): 301 создастся автоматически, в той же транзакции. Цепочки редиректов при этом схлопываются, а не выстраиваются.
+   */
+  urlChange?: {
+    /**
+     * Подтверждаю смену URL: со старого пути будет создан одиночный 301. Одноразовое: после сохранения флаг снимается.
+     */
+    confirm?: boolean | null;
+    /**
+     * Причина переноса. Попадает в комментарий редиректа: через год именно он объясняет, почему адрес отдаёт 301.
+     */
+    reason?: string | null;
+  };
+  /**
    * Перцептивный хеш изображения. Считает @otkritka/images при загрузке (задача Э2-05); снаружи не пишется, иначе поиск визуальных дублей можно было бы обойти подстановкой чужого значения.
    */
   pHash?: string | null;
@@ -288,6 +316,32 @@ export interface Collection {
    */
   updatedContentAt?: string | null;
   /**
+   * Заполняется при переводе опубликованной записи в draft или review. Без решения снятие с публикации отклоняется: этот URL уже известен поисковику, и молчаливое исчезновение страницы — это либо потерянный вес ссылки, либо мягкий 404.
+   */
+  withdrawal?: {
+    /**
+     * Снятие с публикации — действие администратора, поэтому и решение о судьбе URL тоже: допустимы только 301 / 404 / 410.
+     */
+    mode?: ('301' | '410' | '404') | null;
+    /**
+     * Путь замены от корня сайта — только для 301. Абсолютный URL недопустим: хост собирается единственным хелпером из SITE_URL.
+     */
+    redirectTo?: string | null;
+  };
+  /**
+   * URL опубликованной записи неизменяем. Чтобы перенести страницу, поставьте подтверждение и в том же сохранении измените slug (у подборки — slug, родителя или вид узла): 301 создастся автоматически, в той же транзакции. Цепочки редиректов при этом схлопываются, а не выстраиваются.
+   */
+  urlChange?: {
+    /**
+     * Подтверждаю смену URL: со старого пути будет создан одиночный 301. Одноразовое: после сохранения флаг снимается.
+     */
+    confirm?: boolean | null;
+    /**
+     * Причина переноса. Попадает в комментарий редиректа: через год именно он объясняет, почему адрес отдаёт 301.
+     */
+    reason?: string | null;
+  };
+  /**
    * Ответственный редактор подборки. По умолчанию — администратор (решение Ч-16): даже если запись создал сервисный аккаунт ai-editor, ответственным остаётся человек, потому что решение о публикации принимает он.
    */
   responsibleEditor?: (number | null) | User;
@@ -385,6 +439,61 @@ export interface Redirect {
   createdAt: string;
 }
 /**
+ * Журнал изменений SEO-полей: что, когда, кем (человек или сервисный аккаунт), старое → новое. Заполняется хуками автоматически, вручную не редактируется.
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "seo-history".
+ */
+export interface SeoHistory {
+  id: number;
+  /**
+   * Коллекция изменённой записи.
+   */
+  documentCollection: 'cards' | 'collections';
+  /**
+   * Идентификатор записи. Строкой, а не связью: история обязана переживать удаление документа — иначе исчезал бы след ровно того события, из-за которого чаще всего и смотрят журнал.
+   */
+  documentId: string;
+  /**
+   * Путь записи на момент изменения. Хранится копией: по нему история читается как список URL, а не как список идентификаторов.
+   */
+  documentPath?: string | null;
+  /**
+   * Какое SEO-поле изменилось.
+   */
+  field: 'title' | 'h1' | 'metaDescription' | 'slug' | 'path' | 'canonical' | 'robots' | 'status';
+  /**
+   * Значение ДО изменения. Пусто — поле не было заполнено.
+   */
+  previousValue?: string | null;
+  /**
+   * Значение ПОСЛЕ изменения.
+   */
+  nextValue?: string | null;
+  /**
+   * Операция, в которой произошло изменение.
+   */
+  operation: 'create' | 'update';
+  /**
+   * Кто изменил: admin (человек), ai-editor (сервисный аккаунт), system (операция без пользователя — миграция, скрипт) или unknown (роль не распознана — это инцидент, а не норма).
+   */
+  authorRole: 'admin' | 'ai-editor' | 'system' | 'unknown';
+  /**
+   * Аккаунт автора изменения. Пусто — операция без пользователя.
+   */
+  changedBy?: (number | null) | User;
+  /**
+   * Изменение пришло по API-ключу (ТЗ §9). Признак хранится отдельно от роли: один и тот же аккаунт может работать и через админку, и через API.
+   */
+  viaApiKey?: boolean | null;
+  /**
+   * Момент изменения. Ставится хуком; собственное поле, а не createdAt, чтобы все записи одной операции имели ровно одно время.
+   */
+  changedAt: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
@@ -419,6 +528,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'redirects';
         value: number | Redirect;
+      } | null)
+    | ({
+        relationTo: 'seo-history';
+        value: number | SeoHistory;
       } | null)
     | ({
         relationTo: 'users';
@@ -485,6 +598,18 @@ export interface CardsSelect<T extends boolean = true> {
   canonical?: T;
   publishedAt?: T;
   updatedContentAt?: T;
+  withdrawal?:
+    | T
+    | {
+        mode?: T;
+        redirectTo?: T;
+      };
+  urlChange?:
+    | T
+    | {
+        confirm?: T;
+        reason?: T;
+      };
   pHash?: T;
   derivative?:
     | T
@@ -515,6 +640,18 @@ export interface CollectionsSelect<T extends boolean = true> {
   canonical?: T;
   publishedAt?: T;
   updatedContentAt?: T;
+  withdrawal?:
+    | T
+    | {
+        mode?: T;
+        redirectTo?: T;
+      };
+  urlChange?:
+    | T
+    | {
+        confirm?: T;
+        reason?: T;
+      };
   responsibleEditor?: T;
   related?: T;
   seasonal?:
@@ -538,6 +675,25 @@ export interface RedirectsSelect<T extends boolean = true> {
   code?: T;
   createdBy?: T;
   comment?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "seo-history_select".
+ */
+export interface SeoHistorySelect<T extends boolean = true> {
+  documentCollection?: T;
+  documentId?: T;
+  documentPath?: T;
+  field?: T;
+  previousValue?: T;
+  nextValue?: T;
+  operation?: T;
+  authorRole?: T;
+  changedBy?: T;
+  viaApiKey?: T;
+  changedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }

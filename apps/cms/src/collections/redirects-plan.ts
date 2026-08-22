@@ -23,8 +23,6 @@
  */
 import { canonicalizePath, looksLikeAbsoluteUrl } from '@otkritka/shared';
 
-import { isProtocolRelativeUrl } from '../seo/paths';
-
 /** Коды из ТЗ §8.1. 302 и 307 в модели не существуют: перенос всегда постоянный. */
 export const REDIRECT_CODES = ['301', '410'] as const;
 
@@ -108,7 +106,10 @@ export function normalizeRedirectPath(value: unknown): string {
 
   const raw = value.trim();
 
-  if (looksLikeAbsoluteUrl(raw) || isProtocolRelativeUrl(raw)) {
+  // `looksLikeAbsoluteUrl` из общего пакета покрывает и схему (`https:`), и
+  // протокольно-относительную форму (`//host/path`): это одно правило про один и
+  // тот же риск — чужой хост вместо пути.
+  if (looksLikeAbsoluteUrl(raw)) {
     return fail(
       'invalid-path',
       `«${raw}» — абсолютный URL. В редиректах задаётся путь от корня сайта: хост ` +

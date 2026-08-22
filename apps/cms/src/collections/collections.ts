@@ -3,6 +3,7 @@ import type {
   CollectionBeforeChangeHook,
   CollectionBeforeDeleteHook,
   CollectionConfig,
+  Field,
   FieldHook,
   FilterOptionsProps,
   TypeWithID,
@@ -30,6 +31,7 @@ import {
   isCollectionNodeKind,
   planCollectionNode,
 } from './collection-path';
+import { collectFieldNames, contentHooks } from './content-hooks';
 import {
   canonicalField,
   headingField,
@@ -38,7 +40,10 @@ import {
   slugField,
   statusField,
   updatedContentAtField,
+  urlChangeField,
+  withdrawalField,
 } from './seo-fields';
+import { COLLECTION_REVIEW_REQUIREMENTS } from './status-model';
 import { DEFAULT_READINESS_LEAD_DAYS, readinessDeadline } from './seasonal';
 
 /**
@@ -73,11 +78,16 @@ import { DEFAULT_READINESS_LEAD_DAYS, readinessDeadline } from './seasonal';
  *      ошибке редактора; в модели он остаётся признаком карточки и фильтром без
  *      собственного URL.
  *
- * Чего здесь сознательно НЕТ (отдельные назначения; поля под них заведены, чтобы
- * эти задачи добавляли поведение, а не схему): хуки статусной модели и
- * `publishedAt` (Э1-08), запись в `seo-history` (Э1-07), неизменяемость slug и
- * атомарная смена URL с одиночным 301 (Э1-09), порог перекрытия выдачи 80 %
- * (Ч-04-6, этап 5), дашборд сезонных дедлайнов (Э5-07).
+ * Хуки статусной модели с `publishedAt` (Э1-08), записи в `seo-history` (Э1-07) и
+ * неизменяемости URL с атомарным 301 (Э1-09) приходят из общей фабрики
+ * `contentHooks`: правила индексации у подборок и карточек обязаны быть одними и
+ * теми же. Специфика подборок — в том, что переезд узла меняет URL всего
+ * поддерева, поэтому 301 создаётся на КАЖДЫЙ переехавший путь: потомков
+ * пересобирает `syncDescendantPaths` штатным обновлением, а значит у каждого
+ * срабатывают те же хуки.
+ *
+ * Чего здесь сознательно НЕТ: порог перекрытия выдачи 80 % (Ч-04-6, этап 5),
+ * дашборд сезонных дедлайнов (Э5-07).
  */
 
 /** Возвращает id связи, как её отдаёт Payload: число, строка или сам документ. */
@@ -389,6 +399,230 @@ function relatedFilterOptions({ id }: FilterOptionsProps<Collection>): Where | b
   return { id: { not_equals: id } };
 }
 
+/**
+ * Поля объявлены отдельной константой, потому что их имена нужны хукам: по
+ * набору полей коллекции определяется, какие требования полноты применимы
+ * сейчас (см. `content-hooks.ts`).
+ */
+const collectionFields: Field[] = [
+  {
+    name: 'title',
+    type: 'text',
+    required: true,
+    admin: {
+      description:
+        'Заголовок страницы (title). Уникален в пределах каталога — совпадения ' +
+        'проверяются при сохранении (задача Э5-01). Смена заголовка URL не меняет.',
+    },
+  },
+  headingField(),
+  slugField({
+    prefix: COLLECTION_PATH_PREFIX,
+    // Уникален не сегмент, а итоговый путь: slug «mame» законно существует и
+    // под праздником, и в ветке адресатов. Индекс стоит на поле `path`.
+    unique: false,
+    // Валидатор поля проверяет форму сегмента и путь ВЕРХНЕГО уровня
+    // (`/podborki/<slug>`) — это подсказка в форме, а решает всё равно хук,
+    // который знает родителя. Известное следствие: если PAYLOAD_ADMIN_PATH
+    // настроен ВНУТРЬ /podborki, валидатор отклонит совпадающий slug и на
+    // вложенном узле, где путь фактически свободен. Отказ в пользу
+    // осторожности выбран сознательно: путь админки занимать нельзя, а
+    // конфигурация эта пограничная.
+    description:
+      'Один сегмент URL. Итоговый путь собирается из пути родителя и этого ' +
+      'сегмента, например /podborki/prazdniki/8-marta/mame. Slug праздника с ' +
+      'фиксированной датой — <число>-<месяц> (8-marta, 9-maya); без фиксированной ' +
+      'даты — короткое название (paskha, novyy-god), решение Ч-04-4. Год в URL ' +
+      'ежегодного праздника не добавляется. Неизменяем после первой публикации ' +
+      '(смена — только вместе с одиночным 301, задача Э1-09).',
+  }),
+  {
+    name: 'path',
+    type: 'text',
+    unique: true,
+    index: true,
+    access: {
+      create: systemFieldAccess,
+      update: systemFieldAccess,
+    },
+    admin: {
+      description:
+        'ИТОГОВЫЙ путь подборки. Считается хуком из цепочки родителей и хранится ' +
+        'с уникальным индексом БД: уникальность URL не может держаться на проверке ' +
+        'запросом перед записью — два одновременных сохранения через API прошли бы ' +
+        'её оба. Снаружи не пишется ни через админку, ни через API.',
+      position: 'sidebar',
+      readOnly: true,
+    },
+  },
+  {
+    name: 'nodeKind',
+    type: 'select',
+    required: true,
+    index: true,
+    options: COLLECTION_NODE_KINDS.map((kind) => ({
+      label: COLLECTION_NODE_KIND_LABELS[kind],
+      value: kind,
+    })),
+    access: {
+      create: urlShapeFieldAccess,
+      update: urlShapeFieldAccess,
+    },
+    admin: {
+      description:
+        'Определяет, куда узел можно вложить: группа — только в корень /podborki, ' +
+        'повод — под группу, уточнение — под группу или под повод. Порядок только ' +
+        '«повод → уточнение» (решение Ч-04-7): праздник под адресатом не создаётся ' +
+        'никогда. Вида под стиль и настроение нет намеренно — по решению Ч-04-3 это ' +
+        'фильтр без собственных URL.',
+      position: 'sidebar',
+    },
+  },
+  {
+    name: 'parent',
+    type: 'relationship',
+    relationTo: 'collections',
+    index: true,
+    filterOptions: parentFilterOptions,
+    access: {
+      create: urlShapeFieldAccess,
+      update: urlShapeFieldAccess,
+    },
+    admin: {
+      description:
+        'Родительский узел. Пусто — узел верхнего уровня (прямо под /podborki). ' +
+        'Смена родителя меняет URL этой подборки и всех вложенных, поэтому после ' +
+        'первой публикации она возможна только вместе с одиночным 301 (задача Э1-09).',
+      position: 'sidebar',
+    },
+  },
+  {
+    name: 'intro',
+    type: 'richText',
+    admin: {
+      description:
+        'Вводный текст страницы (ТЗ §8.1). Должен быть уникальным и осмысленным: ' +
+        'шаблонный текст с заменой пары слов — прямой запрет п. 23 SEO ТЗ, а ' +
+        'уникальность вводного текста входит в условия открытия страницы в ' +
+        'index,follow (п. 5.1).',
+    },
+  },
+  {
+    name: 'metaDescription',
+    type: 'textarea',
+    admin: {
+      description:
+        'Meta description. Совпадения по каталогу проверяются при сохранении ' +
+        '(задача Э5-01).',
+    },
+  },
+  statusField(),
+  robotsField(),
+  canonicalField(),
+  publishedAtField(),
+  updatedContentAtField(),
+  withdrawalField(),
+  urlChangeField(),
+  {
+    name: 'responsibleEditor',
+    type: 'relationship',
+    relationTo: 'users',
+    hooks: {
+      beforeChange: [fillResponsibleEditor],
+    },
+    admin: {
+      description:
+        'Ответственный редактор подборки. По умолчанию — администратор (решение ' +
+        'Ч-16): даже если запись создал сервисный аккаунт ai-editor, ответственным ' +
+        'остаётся человек, потому что решение о публикации принимает он.',
+      position: 'sidebar',
+    },
+  },
+  {
+    name: 'related',
+    type: 'relationship',
+    relationTo: 'collections',
+    hasMany: true,
+    filterOptions: relatedFilterOptions,
+    admin: {
+      description:
+        'Смежные подборки (m:n, ТЗ §8.1). Из них строится перелинковка: она же ' +
+        'закрывает требование «нет страниц-сирот» — каждая индексируемая страница ' +
+        'достижима за ≤ 4 перехода от главной.',
+    },
+  },
+  {
+    name: 'seasonal',
+    type: 'group',
+    label: 'Сезонность',
+    admin: {
+      description:
+        'Календарь праздников — официальный календарь РФ, даты вводятся здесь ' +
+        `(решение Ч-12). Дата готовности по умолчанию — за ${String(DEFAULT_READINESS_LEAD_DAYS)} ` +
+        'дней до праздника; окно ТЗ §8.6 — 4–8 недель.',
+    },
+    fields: [
+      {
+        name: 'holidayDate',
+        type: 'date',
+        admin: {
+          date: { pickerAppearance: 'dayOnly' },
+          description:
+            'Дата праздника по официальному календарю РФ. Списка праздников в коде ' +
+            'нет намеренно: он разошёлся бы с календарём при первом переносе ' +
+            'выходных, а обновлять его пришлось бы деплоем.',
+        },
+      },
+      {
+        name: 'readyBy',
+        type: 'date',
+        hooks: {
+          beforeChange: [fillReadinessDeadline],
+        },
+        admin: {
+          date: { pickerAppearance: 'dayOnly' },
+          description:
+            `Дата готовности. Пусто — ставится автоматически за ${String(DEFAULT_READINESS_LEAD_DAYS)} ` +
+            'дней до праздника (Ч-12); заданное значение не перезаписывается.',
+        },
+      },
+      {
+        name: 'showFrom',
+        type: 'date',
+        admin: {
+          date: { pickerAppearance: 'dayOnly' },
+          description:
+            'С какого дня подборка показывается в сезонном блоке главной (ТЗ §8.1). ' +
+            'Даты показа переключают БЛОК на главной и не создают отдельных URL.',
+        },
+      },
+      {
+        name: 'showUntil',
+        type: 'date',
+        admin: {
+          date: { pickerAppearance: 'dayOnly' },
+          description: 'По какой день подборка показывается в сезонном блоке главной.',
+        },
+      },
+    ],
+  },
+];
+
+/**
+ * Общие хуки контента (Э1-07, Э1-08, Э1-09).
+ *
+ * `pathOf` берёт СОХРАНЁННЫЙ `path`, а не пересобирает его: путь узла
+ * авторитетен именно в записи, и второй способ его вычислить означал бы, что
+ * редирект при переносе может быть построен не от того адреса, который был в
+ * sitemap.
+ */
+const collectionContentHooks = contentHooks({
+  collectionSlug: 'collections',
+  knownFields: collectFieldNames(collectionFields),
+  pathOf: (doc) => (typeof doc.path === 'string' && doc.path !== '' ? doc.path : null),
+  reviewRequirements: COLLECTION_REVIEW_REQUIREMENTS,
+});
+
 export const Collections: CollectionConfig = {
   slug: 'collections',
   labels: {
@@ -410,209 +644,16 @@ export const Collections: CollectionConfig = {
     update: contentWriteAccess,
   },
   hooks: {
-    afterChange: [syncDescendantPaths],
-    beforeChange: [assignCollectionPath],
+    // Порядок значим. `syncDescendantPaths` идёт ПЕРВЫМ: он пересобирает пути
+    // потомков штатным `payload.update`, поэтому у каждого потомка выполняется
+    // его собственный набор этих же хуков — и переехавший путь потомка получает
+    // свой одиночный 301 и свою запись в истории. Хуки общей фабрики идут после,
+    // когда поддерево уже переехало.
+    afterChange: [syncDescendantPaths, ...collectionContentHooks.afterChange],
+    beforeChange: [assignCollectionPath, ...collectionContentHooks.beforeChange],
     beforeDelete: [rejectDeleteWithChildren],
+    beforeOperation: [...collectionContentHooks.beforeOperation],
+    beforeValidate: [...collectionContentHooks.beforeValidate],
   },
-  fields: [
-    {
-      name: 'title',
-      type: 'text',
-      required: true,
-      admin: {
-        description:
-          'Заголовок страницы (title). Уникален в пределах каталога — совпадения ' +
-          'проверяются при сохранении (задача Э5-01). Смена заголовка URL не меняет.',
-      },
-    },
-    headingField(),
-    slugField({
-      prefix: COLLECTION_PATH_PREFIX,
-      // Уникален не сегмент, а итоговый путь: slug «mame» законно существует и
-      // под праздником, и в ветке адресатов. Индекс стоит на поле `path`.
-      unique: false,
-      // Валидатор поля проверяет форму сегмента и путь ВЕРХНЕГО уровня
-      // (`/podborki/<slug>`) — это подсказка в форме, а решает всё равно хук,
-      // который знает родителя. Известное следствие: если PAYLOAD_ADMIN_PATH
-      // настроен ВНУТРЬ /podborki, валидатор отклонит совпадающий slug и на
-      // вложенном узле, где путь фактически свободен. Отказ в пользу
-      // осторожности выбран сознательно: путь админки занимать нельзя, а
-      // конфигурация эта пограничная.
-      description:
-        'Один сегмент URL. Итоговый путь собирается из пути родителя и этого ' +
-        'сегмента, например /podborki/prazdniki/8-marta/mame. Slug праздника с ' +
-        'фиксированной датой — <число>-<месяц> (8-marta, 9-maya); без фиксированной ' +
-        'даты — короткое название (paskha, novyy-god), решение Ч-04-4. Год в URL ' +
-        'ежегодного праздника не добавляется. Неизменяем после первой публикации ' +
-        '(смена — только вместе с одиночным 301, задача Э1-09).',
-    }),
-    {
-      name: 'path',
-      type: 'text',
-      unique: true,
-      index: true,
-      access: {
-        create: systemFieldAccess,
-        update: systemFieldAccess,
-      },
-      admin: {
-        description:
-          'ИТОГОВЫЙ путь подборки. Считается хуком из цепочки родителей и хранится ' +
-          'с уникальным индексом БД: уникальность URL не может держаться на проверке ' +
-          'запросом перед записью — два одновременных сохранения через API прошли бы ' +
-          'её оба. Снаружи не пишется ни через админку, ни через API.',
-        position: 'sidebar',
-        readOnly: true,
-      },
-    },
-    {
-      name: 'nodeKind',
-      type: 'select',
-      required: true,
-      index: true,
-      options: COLLECTION_NODE_KINDS.map((kind) => ({
-        label: COLLECTION_NODE_KIND_LABELS[kind],
-        value: kind,
-      })),
-      access: {
-        create: urlShapeFieldAccess,
-        update: urlShapeFieldAccess,
-      },
-      admin: {
-        description:
-          'Определяет, куда узел можно вложить: группа — только в корень /podborki, ' +
-          'повод — под группу, уточнение — под группу или под повод. Порядок только ' +
-          '«повод → уточнение» (решение Ч-04-7): праздник под адресатом не создаётся ' +
-          'никогда. Вида под стиль и настроение нет намеренно — по решению Ч-04-3 это ' +
-          'фильтр без собственных URL.',
-        position: 'sidebar',
-      },
-    },
-    {
-      name: 'parent',
-      type: 'relationship',
-      relationTo: 'collections',
-      index: true,
-      filterOptions: parentFilterOptions,
-      access: {
-        create: urlShapeFieldAccess,
-        update: urlShapeFieldAccess,
-      },
-      admin: {
-        description:
-          'Родительский узел. Пусто — узел верхнего уровня (прямо под /podborki). ' +
-          'Смена родителя меняет URL этой подборки и всех вложенных, поэтому после ' +
-          'первой публикации она возможна только вместе с одиночным 301 (задача Э1-09).',
-        position: 'sidebar',
-      },
-    },
-    {
-      name: 'intro',
-      type: 'richText',
-      admin: {
-        description:
-          'Вводный текст страницы (ТЗ §8.1). Должен быть уникальным и осмысленным: ' +
-          'шаблонный текст с заменой пары слов — прямой запрет п. 23 SEO ТЗ, а ' +
-          'уникальность вводного текста входит в условия открытия страницы в ' +
-          'index,follow (п. 5.1).',
-      },
-    },
-    {
-      name: 'metaDescription',
-      type: 'textarea',
-      admin: {
-        description:
-          'Meta description. Совпадения по каталогу проверяются при сохранении ' +
-          '(задача Э5-01).',
-      },
-    },
-    statusField(),
-    robotsField(),
-    canonicalField(),
-    publishedAtField(),
-    updatedContentAtField(),
-    {
-      name: 'responsibleEditor',
-      type: 'relationship',
-      relationTo: 'users',
-      hooks: {
-        beforeChange: [fillResponsibleEditor],
-      },
-      admin: {
-        description:
-          'Ответственный редактор подборки. По умолчанию — администратор (решение ' +
-          'Ч-16): даже если запись создал сервисный аккаунт ai-editor, ответственным ' +
-          'остаётся человек, потому что решение о публикации принимает он.',
-        position: 'sidebar',
-      },
-    },
-    {
-      name: 'related',
-      type: 'relationship',
-      relationTo: 'collections',
-      hasMany: true,
-      filterOptions: relatedFilterOptions,
-      admin: {
-        description:
-          'Смежные подборки (m:n, ТЗ §8.1). Из них строится перелинковка: она же ' +
-          'закрывает требование «нет страниц-сирот» — каждая индексируемая страница ' +
-          'достижима за ≤ 4 перехода от главной.',
-      },
-    },
-    {
-      name: 'seasonal',
-      type: 'group',
-      label: 'Сезонность',
-      admin: {
-        description:
-          'Календарь праздников — официальный календарь РФ, даты вводятся здесь ' +
-          `(решение Ч-12). Дата готовности по умолчанию — за ${String(DEFAULT_READINESS_LEAD_DAYS)} ` +
-          'дней до праздника; окно ТЗ §8.6 — 4–8 недель.',
-      },
-      fields: [
-        {
-          name: 'holidayDate',
-          type: 'date',
-          admin: {
-            date: { pickerAppearance: 'dayOnly' },
-            description:
-              'Дата праздника по официальному календарю РФ. Списка праздников в коде ' +
-              'нет намеренно: он разошёлся бы с календарём при первом переносе ' +
-              'выходных, а обновлять его пришлось бы деплоем.',
-          },
-        },
-        {
-          name: 'readyBy',
-          type: 'date',
-          hooks: {
-            beforeChange: [fillReadinessDeadline],
-          },
-          admin: {
-            date: { pickerAppearance: 'dayOnly' },
-            description:
-              `Дата готовности. Пусто — ставится автоматически за ${String(DEFAULT_READINESS_LEAD_DAYS)} ` +
-              'дней до праздника (Ч-12); заданное значение не перезаписывается.',
-          },
-        },
-        {
-          name: 'showFrom',
-          type: 'date',
-          admin: {
-            date: { pickerAppearance: 'dayOnly' },
-            description:
-              'С какого дня подборка показывается в сезонном блоке главной (ТЗ §8.1). ' +
-              'Даты показа переключают БЛОК на главной и не создают отдельных URL.',
-          },
-        },
-        {
-          name: 'showUntil',
-          type: 'date',
-          admin: {
-            date: { pickerAppearance: 'dayOnly' },
-            description: 'По какой день подборка показывается в сезонном блоке главной.',
-          },
-        },
-      ],
-    },
-  ],
+  fields: collectionFields,
 };
