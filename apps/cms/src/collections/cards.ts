@@ -1,4 +1,4 @@
-import type { CollectionConfig, FieldHook, TypeWithID } from 'payload';
+import type { CollectionConfig } from 'payload';
 
 import {
   contentDeleteAccess,
@@ -9,6 +9,7 @@ import {
 import { CARD_PATH_PREFIX } from '../seo/paths';
 import {
   canonicalField,
+  headingField,
   publishedAtField,
   robotsField,
   slugField,
@@ -31,12 +32,14 @@ import {
  *     `upload: true`, а её конфигурация — это выбор хранилища (Ч-03: S3 отложен,
  *     локальная ФС за адаптером) и задача Э2-04. Заводить коллекцию файлов
  *     заранее означало бы решить за Э2-04, где лежат оригиналы и производные;
- *   - `collections` (relation m:n, «первая — основная» для крошек) и атрибуты
- *     `occasion`, `recipient`, `style`, `mood` — по ТЗ §5.4 каждый атрибут это
- *     ССЫЛКА на соответствующую подборку, то есть связь с коллекцией
- *     `collections`, которой ещё нет (Э1-05). Подменять их перечислением
- *     значений нельзя: значения атрибутов ТЗ не задаёт, и придуманный список
- *     стал бы таксономией, которую человек не утверждал;
+ *   - отдельные поля-атрибуты `occasion`, `recipient`, `style`, `mood` (ТЗ §8.1).
+ *     Повод и адресат выражены связью `collections`: узел подборки уже несёт
+ *     вид (`nodeKind`), поэтому «повод» карточки — это привязка к узлу вида
+ *     `occasion`, а «адресат» — к узлу вида `recipient`. Вторая пара полей о том
+ *     же означала бы два расходящихся источника одного факта. Стиль и
+ *     настроение подборками не создаются вовсе (решение Ч-04-3: неиндексируемый
+ *     фильтр без собственных URL), а перечислять их значения здесь нельзя —
+ *     списка стилей человек не утверждал (см. отчёт Э1-05);
  *   - `формы/размеры` — производные пайплайна изображений (Э2-05), в записи
  *     появляются вместе с вариантами.
  *
@@ -45,32 +48,6 @@ import {
  * pHash и производные (Э2-05, Э2-06). Поля под них заведены и закрыты от записи
  * снаружи, чтобы эти задачи добавляли поведение, а не схему.
  */
-
-/** Читает строковое поле из данных запроса (форма не гарантирована типом). */
-function readStringField(source: unknown, name: string): string | undefined {
-  if (typeof source !== 'object' || source === null || !(name in source)) {
-    return undefined;
-  }
-  const value = (source as Record<string, unknown>)[name];
-  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
-}
-
-/**
- * ТЗ §8.1: «title, h1 — раздельно; по умолчанию совпадают».
- *
- * Заполняется только пустой H1: иначе редактор не смог бы сделать H1 отличным
- * от title — а именно раздельность этих двух полей требует ТЗ.
- */
-const fillHeadingFromTitle: FieldHook<
-  TypeWithID & { title?: string | null },
-  string | null | undefined,
-  unknown
-> = ({ data, value }) => {
-  if (typeof value === 'string' && value.trim() !== '') {
-    return value;
-  }
-  return readStringField(data, 'title') ?? value;
-};
 
 export const Cards: CollectionConfig = {
   slug: 'cards',
@@ -102,16 +79,7 @@ export const Cards: CollectionConfig = {
           'проверяются при сохранении (задача Э5-01). Смена заголовка URL не меняет.',
       },
     },
-    {
-      name: 'h1',
-      type: 'text',
-      admin: {
-        description: 'H1 страницы. Пустой — совпадает с title (ТЗ §8.1).',
-      },
-      hooks: {
-        beforeChange: [fillHeadingFromTitle],
-      },
-    },
+    headingField(),
     slugField({ prefix: CARD_PATH_PREFIX }),
     {
       name: 'alt',
@@ -149,6 +117,20 @@ export const Cards: CollectionConfig = {
           'Условия использования изображения. Из этого поля берутся license и ' +
           'copyrightNotice в JSON-LD ImageObject (этап 3): если условия у открытки ' +
           'общие, поле остаётся пустым и подставляются условия проекта.',
+      },
+    },
+    {
+      name: 'collections',
+      type: 'relationship',
+      relationTo: 'collections',
+      hasMany: true,
+      index: true,
+      admin: {
+        description:
+          'Подборки, в которые входит открытка (m:n, ТЗ §8.1). ПЕРВАЯ — основная: ' +
+          'из неё строятся хлебные крошки. Открытка входит в несколько подборок БЕЗ ' +
+          'дублирования URL: канонический адрес карточки остаётся один навсегда — ' +
+          '/otkrytki/<slug>, копии карточки внутри подборок не создаются.',
       },
     },
     statusField(),

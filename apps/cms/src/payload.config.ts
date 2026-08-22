@@ -6,6 +6,7 @@ import { lexicalEditor } from '@payloadcms/richtext-lexical';
 import { buildConfig } from 'payload';
 
 import { Cards } from './collections/cards';
+import { Collections } from './collections/collections';
 import { Redirects } from './collections/redirects';
 import { Users } from './collections/users';
 import { adminPath, loadEnvFiles, requireEnv } from './env.mjs';
@@ -21,13 +22,10 @@ import { seedFirstAdmin } from './seed-first-admin';
  *
  * Что здесь ЕСТЬ: подключение к PostgreSQL, секрет, путь админки из окружения,
  * создание первого администратора и коллекции `users` (Э1-03), `cards` (Э1-04),
- * `redirects` (Э1-06).
+ * `collections` (Э1-05), `redirects` (Э1-06).
  *
- * Чего здесь НЕТ (отдельные задачи): коллекции `collections` (Э1-05) и
- * `seo-history` (Э1-07), хуки статусной модели (Э1-08) и неизменяемость slug
- * (Э1-09). Из этого следует практическое ограничение: у карточки пока нет ни
- * связи с подборками, ни атрибутов (повод, адресат, стиль, настроение) — по
- * ТЗ §5.4 это ссылки на подборки, то есть связь с коллекцией из Э1-05.
+ * Чего здесь НЕТ (отдельные задачи): коллекция `seo-history` (Э1-07), хуки
+ * статусной модели (Э1-08) и неизменяемость slug с атомарным 301 (Э1-09).
  */
 
 loadEnvFiles();
@@ -47,7 +45,7 @@ export default buildConfig({
   },
 
   // Порядок влияет только на меню админки: сверху то, с чем работают чаще.
-  collections: [Cards, Redirects, Users],
+  collections: [Cards, Collections, Redirects, Users],
 
   db: postgresAdapter({
     pool: {

@@ -126,9 +126,12 @@ describe('buildAbsoluteUrl: сборка абсолютного URL', () => {
     expect(buildAbsoluteUrl('', envWith(FIXTURE_ORIGIN))).toBe(`${FIXTURE_ORIGIN}/`);
   });
 
-  it('схлопывает повторные слеши: одна страница — один URL', () => {
-    expect(buildAbsoluteUrl('//otkrytki//8-marta', envWith(FIXTURE_ORIGIN))).toBe(
+  it('схлопывает повторные слеши в середине: одна страница — один URL', () => {
+    expect(buildAbsoluteUrl('/otkrytki//8-marta', envWith(FIXTURE_ORIGIN))).toBe(
       `${FIXTURE_ORIGIN}/otkrytki/8-marta`,
+    );
+    expect(buildAbsoluteUrl('/otkrytki///prazdniki//8-marta', envWith(FIXTURE_ORIGIN))).toBe(
+      `${FIXTURE_ORIGIN}/otkrytki/prazdniki/8-marta`,
     );
   });
 
@@ -156,12 +159,22 @@ describe('buildAbsoluteUrl: сборка абсолютного URL', () => {
     ).toThrow(/путь/i);
   });
 
-  it('протокол-относительный вход не подменяет хост', () => {
-    // `//other.example.invalid/x` в браузере означает другой хост. Здесь это
-    // просто путь с повторным слешем, и хост остаётся один — из SITE_URL.
-    expect(buildAbsoluteUrl('//other.example.invalid/x', envWith(FIXTURE_ORIGIN))).toBe(
-      `${FIXTURE_ORIGIN}/other.example.invalid/x`,
-    );
+  it('отклоняет протокольно-относительный вход, а не превращает чужой хост в сегмент', () => {
+    // `//other.example.invalid/x` в браузере означает ДРУГОЙ хост. Прежнее
+    // поведение (схлопнуть до `/other.example.invalid/x`) было тихим: canonical
+    // собирался на своём хосте, но с чужим доменом в пути, и заметить это можно
+    // было только глазами. Теперь такой вход — ошибка, как и абсолютный URL.
+    for (const value of [
+      '//other.example.invalid/x',
+      '//other.example.invalid',
+      '///other.example.invalid/x',
+      '\\/\\/other.example.invalid',
+      '/\\other.example.invalid/x',
+    ]) {
+      expect(() => buildAbsoluteUrl(value, envWith(FIXTURE_ORIGIN)), value).toThrow(
+        /путь|хост/i,
+      );
+    }
   });
 
   it('идемпотентен по хосту: повторная сборка того же пути даёт тот же URL', () => {

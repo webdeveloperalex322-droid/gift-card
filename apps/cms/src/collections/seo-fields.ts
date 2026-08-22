@@ -16,7 +16,13 @@
  * изменений в `seo-history` — Э1-07. Здесь только определения полей, дефолты и
  * те правила, которые являются частью access control.
  */
-import type { Field, SelectFieldSingleValidation, TextFieldSingleValidation } from 'payload';
+import type {
+  Field,
+  FieldHook,
+  SelectFieldSingleValidation,
+  TextFieldSingleValidation,
+  TypeWithID,
+} from 'payload';
 
 import {
   CONTENT_STATUSES,
@@ -175,13 +181,30 @@ const validateRobotsValue: SelectFieldSingleValidation = (
 const validateCanonicalValue: TextFieldSingleValidation = (value) =>
   validateCanonicalOverride(value);
 
+export interface SlugFieldOptions {
+  /** Префикс пространства имён записи: `/otkrytki` или `/podborki`. */
+  readonly prefix: string;
+  /**
+   * Уникален ли САМ slug. По умолчанию `true` — так у карточки, чей путь равен
+   * `<префикс>/<slug>`.
+   *
+   * Для подборок значение `false`, и это не послабление: у иерархической записи
+   * уникален ИТОГОВЫЙ ПУТЬ, а не сегмент. Slug `mame` законно существует и под
+   * праздником (`/podborki/prazdniki/8-marta/mame`), и в ветке адресатов
+   * (`/podborki/adresaty/mame`); уникальный индекс стоит на поле `path`.
+   */
+  readonly unique?: boolean;
+  /** Пояснение в админке, если путь собирается не как `<префикс>/<slug>`. */
+  readonly description?: string;
+}
+
 /** Поле slug. Валидация — по итоговому пути записи, а не по форме сегмента. */
-export function slugField(options: { readonly prefix: string }): Field {
+export function slugField(options: SlugFieldOptions): Field {
   return {
     name: 'slug',
     type: 'text',
     required: true,
-    unique: true,
+    unique: options.unique ?? true,
     index: true,
     access: {
       create: slugFieldAccess,
@@ -189,12 +212,54 @@ export function slugField(options: { readonly prefix: string }): Field {
     },
     admin: {
       description:
+        options.description ??
         `URL записи: ${options.prefix}/<slug>. Неизменяем после первой публикации ` +
-        '(смена возможна только вместе с одиночным 301 — задача Э1-09). ' +
-        'Смена заголовка URL не меняет.',
+          '(смена возможна только вместе с одиночным 301 — задача Э1-09). ' +
+          'Смена заголовка URL не меняет.',
       position: 'sidebar',
     },
     validate: validateSlugValue(options.prefix),
+  };
+}
+
+/** Читает непустое строковое поле из данных запроса (форма не гарантирована типом). */
+function readFilledStringField(source: unknown, name: string): string | undefined {
+  const value = readStringField(source, name);
+  return value !== undefined && value.trim() !== '' ? value : undefined;
+}
+
+/**
+ * ТЗ §8.1: «title, h1 — раздельно; по умолчанию совпадают».
+ *
+ * Заполняется только ПУСТОЙ H1: иначе редактор не смог бы сделать H1 отличным
+ * от title — а именно раздельность этих двух полей требует ТЗ.
+ */
+const fillHeadingFromTitle: FieldHook<
+  TypeWithID & { title?: string | null },
+  string | null | undefined,
+  unknown
+> = ({ data, value }) => {
+  if (typeof value === 'string' && value.trim() !== '') {
+    return value;
+  }
+  return readFilledStringField(data, 'title') ?? value;
+};
+
+/**
+ * Поле H1. Фабрика, а не копия в каждой коллекции: правило «пустой H1 равен
+ * title» одинаково для карточек и подборок, а две копии разошлись бы не ошибкой
+ * сборки, а страницей с чужим заголовком.
+ */
+export function headingField(): Field {
+  return {
+    name: 'h1',
+    type: 'text',
+    admin: {
+      description: 'H1 страницы. Пустой — совпадает с title (ТЗ §8.1).',
+    },
+    hooks: {
+      beforeChange: [fillHeadingFromTitle],
+    },
   };
 }
 

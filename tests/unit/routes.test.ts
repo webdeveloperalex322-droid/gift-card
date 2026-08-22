@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalizePath, isPageRoute, TRAILING_SLASH } from '@otkritka/shared';
+import {
+  canonicalizePath,
+  isPageRoute,
+  isProtocolRelativeUrl,
+  looksLikeAbsoluteUrl,
+  pathSegments,
+  TRAILING_SLASH,
+} from '@otkritka/shared';
 
 /**
  * Задача Э1-01 (остаток): правило завершающего слеша и предикат `isPageRoute()`.
@@ -112,9 +119,16 @@ describe('canonicalizePath: приведение пути к каноничес�
     );
   });
 
-  it('схлопывает повторные слеши: два URL одной страницы недопустимы', () => {
+  it('схлопывает повторные слеши в середине: два URL одной страницы недопустимы', () => {
     expect(canonicalizePath('/otkrytki//8-marta')).toBe('/otkrytki/8-marta');
-    expect(canonicalizePath('//otkrytki')).toBe('/otkrytki');
+    expect(canonicalizePath('/otkrytki/prazdniki//8-marta')).toBe('/otkrytki/prazdniki/8-marta');
+  });
+
+  it('ВЕДУЩИЙ двойной слеш не схлопывает: это адрес другого хоста, а не путь', () => {
+    // Раньше здесь ожидалось `//otkrytki` → `/otkrytki`. Ожидание закрепляло
+    // дыру: `//host/x` — абсолютный адрес другого хоста, и схлопывание делало
+    // чужой хост первым сегментом пути незаметно для вызывающего кода.
+    expect(() => canonicalizePath('//otkrytki')).toThrow(/хост/i);
   });
 
   it('идемпотентен', () => {
@@ -122,5 +136,152 @@ describe('canonicalizePath: приведение пути к каноничес�
       const once = canonicalizePath(path);
       expect(canonicalizePath(once), path).toBe(once);
     }
+  });
+});
+
+/**
+ * Протокольно-относительный адрес (`//host/x`) — находка ревизии от 2026-08-22.
+ *
+ * Схемы в такой строке нет, поэтому прежний `looksLikeAbsoluteUrl` пропускал её
+ * насквозь, а `canonicalizePath` схлопывал ведущий двойной слеш и превращал
+ * ЧУЖОЙ ХОСТ в первый сегмент пути. Для браузера и краулера `//host/x` — это
+ * абсолютный адрес другого хоста, то есть так можно получить canonical или
+ * редирект на чужой домен, причём ошибка невидима: путь выглядит валидным.
+ *
+ * Правило живёт здесь, рядом с `looksLikeAbsoluteUrl`, а не в потребителе:
+ * второй потребитель (`apps/web`, этап 3) про локальную проверку в `apps/cms`
+ * не узнал бы.
+ */
+describe('isProtocolRelativeUrl: адрес другого хоста без схемы', () => {
+  const foreign = [
+    '//host.example.invalid/x',
+    '//host.example.invalid',
+    '///host.example.invalid/x',
+    '////host.example.invalid',
+    '//host.example.invalid/otkrytki/8-marta',
+    '//user@host.example.invalid/x',
+    // Обратный слеш браузеры приводят к прямому: все четыре формы дают //host.
+    '\\\\host.example.invalid\\x',
+    '\\/host.example.invalid/x',
+    '/\\host.example.invalid/x',
+    '\\/\\/host.example.invalid',
+    // Ведущие пробелы и управляющие символы адрес не меняют — их обрезают.
+    '  //host.example.invalid/x',
+    '\t//host.example.invalid/x',
+    '\n//host.example.invalid/x',
+    // Tab и перевод строки удаляются ИЗ СЕРЕДИНЫ адреса, поэтому `/<tab>/host`
+    // для браузера тот же `//host`.
+    '/\t/host.example.invalid/x',
+    '/\n/host.example.invalid/x',
+  ];
+
+  for (const value of foreign) {
+    it(`распознаёт как чужой хост: ${JSON.stringify(value)}`, () => {
+      expect(isProtocolRelativeUrl(value)).toBe(true);
+    });
+  }
+
+  const paths = [
+    '',
+    '/',
+    '/otkrytki',
+    '/otkrytki/8-marta',
+    // Двойной слеш В СЕРЕДИНЕ — это опечатка в пути, а не второй хост.
+    '/a//b',
+    '/otkrytki//8-marta',
+    '/otkrytki/prazdniki///8-marta',
+    'media/cards/r2/otkrytka-640.webp',
+    '/robots.txt',
+    // Схема — другой случай, его ловит looksLikeAbsoluteUrl.
+    'https://host.example.invalid/x',
+    'mailto:redaktor@host.example.invalid',
+  ];
+
+  for (const value of paths) {
+    it(`не задевает обычный вход: ${JSON.stringify(value)}`, () => {
+      expect(isProtocolRelativeUrl(value)).toBe(false);
+    });
+  }
+});
+
+describe('looksLikeAbsoluteUrl: любой абсолютный адрес, а не только со схемой', () => {
+  it('видит схему', () => {
+    for (const value of [
+      'https://host.example.invalid/x',
+      'HTTP://host.example.invalid',
+      'ftp://host.example.invalid',
+      'mailto:redaktor@host.example.invalid',
+      'javascript:alert(1)',
+      '  https://host.example.invalid/x  ',
+    ]) {
+      expect(looksLikeAbsoluteUrl(value), value).toBe(true);
+    }
+  });
+
+  it('видит протокольно-относительный адрес: схемы нет, а хост чужой', () => {
+    for (const value of [
+      '//host.example.invalid/x',
+      '//host.example.invalid',
+      '///host.example.invalid/x',
+      '\\\\host.example.invalid\\x',
+      '\\/\\/host.example.invalid',
+      ' //host.example.invalid/x',
+      '/\t/host.example.invalid/x',
+    ]) {
+      expect(looksLikeAbsoluteUrl(value), value).toBe(true);
+    }
+  });
+
+  it('путь абсолютным адресом не считает', () => {
+    for (const value of [
+      '',
+      '/',
+      '/otkrytki',
+      '/otkrytki/8-marta',
+      '/a//b',
+      'media/cards/r2/otkrytka-640.webp',
+      '/robots.txt',
+      '/otkrytki/v1.5',
+    ]) {
+      expect(looksLikeAbsoluteUrl(value), value).toBe(false);
+    }
+  });
+});
+
+describe('функции пути отклоняют протокольно-относительный вход', () => {
+  const foreign = [
+    '//host.example.invalid/x',
+    '//host.example.invalid',
+    '///host.example.invalid/x',
+    '\\/\\/host.example.invalid',
+    '/\\host.example.invalid/x',
+  ];
+
+  for (const value of foreign) {
+    it(`canonicalizePath не схлопывает ${JSON.stringify(value)} в путь`, () => {
+      expect(() => canonicalizePath(value)).toThrow(/хост/i);
+    });
+
+    it(`pathSegments отклоняет ${JSON.stringify(value)}`, () => {
+      expect(() => pathSegments(value)).toThrow(/хост/i);
+    });
+
+    it(`isPageRoute отклоняет ${JSON.stringify(value)}`, () => {
+      expect(() => isPageRoute(value)).toThrow(/хост/i);
+    });
+  }
+
+  it('двойной слеш в середине по-прежнему обрабатывается как раньше', () => {
+    expect(canonicalizePath('/a//b')).toBe('/a/b');
+    expect(canonicalizePath('/otkrytki//8-marta')).toBe('/otkrytki/8-marta');
+    expect(canonicalizePath('/otkrytki///prazdniki//8-marta')).toBe(
+      '/otkrytki/prazdniki/8-marta',
+    );
+    expect(pathSegments('/a//b')).toEqual(['a', 'b']);
+    expect(isPageRoute('/otkrytki//8-marta')).toBe(true);
+  });
+
+  it('сообщение объясняет, что это адрес другого хоста', () => {
+    expect(() => canonicalizePath('//host.example.invalid/x')).toThrow(/друг/i);
   });
 });

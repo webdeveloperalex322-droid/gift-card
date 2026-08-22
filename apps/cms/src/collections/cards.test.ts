@@ -24,6 +24,7 @@ import {
 } from '../access/policies';
 import { DEFAULT_ROBOTS } from '../seo/robots';
 import { Cards } from './cards';
+import { headingField } from './seo-fields';
 
 function findField(fields: readonly Field[], name: string): Field {
   const field = fields.find((candidate) => 'name' in candidate && candidate.name === name);
@@ -63,6 +64,7 @@ describe('cards: базовые свойства коллекции', () => {
         'caption',
         'description',
         'metaDescription',
+        'collections',
         'status',
         'robots',
         'canonical',
@@ -71,6 +73,25 @@ describe('cards: базовые свойства коллекции', () => {
         'pHash',
       ]),
     );
+  });
+});
+
+describe('cards: связь с подборками (m:n, ТЗ §8.1)', () => {
+  it('открытка входит в несколько подборок без дублирования URL', () => {
+    // Связь many-to-many и есть реализация требования «открытка входит в
+    // несколько подборок без дублирования URL»: канонический адрес карточки
+    // остаётся один (/otkrytki/<slug>), копии внутри подборок не создаются.
+    const collections = findField(Cards.fields, 'collections');
+    expect(collections.type).toBe('relationship');
+    expect('relationTo' in collections ? collections.relationTo : undefined).toBe('collections');
+    expect('hasMany' in collections ? collections.hasMany : undefined).toBe(true);
+  });
+
+  it('H1 берётся из общей фабрики, а не из копии правила в коллекции', () => {
+    // Правило «пустой H1 равен title» одинаково для карточек и подборок; две
+    // копии разошлись бы не ошибкой сборки, а страницей с чужим заголовком.
+    const h1 = findField(Cards.fields, 'h1');
+    expect(h1).toEqual(headingField());
   });
 });
 

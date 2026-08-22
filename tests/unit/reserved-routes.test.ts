@@ -265,6 +265,96 @@ describe('путь админки вычисляется из PAYLOAD_ADMIN_PATH
     }
   });
 
+  it('совпадение пути админки с записью реестра — отказ на старте, а не режим работы', () => {
+    // Находка ревизии от 2026-08-22. Раньше побеждала первая запись по пути,
+    // поэтому путь админки, совпавший с контейнером, оставался «контейнером», и
+    // весь его подмаршрут считался свободным: запись CMS занимала адрес внутри
+    // админки. Двух правдоподобных исходов у такой конфигурации нет — контейнер
+    // ОБЯЗАН принимать записи, а путь админки не может принять ни одной, —
+    // поэтому реестр отказывается собираться.
+    const containerAdmin = { [PAYLOAD_ADMIN_PATH_ENV_KEY]: '/otkrytki' };
+
+    expect(() => reservedRoutes(containerAdmin)).toThrow(
+      new RegExp(PAYLOAD_ADMIN_PATH_ENV_KEY),
+    );
+    expect(() => reservedRoutes(containerAdmin)).toThrow(/otkrytki/);
+
+    // Главное следствие: путь под таким «контейнером» больше не выглядит
+    // свободным — проверка не отвечает «можно», она отказывается работать.
+    expect(() => checkReservedPath('/otkrytki/8-marta', containerAdmin)).toThrow(
+      new RegExp(PAYLOAD_ADMIN_PATH_ENV_KEY),
+    );
+    expect(() => isReservedPath('/otkrytki/lyuboj-slug', containerAdmin)).toThrow(
+      new RegExp(PAYLOAD_ADMIN_PATH_ENV_KEY),
+    );
+    expect(() => assertPathNotReserved('/otkrytki/8-marta', containerAdmin)).toThrow(
+      new RegExp(PAYLOAD_ADMIN_PATH_ENV_KEY),
+    );
+  });
+
+  it('совпадение с любым видом ЯВНОЙ записи отказывает одинаково', () => {
+    for (const raw of [
+      '/otkrytki',
+      '/podborki',
+      '/search',
+      '/account',
+      '/pozdravleniya',
+      '/o-proekte',
+      '/generator/preview',
+    ]) {
+      expect(
+        () => reservedRoutes({ [PAYLOAD_ADMIN_PATH_ENV_KEY]: raw }),
+        raw,
+      ).toThrow(new RegExp(PAYLOAD_ADMIN_PATH_ENV_KEY));
+    }
+  });
+
+  it('совпадение с ПРОИЗВОДНЫМ резервом отказом не является: маршрута там нет', () => {
+    // `/sitemap` — производная запись (имя `/sitemap.xml` без расширения). Она
+    // держит от этого имени ЗАПИСИ, а не админку: страницы по такому пути сайт
+    // не отдаёт, поглощения маршрута нет. Отказывать здесь значило бы запрещать
+    // рабочую конфигурацию, поэтому явная запись просто побеждает производную.
+    const env = { [PAYLOAD_ADMIN_PATH_ENV_KEY]: '/sitemap' };
+    const byPath = new Map(reservedRoutes(env).map((route) => [route.path, route.kind]));
+
+    expect(byPath.get('/sitemap')).toBe('occupied');
+    expect(byPath.get('/sitemap.xml')).toBe('occupied');
+    expect(isReservedPath('/sitemap/otkrytki', env)).toBe(true);
+  });
+
+  it('путь админки, поглощающий служебный маршрут, тоже отказ', () => {
+    // `/generator/preview` оказался бы ПОД админкой: её роутер забирает префикс
+    // целиком, и маршрут превью перестал бы существовать.
+    expect(() => reservedRoutes({ [PAYLOAD_ADMIN_PATH_ENV_KEY]: '/generator' })).toThrow(
+      /generator\/preview/,
+    );
+  });
+
+  it('путь под контейнером остаётся рабочим режимом: побеждает явная запись', () => {
+    // Здесь спор реальный и решается в пользу админки: сам контейнер остаётся
+    // контейнером и принимает записи, а конкретный путь админки закрыт целиком.
+    const env = { [PAYLOAD_ADMIN_PATH_ENV_KEY]: '/otkrytki/upravlenie' };
+    const byPath = new Map(reservedRoutes(env).map((route) => [route.path, route.kind]));
+
+    expect(byPath.get('/otkrytki')).toBe('container');
+    expect(isReservedPath('/otkrytki/upravlenie', env)).toBe(true);
+    expect(isReservedPath('/otkrytki/upravlenie/collections/cards', env)).toBe(true);
+    expect(isReservedPath('/otkrytki/8-marta', env)).toBe(false);
+  });
+
+  it('производный резерв корневого сегмента по-прежнему уступает явной записи', () => {
+    // Два случая разведены: производная запись (корневой сегмент, имя без
+    // расширения) уступает явной, а две ЯВНЫЕ записи на одном пути не
+    // разрешаются приоритетом вовсе — это ошибка конфигурации выше.
+    const env = { [PAYLOAD_ADMIN_PATH_ENV_KEY]: '/cms/panel' };
+    const byPath = new Map(reservedRoutes(env).map((route) => [route.path, route.kind]));
+
+    expect(byPath.get('/otkrytki')).toBe('container');
+    expect(byPath.get('/podborki')).toBe('container');
+    expect(byPath.get('/cms')).toBe('occupied');
+    expect(isReservedPath('/otkrytki/8-marta', env)).toBe(false);
+  });
+
   it('путь админки не записан в исходнике строкой', () => {
     const source = readFileSync(
       fileURLToPath(new URL('../../packages/shared/src/reserved-routes.ts', import.meta.url)),

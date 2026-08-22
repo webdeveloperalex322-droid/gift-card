@@ -68,6 +68,7 @@ export interface Config {
   blocks: {};
   collections: {
     cards: Card;
+    collections: Collection;
     redirects: Redirect;
     users: User;
     'payload-kv': PayloadKv;
@@ -78,6 +79,7 @@ export interface Config {
   collectionsJoins: {};
   collectionsSelect: {
     cards: CardsSelect<false> | CardsSelect<true>;
+    collections: CollectionsSelect<false> | CollectionsSelect<true>;
     redirects: RedirectsSelect<false> | RedirectsSelect<true>;
     users: UsersSelect<false> | UsersSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
@@ -160,6 +162,10 @@ export interface Card {
    */
   usageTerms?: string | null;
   /**
+   * Подборки, в которые входит открытка (m:n, ТЗ §8.1). ПЕРВАЯ — основная: из неё строятся хлебные крошки. Открытка входит в несколько подборок БЕЗ дублирования URL: канонический адрес карточки остаётся один навсегда — /otkrytki/<slug>, копии карточки внутри подборок не создаются.
+   */
+  collections?: (number | Collection)[] | null;
+  /**
    * draft → review → published. Перевод в published — осознанное действие человека с ролью admin; сервисный аккаунт ai-editor доводит запись до review.
    */
   status: 'draft' | 'review' | 'published';
@@ -208,33 +214,108 @@ export interface Card {
   createdAt: string;
 }
 /**
- * Одиночные 301 и 410. Цепочки запрещены: новый редирект, создающий цепочку, схлопывается автоматически, а петля отклоняется.
+ * Подборки и посадочные. URL собирается из цепочки родителей: /podborki/<группа>/<повод>/<уточнение>. Порядок только «повод → уточнение». Новая запись — draft с noindex; публикует и открывает в индекс только человек.
  *
  * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "redirects".
+ * via the `definition` "collections".
  */
-export interface Redirect {
+export interface Collection {
   id: number;
   /**
-   * Старый путь от корня сайта, например /otkrytki/staraya-otkrytka. Уникален: два правила для одного пути сделали бы ответ зависимым от порядка строк.
+   * Заголовок страницы (title). Уникален в пределах каталога — совпадения проверяются при сохранении (задача Э5-01). Смена заголовка URL не меняет.
    */
-  from: string;
+  title: string;
   /**
-   * Новый путь от корня сайта. Обязателен для 301 и обязан быть ПУСТЫМ для 410. Абсолютный URL недопустим: хост собирается из SITE_URL.
+   * H1 страницы. Пустой — совпадает с title (ТЗ §8.1).
    */
-  to?: string | null;
+  h1?: string | null;
   /**
-   * Только 301 и 410. Временных редиректов в модели нет: перенос страницы — постоянное решение, а 302 не передаёт сигналы старого URL новому.
+   * Один сегмент URL. Итоговый путь собирается из пути родителя и этого сегмента, например /podborki/prazdniki/8-marta/mame. Slug праздника с фиксированной датой — <число>-<месяц> (8-marta, 9-maya); без фиксированной даты — короткое название (paskha, novyy-god), решение Ч-04-4. Год в URL ежегодного праздника не добавляется. Неизменяем после первой публикации (смена — только вместе с одиночным 301, задача Э1-09).
    */
-  code: '301' | '410';
+  slug: string;
   /**
-   * Кто создал правило: заполняется сервером и не приходит из запроса.
+   * ИТОГОВЫЙ путь подборки. Считается хуком из цепочки родителей и хранится с уникальным индексом БД: уникальность URL не может держаться на проверке запросом перед записью — два одновременных сохранения через API прошли бы её оба. Снаружи не пишется ни через админку, ни через API.
    */
-  createdBy?: (number | null) | User;
+  path?: string | null;
   /**
-   * Зачем создан редирект: причина переноса, ссылка на задачу.
+   * Определяет, куда узел можно вложить: группа — только в корень /podborki, повод — под группу, уточнение — под группу или под повод. Порядок только «повод → уточнение» (решение Ч-04-7): праздник под адресатом не создаётся никогда. Вида под стиль и настроение нет намеренно — по решению Ч-04-3 это фильтр без собственных URL.
    */
-  comment?: string | null;
+  nodeKind: 'group' | 'occasion' | 'recipient';
+  /**
+   * Родительский узел. Пусто — узел верхнего уровня (прямо под /podborki). Смена родителя меняет URL этой подборки и всех вложенных, поэтому после первой публикации она возможна только вместе с одиночным 301 (задача Э1-09).
+   */
+  parent?: (number | null) | Collection;
+  /**
+   * Вводный текст страницы (ТЗ §8.1). Должен быть уникальным и осмысленным: шаблонный текст с заменой пары слов — прямой запрет п. 23 SEO ТЗ, а уникальность вводного текста входит в условия открытия страницы в index,follow (п. 5.1).
+   */
+  intro?: {
+    root: {
+      type: string;
+      children: {
+        type: any;
+        version: number;
+        [k: string]: unknown;
+      }[];
+      direction: ('ltr' | 'rtl') | null;
+      format: 'left' | 'start' | 'center' | 'right' | 'end' | 'justify' | '';
+      indent: number;
+      version: number;
+    };
+    [k: string]: unknown;
+  } | null;
+  /**
+   * Meta description. Совпадения по каталогу проверяются при сохранении (задача Э5-01).
+   */
+  metaDescription?: string | null;
+  /**
+   * draft → review → published. Перевод в published — осознанное действие человека с ролью admin; сервисный аккаунт ai-editor доводит запись до review.
+   */
+  status: 'draft' | 'review' | 'published';
+  /**
+   * index,follow — только для published и только по решению администратора при выполнении условий п. 5.1 SEO ТЗ (подтверждённый спрос, отдельный интент, достаточный объём, уникальные тексты, страница в навигации).
+   */
+  robots: 'index,follow' | 'noindex,follow' | 'noindex,nofollow';
+  /**
+   * Пусто = self-canonical (норма). Переопределение — только администратор и только путём от корня: абсолютный URL собирается из SITE_URL, вручную его вписывать нельзя.
+   */
+  canonical?: string | null;
+  /**
+   * Дата первой публикации. Ставится автоматически при первом переводе в published (Э1-08) и далее не меняется: по ней определяется, что URL уже был известен поисковику.
+   */
+  publishedAt?: string | null;
+  /**
+   * Меняется ТОЛЬКО при содержательном обновлении: это lastmod в sitemap. Техническая правка (опечатка, служебное поле) дату не двигает — иначе lastmod перестаёт что-либо означать для поисковика.
+   */
+  updatedContentAt?: string | null;
+  /**
+   * Ответственный редактор подборки. По умолчанию — администратор (решение Ч-16): даже если запись создал сервисный аккаунт ai-editor, ответственным остаётся человек, потому что решение о публикации принимает он.
+   */
+  responsibleEditor?: (number | null) | User;
+  /**
+   * Смежные подборки (m:n, ТЗ §8.1). Из них строится перелинковка: она же закрывает требование «нет страниц-сирот» — каждая индексируемая страница достижима за ≤ 4 перехода от главной.
+   */
+  related?: (number | Collection)[] | null;
+  /**
+   * Календарь праздников — официальный календарь РФ, даты вводятся здесь (решение Ч-12). Дата готовности по умолчанию — за 45 дней до праздника; окно ТЗ §8.6 — 4–8 недель.
+   */
+  seasonal?: {
+    /**
+     * Дата праздника по официальному календарю РФ. Списка праздников в коде нет намеренно: он разошёлся бы с календарём при первом переносе выходных, а обновлять его пришлось бы деплоем.
+     */
+    holidayDate?: string | null;
+    /**
+     * Дата готовности. Пусто — ставится автоматически за 45 дней до праздника (Ч-12); заданное значение не перезаписывается.
+     */
+    readyBy?: string | null;
+    /**
+     * С какого дня подборка показывается в сезонном блоке главной (ТЗ §8.1). Даты показа переключают БЛОК на главной и не создают отдельных URL.
+     */
+    showFrom?: string | null;
+    /**
+     * По какой день подборка показывается в сезонном блоке главной.
+     */
+    showUntil?: string | null;
+  };
   updatedAt: string;
   createdAt: string;
 }
@@ -273,6 +354,37 @@ export interface User {
   collection: 'users';
 }
 /**
+ * Одиночные 301 и 410. Цепочки запрещены: новый редирект, создающий цепочку, схлопывается автоматически, а петля отклоняется.
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "redirects".
+ */
+export interface Redirect {
+  id: number;
+  /**
+   * Старый путь от корня сайта, например /otkrytki/staraya-otkrytka. Уникален: два правила для одного пути сделали бы ответ зависимым от порядка строк.
+   */
+  from: string;
+  /**
+   * Новый путь от корня сайта. Обязателен для 301 и обязан быть ПУСТЫМ для 410. Абсолютный URL недопустим: хост собирается из SITE_URL.
+   */
+  to?: string | null;
+  /**
+   * Только 301 и 410. Временных редиректов в модели нет: перенос страницы — постоянное решение, а 302 не передаёт сигналы старого URL новому.
+   */
+  code: '301' | '410';
+  /**
+   * Кто создал правило: заполняется сервером и не приходит из запроса.
+   */
+  createdBy?: (number | null) | User;
+  /**
+   * Зачем создан редирект: причина переноса, ссылка на задачу.
+   */
+  comment?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
@@ -299,6 +411,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'cards';
         value: number | Card;
+      } | null)
+    | ({
+        relationTo: 'collections';
+        value: number | Collection;
       } | null)
     | ({
         relationTo: 'redirects';
@@ -363,6 +479,7 @@ export interface CardsSelect<T extends boolean = true> {
   description?: T;
   metaDescription?: T;
   usageTerms?: T;
+  collections?: T;
   status?: T;
   robots?: T;
   canonical?: T;
@@ -376,6 +493,37 @@ export interface CardsSelect<T extends boolean = true> {
         nameStem?: T;
         nameSuffix?: T;
         revision?: T;
+      };
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "collections_select".
+ */
+export interface CollectionsSelect<T extends boolean = true> {
+  title?: T;
+  h1?: T;
+  slug?: T;
+  path?: T;
+  nodeKind?: T;
+  parent?: T;
+  intro?: T;
+  metaDescription?: T;
+  status?: T;
+  robots?: T;
+  canonical?: T;
+  publishedAt?: T;
+  updatedContentAt?: T;
+  responsibleEditor?: T;
+  related?: T;
+  seasonal?:
+    | T
+    | {
+        holidayDate?: T;
+        readyBy?: T;
+        showFrom?: T;
+        showUntil?: T;
       };
   updatedAt?: T;
   createdAt?: T;

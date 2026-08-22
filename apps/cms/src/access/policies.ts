@@ -272,6 +272,17 @@ export const contentStatusFieldAccess: FieldAccess<TypeWithID & StatusCarrier, S
 export const slugFieldAccess: FieldAccess<TypeWithID & PublishableDoc> = ({ doc, req }) =>
   canEditSlug(req.user, doc);
 
+/**
+ * Поля, которые вместе со slug ФОРМИРУЮТ путь записи: у подборки это `parent` и
+ * `nodeKind` (Э1-05) — итоговый путь собирается из цепочки родителей.
+ *
+ * Это тот же самый предикат, а не его копия: правило «URL записи меняется только
+ * до первой публикации» одно, и три поля, меняющие один URL, не могут иметь трёх
+ * разных прав. Отдельное имя нужно только для читаемости конфигов — иначе в
+ * коллекции подборок стояло бы `slugFieldAccess` у поля `parent`.
+ */
+export const urlShapeFieldAccess: FieldAccess<TypeWithID & PublishableDoc> = slugFieldAccess;
+
 /** Поле `robots`. */
 export const robotsFieldAccess: FieldAccess = ({ req }) => canSetRobots(req.user);
 
