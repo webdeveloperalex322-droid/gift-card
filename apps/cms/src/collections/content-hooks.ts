@@ -9,7 +9,10 @@ import type {
 } from 'payload';
 import { APIError } from 'payload';
 
+import { findYearInSlug } from '@otkritka/shared';
+
 import { hasBeenPublished } from '../access/policies';
+import { yearInPathRefusal } from '../seo/paths';
 import { ensureSingleRedirect, releaseRedirectsFrom } from './redirect-sync';
 import { describeHistoryAuthor, diffSeoFields } from './seo-history-diff';
 import {
@@ -69,6 +72,17 @@ export interface ContentRecord extends TypeWithID {
 export interface ContentHooksOptions {
   readonly collectionSlug: 'cards' | 'collections';
   /**
+   * Запрещён ли год в slug записи (условие C3).
+   *
+   * `true` у карточек: их адрес один навсегда, а повод повторяется каждый год.
+   * У подборок правило зависит от вида узла, поэтому там оно применяется в
+   * `collection-path.ts` — там, где вид узла известен. Проверка стоит в ХУКЕ, а
+   * не только в `validate` поля, потому что валидацию полей Payload умеет
+   * пропускать (`skipValidation` при сохранении черновика версии), а хук
+   * `beforeValidate` коллекции выполняется всегда.
+   */
+  readonly forbidYearInSlug?: boolean;
+  /**
    * Поля, существующие в коллекции. Нужны, чтобы требование к полю, которого в
    * схеме пока нет (`image` до Э2-04), не блокировало переход в `review`.
    */
@@ -84,6 +98,8 @@ const FORBIDDEN_RULES: ReadonlySet<ContentRuleCode> = new Set<ContentRuleCode>([
   'bulk-requires-explicit-selection',
   'bulk-too-large',
   'bulk-url-change',
+  'bulk-withdrawal-forbidden',
+  'image-change-requires-admin',
   'index-requires-admin',
   'publish-requires-admin',
   'unpublish-requires-admin',
@@ -94,12 +110,18 @@ const FORBIDDEN_RULES: ReadonlySet<ContentRuleCode> = new Set<ContentRuleCode>([
 /**
  * Переводит отказ правила в ответ API.
  *
+ * Экспортируется, потому что тем же переводом обязаны пользоваться хуки
+ * изображений (Э2-05, Э2-06): у отказа «замену опубликованного изображения
+ * делает admin» должен быть тот же 403 и тот же машинный признак `rule`, что у
+ * отказов статусной модели. Вторая копия перевода дала бы 500 вместо 403 на
+ * части правил.
+ *
  * `APIError` с `isPublic = true`: текст обязан дойти до внешнего клиента
  * дословно. Отказ, который в продакшене превращается в «Something went wrong»,
  * заставляет интеграцию AI-редактора угадывать причину — а угадывание в правилах
  * индексации заканчивается страницей в поиске.
  */
-function toApiError(error: unknown): unknown {
+export function toApiError(error: unknown): unknown {
   if (error instanceof ContentRuleError) {
     return new APIError(
       error.message,
@@ -111,7 +133,7 @@ function toApiError(error: unknown): unknown {
   return error;
 }
 
-function rethrow(error: unknown): never {
+export function rethrow(error: unknown): never {
   throw toApiError(error);
 }
 
@@ -259,6 +281,59 @@ function guardIncomingOperation(options: ContentHooksOptions) {
 }
 
 /**
+ * Условие C3: год не попадает в адрес записи.
+ *
+ * Правило одно и живёт в `@otkritka/shared` (`findYearInSlug`), формулировка
+ * отказа — одна и живёт в `../seo/paths` (`yearInPathRefusal`). Здесь только
+ * применение к записи коллекции, у которой год запрещён всегда (карточка).
+ *
+ * Проверка идёт на КАЖДОМ сохранении, а не только при смене slug, и это выбор со
+ * известной ценой: запись, у которой год в адресе уже есть, нельзя будет
+ * сохранить вовсе, пока адрес не исправлен (а после первой публикации slug
+ * неизменяем, то есть выход один — снять с публикации с решением о судьбе URL).
+ * Обратный вариант — «проверять только смену slug» — оставлял бы такую запись
+ * тихо живой и позволял довести её до публикации: год попал бы в индекс. Из двух
+ * неудобств выбрано то, которое громко останавливает, а не то, которое молча
+ * пропускает.
+ *
+ * @throws APIError 400 через {@link rethrow}
+ */
+function assertYearFreeSlug(
+  options: ContentHooksOptions,
+  next: Readonly<Record<string, unknown>>,
+): void {
+  if (options.forbidYearInSlug !== true) {
+    return;
+  }
+  const slug = typeof next.slug === 'string' ? next.slug.trim() : '';
+  if (slug === '') {
+    return;
+  }
+  // Проверяется ИТОГОВЫЙ путь, а не сегмент: правило одно и то же и здесь, и в
+  // `collection-path.ts`, а адрес складывается из префикса и slug. У карточки
+  // префикс постоянен (`/otkrytki`), поэтому разницы в результате нет — но
+  // формулировка «год не попадает в АДРЕС» проверяется буквально, и при
+  // появлении второго пространства имён проверка не отстанет от него молча.
+  const target = options.pathOf({ ...next, slug }) ?? slug;
+  const year = findYearInSlug(target);
+  if (year === null) {
+    return;
+  }
+  rethrow(
+    new ContentRuleError(
+      'year-in-path',
+      yearInPathRefusal({
+        subject:
+          'У карточки открытки канонический адрес один навсегда, а поводы повторяются ' +
+          'каждый год.',
+        target,
+        year,
+      }),
+    ),
+  );
+}
+
+/**
  * Проверяет то, что БУДЕТ записано: переход статуса, полноту перед `review`,
  * решение о судьбе URL и блокировку формы URL после первой публикации.
  */
@@ -267,6 +342,8 @@ function enforceContentRules(
 ): CollectionBeforeValidateHook<ContentRecord> {
   return ({ data, operation, originalDoc, req }) => {
     const next = asRecord(data);
+
+    assertYearFreeSlug(options, next);
 
     if (operation === 'create') {
       try {

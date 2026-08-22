@@ -6,6 +6,7 @@ import {
   checkReservedPath,
   isReservedPath,
   PAGINATION_SEGMENT,
+  parseAdminPath,
   PAYLOAD_ADMIN_PATH_ENV_KEY,
   reservedRoutes,
 } from '@otkritka/shared';
@@ -67,12 +68,25 @@ describe('реестр: структура записей', () => {
       '/kontakty',
       '/generator/preview',
       '/pozdravleniya',
+      '/media',
       '/robots.txt',
       '/sitemap.xml',
       '/admin',
     ]) {
       expect(byPath.get(occupied), occupied).toBe('occupied');
     }
+  });
+
+  it('публичный префикс производных изображений закрыт целиком', () => {
+    // Реестр объявлен единственным машинным источником, а `/media` — реальный
+    // публичный префикс файлов (решение Ч-03, `MEDIA_ROUTE_PREFIX` в
+    // apps/cms/src/images/storage.ts). Без записи в реестре подборка со slug
+    // `media` заняла бы тот же путь, что маршрут отдачи файлов (этап 3).
+    expect(isReservedPath('/media', DEFAULT_ADMIN_ENV)).toBe(true);
+    expect(isReservedPath('/media/cards/1a2b3c4d/otkrytka-320.webp', DEFAULT_ADMIN_ENV)).toBe(
+      true,
+    );
+    expect(isReservedPath('/podborki/media', DEFAULT_ADMIN_ENV)).toBe(false);
   });
 
   it('не выводит форму директив Disallow: реестр хранит только пути', () => {
@@ -380,15 +394,75 @@ describe('assertPathNotReserved: граница для хуков Payload', () =
   });
 });
 
-describe('чего реестр НЕ закрывает: коллизия карточки и группирующего узла', () => {
-  it('группирующий узел — данные, а не маршрут: реестр его не знает', () => {
-    // Таксономия Ч-04-5: подборки живут под `/otkrytki/prazdniki/...`, карточка —
-    // `/otkrytki/<slug>`. Карточка со slug `prazdniki` даёт ровно тот же путь,
-    // что группирующий узел, и реестр это пропускает — узлы приходят из базы.
-    expect(isReservedPath('/otkrytki/prazdniki', DEFAULT_ADMIN_ENV)).toBe(false);
-    expect(isReservedPath('/otkrytki/podborki', DEFAULT_ADMIN_ENV)).toBe(false);
-    // Закрывается не здесь, а проверкой уникальности итогового пути по всем
-    // коллекциям в хуках Payload (Э1-05 — сборка пути подборки, Э1-09 — хук
-    // неизменяемости и уникальности slug). Тест фиксирует границу ответственности.
+describe('parseAdminPath: ОДИН разбор PAYLOAD_ADMIN_PATH на весь монорепозиторий', () => {
+  // Находка ревизии от 2026-08-22: разбор был написан дважды — здесь и в
+  // apps/cms/src/env.mjs, — и правила уже разошлись (сегмент `page` отклоняла
+  // только копия из env.mjs). Из одного значения выводятся и адрес админки, и
+  // его резерв, поэтому разбор обязан быть один. Совпадение двух вызовов
+  // проверяется тестом рядом с env.mjs (apps/cms/src/env.test.ts).
+  it('нормализует слеши: это забота кода, а не автора .env', () => {
+    expect(parseAdminPath('/upravlenie')).toBe('/upravlenie');
+    expect(parseAdminPath('upravlenie')).toBe('/upravlenie');
+    expect(parseAdminPath('  /upravlenie/  ')).toBe('/upravlenie');
+    expect(parseAdminPath('//cms//panel//')).toBe('/cms/panel');
+  });
+
+  it('без значения отказывает: дефолта нет намеренно', () => {
+    for (const raw of [undefined, null, '', '   ']) {
+      expect(() => parseAdminPath(raw), String(raw)).toThrow(
+        new RegExp(PAYLOAD_ADMIN_PATH_ENV_KEY),
+      );
+    }
+  });
+
+  it('отклоняет негодное значение вместо тихой нормализации', () => {
+    for (const raw of [
+      '/Upravlenie',
+      '/upravlenie panel',
+      '/upravlenie_panel',
+      '/управление',
+      '/upravlenie?x=1',
+      '/upravlenie#hash',
+      '/upravlenie/../root',
+      '/',
+    ]) {
+      expect(() => parseAdminPath(raw), raw).toThrow(new RegExp(PAYLOAD_ADMIN_PATH_ENV_KEY));
+    }
+  });
+
+  it('отклоняет сегмент пагинации на любой позиции', () => {
+    expect(() => parseAdminPath(`/${PAGINATION_SEGMENT}`)).toThrow(
+      new RegExp(PAGINATION_SEGMENT),
+    );
+    expect(() => parseAdminPath(`/cms/${PAGINATION_SEGMENT}`)).toThrow(
+      new RegExp(PAGINATION_SEGMENT),
+    );
+  });
+
+  it('реестр собирается тем же разбором: нормализованное значение попадает в резерв', () => {
+    const env = { [PAYLOAD_ADMIN_PATH_ENV_KEY]: '  //cms//panel//  ' };
+    expect(isReservedPath(parseAdminPath(env[PAYLOAD_ADMIN_PATH_ENV_KEY]), env)).toBe(true);
+    expect(isReservedPath('/cms/panel/lyuboj-slug', env)).toBe(true);
+  });
+});
+
+describe('чего реестр НЕ закрывает: узлы таксономии — это данные', () => {
+  it('группирующий узел реестру неизвестен, и пространства имён разведены', () => {
+    // Форма путей от 2026-08-22 (Ч-04-9): карточки живут под `/otkrytki`,
+    // подборки — под `/podborki`, и это два РАЗНЫХ контейнера реестра. Прежняя
+    // модель с общим пространством имён отменена, поэтому коллизии «карточка
+    // против группирующего узла» больше нет структурно.
+    expect(isReservedPath('/podborki/prazdniki', DEFAULT_ADMIN_ENV)).toBe(false);
+    expect(isReservedPath('/podborki/prazdniki/8-marta', DEFAULT_ADMIN_ENV)).toBe(false);
+    expect(isReservedPath('/otkrytki/8-marta-mame', DEFAULT_ADMIN_ENV)).toBe(false);
+
+    // Сами контейнеры собственную запись не принимают — это правило реестра, а
+    // не свойство таксономии.
+    expect(isReservedPath('/otkrytki', DEFAULT_ADMIN_ENV)).toBe(true);
+    expect(isReservedPath('/podborki', DEFAULT_ADMIN_ENV)).toBe(true);
+
+    // Что остаётся вне реестра: коллизия ДВУХ узлов на одном пути. Её держит
+    // уникальный индекс БД на сохранённом `path` подборки (Э1-05) и уникальный
+    // slug карточки (Э1-09) — узлы приходят из базы, реестр их не знает.
   });
 });

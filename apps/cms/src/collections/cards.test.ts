@@ -23,6 +23,7 @@ import {
   systemFieldAccess,
 } from '../access/policies';
 import { DEFAULT_ROBOTS } from '../seo/robots';
+import { CardImages } from './card-images';
 import { Cards } from './cards';
 import { headingField } from './seo-fields';
 
@@ -172,5 +173,18 @@ describe('cards: служебные поля не пишутся снаружи'
       expect(access?.create, `${name}.create`).toBe(systemFieldAccess);
       expect(access?.update, `${name}.update`).toBe(systemFieldAccess);
     }
+  });
+
+  it('граница nameSuffix совпадает с источником: зеркало не мягче оригинала', () => {
+    // Находка ревизии от 2026-08-22: у зеркала стояло `min: 1`, у источника
+    // (`card-images.nameSuffix`) и у `normalizeUniqueSuffix` в @otkritka/images
+    // — 2. У первого имени суффикса нет вовсе, а значение 1 дало бы одному
+    // файлу два законных пути. Тест сверяет зеркало с источником, а не с
+    // литералом: разъехаться им нельзя.
+    const mirror = findField(subFields(findField(Cards.fields, 'derivative')), 'nameSuffix');
+    const source = findField(CardImages.fields, 'nameSuffix');
+    const minOf = (field: Field): unknown => ('min' in field ? field.min : undefined);
+    expect(minOf(mirror)).toBe(2);
+    expect(minOf(mirror)).toBe(minOf(source));
   });
 });

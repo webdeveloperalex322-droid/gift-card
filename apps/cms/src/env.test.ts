@@ -13,6 +13,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { parseAdminPath } from '@otkritka/shared';
+
 import {
   ENV_EXAMPLE_ADMIN_PATH,
   adminPathRewrites,
@@ -66,6 +68,51 @@ describe('resolveAdminPath', () => {
     // Сегмент `page` зарезервирован под пагинацию /page/N.
     expect(() => resolveAdminPath('/page')).toThrow(/page/);
     expect(() => resolveAdminPath('/cms/page')).toThrow(/page/);
+  });
+
+  it('совпадает с разбором реестра ЗНАЧЕНИЕМ В ЗНАЧЕНИЕ: разбор один', () => {
+    // Находка ревизии от 2026-08-22: разбор PAYLOAD_ADMIN_PATH был написан
+    // дважды — здесь и в packages/shared — и правила разошлись (сегмент `page`
+    // отклоняла только копия из env.mjs), а теста на совпадение не было. Из
+    // одного значения выводятся и адрес админки, и его резерв: разойтись им
+    // нельзя. Теперь `resolveAdminPath` — обёртка над `parseAdminPath`, и этот
+    // тест краснеет, если кто-то снова размножит правила.
+    const accepted = ['/admin', 'admin', '/admin/', '//admin//panel//', '  /upravlenie/  '];
+    for (const raw of accepted) {
+      expect(resolveAdminPath(raw), raw).toBe(parseAdminPath(raw));
+    }
+
+    const rejected = [
+      undefined,
+      '',
+      '   ',
+      '/',
+      '/Admin',
+      '/admin panel',
+      '/admin_panel',
+      '/админка',
+      '/admin?x=1',
+      '/admin#hash',
+      '/admin/../root',
+      '/page',
+      '/cms/page',
+    ];
+    for (const raw of rejected) {
+      let fromEnv: string | null = null;
+      let fromShared: string | null = null;
+      try {
+        fromEnv = String(resolveAdminPath(raw));
+      } catch (error) {
+        fromEnv = error instanceof Error ? error.message : String(error);
+      }
+      try {
+        fromShared = String(parseAdminPath(raw));
+      } catch (error) {
+        fromShared = error instanceof Error ? error.message : String(error);
+      }
+      expect(fromEnv, String(raw)).toBe(fromShared);
+      expect(fromEnv, String(raw)).toContain('PAYLOAD_ADMIN_PATH');
+    }
   });
 });
 

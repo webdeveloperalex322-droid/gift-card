@@ -415,6 +415,154 @@ describe('уникальность итогового пути', () => {
   });
 });
 
+/**
+ * Год в URL ежегодного праздника (условие C3; блокирующая находка ревизии от
+ * 2026-08-22: правило не было реализовано НИГДЕ — `slugify('Новый год 2027')`
+ * давал `novyy-god-2027`, валидатор его принимал, реестр маршрутов не видел,
+ * хук пропускал, а единственным упоминанием запрета был текст подсказки в
+ * админке).
+ *
+ * Норма: `CLAUDE.md` → «Правила URL» → «Год не добавляется в URL ежегодных
+ * праздников»; `docs/plan-etapov.md` называет год в URL ежегодного праздника
+ * прямым критерием провала вето V1. Slug после первой публикации неизменяем,
+ * поэтому ошибка необратима — проверка обязана стоять до записи.
+ *
+ * Область применения: узел ежегодного праздника (`occasion`) и всё, что живёт
+ * ПОД ним (пара «праздник × адресат» — та же ежегодная страница). Группирующий
+ * узел и адресат без праздника под правило не попадают: у них нет годовой
+ * природы, а расширять запрет на всё подряд значило бы запретить год там, где он
+ * может быть осмысленным, без указания человека.
+ */
+describe('год в URL ежегодного праздника (условие C3)', () => {
+  /**
+   * Вердикт url-guard от 2026-08-22: правило было закрыто наполовину —
+   * проверялся только СВОЙ сегмент узла, поэтому год попадал в адрес двумя
+   * путями. Оба теста ниже идут через сборку итогового пути, а не через
+   * проверку сегмента.
+   */
+  it('путь (а): группа с годом отклоняется — её сегмент входит в адрес каждого повода', () => {
+    expectRule(
+      () =>
+        planCollectionNode({
+          candidate: { nodeKind: 'group', parent: null, slug: 'prazdniki-2027' },
+          env,
+        }),
+      'year-in-path',
+    );
+  });
+
+  it('путь (а): повод с чистым сегментом под годовой группой тоже отклоняется', () => {
+    // Собственный сегмент посадочной безупречен (`8-marta`), а её итоговый
+    // адрес — /podborki/prazdniki-2027/8-marta. Проверка по сегменту это
+    // пропускала, проверка по итоговому пути — нет.
+    const yearBearingGroup: CollectionNodeParent = {
+      id: 20,
+      nodeKind: 'group',
+      path: '/podborki/prazdniki-2027',
+    };
+    expectRule(
+      () =>
+        planCollectionNode({
+          candidate: { nodeKind: 'occasion', parent: yearBearingGroup, slug: '8-marta' },
+          env,
+        }),
+      'year-in-path',
+    );
+  });
+
+  it('путь (б): recipient прямо под группой праздников с годом отклоняется', () => {
+    // Матрица допускает recipient под группой, поэтому
+    // /podborki/prazdniki/novyy-god-2027 собирался без отказа: вид узла
+    // recipient, родитель — группа. Отделить его от адресата в ветви
+    // «Адресаты» машинно нечем (формы одинаковые), поэтому год запрещён во всей
+    // коллекции.
+    expectRule(
+      () =>
+        planCollectionNode({
+          candidate: { nodeKind: 'recipient', parent: prazdniki, slug: 'novyy-god-2027' },
+          env,
+        }),
+      'year-in-path',
+    );
+  });
+
+  it('адресат без праздника остаётся законным: правило запрещает год, а не цифры', () => {
+    // Явная регрессия из вердикта: /podborki/adresaty/mame собирается как
+    // раньше — расширение запрета на эту ветвь «за компанию» было бы
+    // додумыванием за человека.
+    expect(
+      planCollectionNode({
+        candidate: { nodeKind: 'recipient', parent: adresaty, slug: 'mame' },
+        env,
+      }).path,
+    ).toBe('/podborki/adresaty/mame');
+  });
+
+  it('цифры в адресе не годы: 8-marta, 23-fevralya, 1-sentyabrya, otkrytka-1920x1080', () => {
+    for (const slug of ['8-marta', '23-fevralya', '1-sentyabrya', 'otkrytka-1920x1080']) {
+      expect(
+        planCollectionNode({
+          candidate: { nodeKind: 'occasion', parent: prazdniki, slug },
+          env,
+        }).path,
+        slug,
+      ).toBe(`/podborki/prazdniki/${slug}`);
+      // И у группы — тот же набор: правило одно на все виды узлов.
+      expect(
+        planCollectionNode({ candidate: { nodeKind: 'group', parent: null, slug }, env }).path,
+        slug,
+      ).toBe(`/podborki/${slug}`);
+    }
+  });
+
+  it('повод с годом отклоняется', () => {
+    expectRule(
+      () =>
+        planCollectionNode({
+          candidate: { nodeKind: 'occasion', parent: prazdniki, slug: 'novyy-god-2027' },
+          env,
+        }),
+      'year-in-path',
+    );
+  });
+
+  it('пара под праздником с годом отклоняется тоже: это та же ежегодная страница', () => {
+    expectRule(
+      () =>
+        planCollectionNode({
+          candidate: { nodeKind: 'recipient', parent: vosmoeMarta, slug: 'mame-2027' },
+          env,
+        }),
+      'year-in-path',
+    );
+  });
+
+  it('даты праздников годом не считаются: 8-marta, 23-fevralya, 1-sentyabrya', () => {
+    for (const slug of ['8-marta', '23-fevralya', '1-sentyabrya', '9-maya', 'novyy-god']) {
+      expect(
+        planCollectionNode({
+          candidate: { nodeKind: 'occasion', parent: prazdniki, slug },
+          env,
+        }).slug,
+        slug,
+      ).toBe(slug);
+    }
+  });
+
+  it('отказ называет год и объясняет, почему он необратим', () => {
+    try {
+      planCollectionNode({
+        candidate: { nodeKind: 'occasion', parent: prazdniki, slug: 'novyy-god-2027' },
+        env,
+      });
+      throw new Error('ожидался отказ');
+    } catch (error) {
+      expect(error).toBeInstanceOf(CollectionNodeError);
+      expect((error as CollectionNodeError).message).toContain('2027');
+    }
+  });
+});
+
 describe('isDescendantPath', () => {
   it('потомок определяется по границе сегмента, а не по подстроке', () => {
     expect(isDescendantPath('/podborki/prazdniki', '/podborki/prazdniki/8-marta')).toBe(true);

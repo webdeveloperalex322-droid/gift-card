@@ -9,12 +9,24 @@
  *
  * Запуск: pnpm --filter @otkritka/cms exec payload run ./scripts/smoke-etap1.ts
  *
- * Скрипт удаляет за собой все созданные записи, включая историю и редиректы, и
- * не оставляет ни одной опубликованной записи.
+ * Скрипт удаляет за собой все созданные записи, включая историю, редиректы,
+ * изображения и занятые ими имена файлов, и не оставляет ни одной
+ * опубликованной записи.
+ *
+ * ПОЧЕМУ ЗДЕСЬ ЕСТЬ ИЗОБРАЖЕНИЯ, хотя проверяется статусная модель. С задачей
+ * Э2-04 в схеме появилось поле `cards.image`, и требование полноты перед
+ * `review` включилось само (`CARD_REVIEW_REQUIREMENTS`): карточка без
+ * изображения дальше черновика не идёт. Поэтому каждая карточка смоука получает
+ * СВОЁ изображение, и композиции у них разные (`grid`, `rings`, `stripes`) —
+ * перцептивные хеши расходятся на 26–36 бит при пороге 14, поэтому блокировка
+ * визуальных дублей (Э2-05) здесь не срабатывает и не смешивается с проверкой
+ * переходов. Одна картинка на три карточки означала бы три визуальных дубля, и
+ * смоук статусной модели упирался бы в чужое правило.
  */
 import { getPayload } from 'payload';
 
 import config from '../src/payload.config';
+import { createPngFixture } from '../src/images/png-fixture';
 
 interface Check {
   readonly detail: string;
@@ -83,11 +95,59 @@ const RICH_TEXT: { root: Record<string, unknown> } = {
 async function main(): Promise<void> {
   const payload = await getPayload({ config });
 
+  /**
+   * Создание с ЗАВЕДОМО неполными данными.
+   *
+   * Нужно ровно для одной проверки: пользователь без явной роли. В
+   * сгенерированных типах `role` обязательна, поэтому вызов с полными типами не
+   * собрался бы — а проверить надо именно то, что происходит с запросом БЕЗ
+   * этого поля (так его пришлёт внешний клиент). Расширение типа локальное и
+   * применяется только здесь.
+   */
+  const createWithLooseData = (
+    collection: 'users',
+    data: Record<string, unknown>,
+  ): Promise<unknown> => {
+    const create = payload.create as unknown as (args: {
+      collection: string;
+      data: Record<string, unknown>;
+    }) => Promise<unknown>;
+    return create({ collection, data });
+  };
+
   const created = {
+    cardImages: [] as number[],
     cards: [] as number[],
     collections: [] as number[],
     users: [] as number[],
   };
+  /** Имена файлов, занятые смоуком: реестр их не отдаёт обратно сам. */
+  const claimedStems: string[] = [];
+
+  /**
+   * Загружает изображение для карточки. Композиция задаётся явно: разные
+   * композиции — разные картинки, одна композиция со сдвигом яркости была бы
+   * визуальным дублем и включила бы блокировку Э2-05.
+   */
+  async function uploadImage(
+    title: string,
+    composition: 'grid' | 'rings' | 'stripes',
+    user: unknown,
+  ): Promise<number> {
+    const bytes = createPngFixture({ composition, height: 500, width: 800 });
+    const image = await payload.create({
+      collection: 'card-images',
+      data: { title },
+      file: { data: bytes, mimetype: 'image/png', name: `${composition}.png`, size: bytes.byteLength },
+      overrideAccess: false,
+      user: user as Parameters<typeof payload.create>[0]['user'],
+    });
+    created.cardImages.push(image.id);
+    if (typeof image.nameStem === 'string') {
+      claimedStems.push(image.nameStem);
+    }
+    return image.id;
+  }
 
   try {
     const admins = await payload.find({
@@ -225,7 +285,9 @@ async function main(): Promise<void> {
       }),
     );
 
-    await expectOk('ai-editor заполняет метаданные и привязывает подборки', () =>
+    const imageMain = await uploadImage('Смоук изображение основное', 'grid', aiEditor);
+
+    await expectOk('ai-editor заполняет метаданные, изображение и привязывает подборки', () =>
       payload.update({
         collection: 'cards',
         id: card.id,
@@ -233,6 +295,7 @@ async function main(): Promise<void> {
           alt: 'Смоук: описание изображения',
           caption: 'Смоук: подпись',
           collections: [groupA.id],
+          image: imageMain,
         },
         overrideAccess: false,
         user: aiEditor,
@@ -468,13 +531,20 @@ async function main(): Promise<void> {
     /* --------------------------------------------------------------- */
 
     const batch: number[] = [];
-    for (const suffix of ['a', 'b']) {
+    const batchCompositions = { a: 'rings', b: 'stripes' } as const;
+    for (const suffix of ['a', 'b'] as const) {
+      const image = await uploadImage(
+        `Смоук изображение пакет ${suffix}`,
+        batchCompositions[suffix],
+        aiEditor,
+      );
       const doc = await payload.create({
         collection: 'cards',
         data: {
           alt: 'Смоук: alt',
           caption: 'Смоук: подпись',
           collections: [groupA.id],
+          image,
           robots: 'noindex,follow',
           slug: `smoke-paket-${suffix}`,
           status: 'draft',
@@ -581,6 +651,188 @@ async function main(): Promise<void> {
       'история пишется по КАЖДОЙ записи пакета',
       bulkHistory.totalDocs >= batch.length * 2,
       `записей=${String(bulkHistory.totalDocs)}`,
+    );
+
+    /* --------------------------------------------------------------- */
+    /* Пакетное СНЯТИЕ с публикации (находка ревизии 2026-08-22)        */
+    /* --------------------------------------------------------------- */
+
+    // Прежний гейт проверял только вход в published и включение индексации,
+    // поэтому УХОД из published до проверок не доходил: один запрос по фильтру
+    // «все опубликованные» с общим решением { mode: '301', redirectTo: '/' }
+    // создавал по 301 с каждого снятого пути на главную — прямой запрет п. 23.
+    const redirectsBefore = await payload.count({ collection: 'redirects' });
+
+    await expectRejected(
+      'пакетное снятие с публикации по фильтру отклонено',
+      'ЯВНО выбранным',
+      () =>
+        payload.update({
+          collection: 'cards',
+          where: { status: { equals: 'published' } },
+          data: { status: 'draft' },
+          overrideAccess: false,
+          user: admin,
+        }),
+    );
+
+    await expectRejected(
+      'один общий redirectTo на выборку отклонён',
+      'Решение о судьбе URL нельзя применить к выборке',
+      () =>
+        payload.update({
+          collection: 'cards',
+          where: { id: { in: batch } },
+          data: { status: 'draft', withdrawal: { mode: '301', redirectTo: '/' } },
+          overrideAccess: false,
+          user: admin,
+        }),
+    );
+
+    await expectRejected(
+      'общее решение 410 на выборку отклонено тоже',
+      'Решение о судьбе URL нельзя применить к выборке',
+      () =>
+        payload.update({
+          collection: 'cards',
+          where: { id: { in: batch } },
+          data: { status: 'draft', withdrawal: { mode: '410' } },
+          overrideAccess: false,
+          user: admin,
+        }),
+    );
+
+    const redirectsAfter = await payload.count({ collection: 'redirects' });
+    record(
+      'отклонённые пакеты не создали ни одного 301',
+      redirectsAfter.totalDocs === redirectsBefore.totalDocs,
+      `было=${String(redirectsBefore.totalDocs)} стало=${String(redirectsAfter.totalDocs)}`,
+    );
+
+    const afterRefusals = await payload.find({
+      collection: 'cards',
+      limit: batch.length,
+      where: { id: { in: batch } },
+    });
+    record(
+      'записи выборки остались опубликованными: пакет отклонён целиком',
+      afterRefusals.docs.every((doc) => doc.status === 'published'),
+      afterRefusals.docs.map((doc) => String(doc.status)).join(', '),
+    );
+
+    const [firstOfBatch] = batch;
+    if (firstOfBatch === undefined) {
+      throw new Error('выборка пакета пуста — смоук собран неверно');
+    }
+    const withdrawnOne = await payload.update({
+      collection: 'cards',
+      id: firstOfBatch,
+      data: { status: 'draft', withdrawal: { mode: '410', redirectTo: null } },
+      overrideAccess: false,
+      user: admin,
+    });
+    record(
+      'поштучное снятие с решением 410 работает как раньше',
+      withdrawnOne.status === 'draft' && withdrawnOne.robots === 'noindex,follow',
+      `status=${String(withdrawnOne.status)} robots=${String(withdrawnOne.robots)}`,
+    );
+
+    /* --------------------------------------------------------------- */
+    /* Год в адресе (условие C3, находка ревизии 2026-08-22)            */
+    /* --------------------------------------------------------------- */
+
+    await expectRejected(
+      'год в slug карточки отклонён хуком',
+      'есть год 2027',
+      () =>
+        payload.create({
+          collection: 'cards',
+          data: {
+            robots: 'noindex,follow',
+            slug: 'smoke-novyy-god-2027',
+            status: 'draft',
+            title: 'Смоук: Новый год 2027',
+          },
+          overrideAccess: false,
+          user: aiEditor,
+        }),
+    );
+
+    await expectRejected(
+      'год в slug праздничной посадочной отклонён хуком',
+      'есть год 2027',
+      () =>
+        payload.create({
+          collection: 'collections',
+          data: {
+            nodeKind: 'occasion',
+            parent: groupA.id,
+            robots: 'noindex,follow',
+            slug: 'smoke-novyy-god-2027',
+            status: 'draft',
+            title: 'Смоук: Новый год 2027',
+          },
+          overrideAccess: false,
+          user: admin,
+        }),
+    );
+
+    // Вердикт url-guard: год попадал в адрес двумя обходными путями.
+    // (а) сегмент группы входит в адрес каждого повода под ней.
+    await expectRejected(
+      'год в slug группирующего узла отклонён (адрес потомков)',
+      'есть год 2027',
+      () =>
+        payload.create({
+          collection: 'collections',
+          data: {
+            nodeKind: 'group',
+            robots: 'noindex,follow',
+            slug: 'smoke-prazdniki-2027',
+            status: 'draft',
+            title: 'Смоук: Праздники 2027',
+          },
+          overrideAccess: false,
+          user: admin,
+        }),
+    );
+
+    // (б) recipient прямо под группой: матрица это допускает, а проверка по
+    // виду узла пропускала.
+    await expectRejected(
+      'год в slug уточнения прямо под группой отклонён',
+      'есть год 2027',
+      () =>
+        payload.create({
+          collection: 'collections',
+          data: {
+            nodeKind: 'recipient',
+            parent: groupA.id,
+            robots: 'noindex,follow',
+            slug: 'smoke-novyy-god-2027',
+            status: 'draft',
+            title: 'Смоук: Новый год 2027',
+          },
+          overrideAccess: false,
+          user: admin,
+        }),
+    );
+
+    /* --------------------------------------------------------------- */
+    /* Роль пользователя без дефолта (находка ревизии 2026-08-22)       */
+    /* --------------------------------------------------------------- */
+
+    // Payload отвечает на пропущенное обязательное поле своим текстом
+    // («The following field is invalid: Role») — это и есть громкий отказ
+    // вместо прежнего молчаливого «получи роль admin по умолчанию».
+    await expectRejected(
+      'пользователь без явной роли не создаётся',
+      'Role',
+      () =>
+        createWithLooseData('users', {
+          email: `smoke-bez-roli-${String(Date.now())}@otkritka.test`,
+          password: `smoke-${String(Date.now())}`,
+        }),
     );
 
     /* --------------------------------------------------------------- */
@@ -750,6 +1002,18 @@ async function main(): Promise<void> {
         })
         .catch(() => undefined);
     }
+    for (const id of created.cardImages) {
+      // afterDelete коллекции убирает и производные, и оригинал из хранилища.
+      await payload.delete({ collection: 'card-images', id }).catch(() => undefined);
+    }
+    // Реестр занятых имён снаружи не удаляется никем — это его смысл. Здесь
+    // уборка идёт через Local API с overrideAccess: правило защищает REST и
+    // GraphQL, а смоук не должен оставлять следов.
+    for (const stem of claimedStems) {
+      await payload
+        .delete({ collection: 'image-name-claims', where: { stem: { equals: stem } } })
+        .catch(() => undefined);
+    }
     await payload
       .delete({ collection: 'redirects', where: { from: { like: 'smoke' } } })
       .catch(() => undefined);
@@ -764,9 +1028,17 @@ async function main(): Promise<void> {
     const leftoverCollections = await payload.count({ collection: 'collections' });
     const leftoverRedirects = await payload.count({ collection: 'redirects' });
     const leftoverHistory = await payload.count({ collection: 'seo-history' });
+    const leftoverImages = await payload.count({ collection: 'card-images' });
+    const leftoverClaims = await payload.count({ collection: 'image-name-claims' });
+    const leftoverPublished = await payload.count({
+      collection: 'cards',
+      where: { status: { equals: 'published' } },
+    });
     console.log(
       `\nПосле уборки: cards=${String(leftovers.totalDocs)} collections=${String(leftoverCollections.totalDocs)} ` +
-        `redirects=${String(leftoverRedirects.totalDocs)} seo-history=${String(leftoverHistory.totalDocs)}`,
+        `redirects=${String(leftoverRedirects.totalDocs)} seo-history=${String(leftoverHistory.totalDocs)} ` +
+        `card-images=${String(leftoverImages.totalDocs)} image-name-claims=${String(leftoverClaims.totalDocs)} ` +
+        `published=${String(leftoverPublished.totalDocs)}`,
     );
 
     const failed = checks.filter((check) => !check.ok);

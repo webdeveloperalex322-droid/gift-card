@@ -1,4 +1,4 @@
-import type { CollectionConfig } from 'payload';
+import type { CollectionBeforeValidateHook, CollectionConfig, TypeWithID } from 'payload';
 
 import {
   adminOnlyAccess,
@@ -35,7 +35,87 @@ import { ROLES, isAdmin } from '../access/roles';
  * Чего здесь нет: rate limiting на ключ (Ч-14, задача Э6-03), 2FA для
  * администраторов (ТЗ §11, этап 7) и запрета удалить последнего администратора
  * (это отдельная защита от самоблокировки, требует запроса к базе в хуке).
+ *
+ * ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ У РОЛИ НЕТ (исправление находки ревизии от 2026-08-22).
+ * Раньше стоял `defaultValue: 'admin'`, поэтому пользователь, созданный без
+ * явной роли — в том числе через API, — получал право публикации и включения
+ * `index,follow`. Дефолт открывал границу, которую защищает вся модель, и делал
+ * это молча. Остальные дефолты проекта закрывают (`DEFAULT_ROBOTS` —
+ * `noindex,follow`, новая запись — `draft`), а у роли «закрывающего» дефолта не
+ * существует: `ai-editor` по умолчанию — тоже решение, принятое за человека, и
+ * первый администратор, созданный штатным экраном Payload, оказался бы сервисным
+ * аккаунтом без входа в админку. Поэтому роль обязательна и задаётся явно;
+ * единственное исключение — самый первый пользователь в пустой базе
+ * ({@link resolveCreateRole}).
  */
+
+/** Запись пользователя в том виде, в каком её видят хуки. */
+interface UserRecord extends TypeWithID {
+  readonly [key: string]: unknown;
+}
+
+/**
+ * Роль, которую нужно подставить при создании, или `null` — «оставить как есть».
+ *
+ * Единственный случай подстановки: пользователей в базе ЕЩЁ НЕТ, а роль не
+ * задана. Так приходит запрос от штатного экрана Payload «создать первого
+ * пользователя»: поле роли закрыто для неаутентифицированного запроса, и форма
+ * его не присылает. Права этим не расширяются — пока пользователей ноль, первого
+ * создаёт кто угодно (так устроен сам Payload, `registerFirstUser`), и админом
+ * он обязан быть по смыслу: сервисный аккаунт первым не бывает, а не-admin
+ * закрыл бы вход в админку насовсем.
+ *
+ * Во всех остальных случаях функция возвращает `null`, и запрос без роли
+ * отклоняется валидацией `required` — ГРОМКО. Это и есть разница с прежним
+ * поведением: раньше отсутствие роли означало «администратор».
+ */
+export async function resolveCreateRole(args: {
+  readonly countUsers: () => Promise<number>;
+  readonly incomingRole: unknown;
+}): Promise<string | null> {
+  const { countUsers, incomingRole } = args;
+
+  if (typeof incomingRole === 'string' && incomingRole.trim() !== '') {
+    return null;
+  }
+
+  return (await countUsers()) === 0 ? ROLES.admin : null;
+}
+
+/** Подстановка роли первому пользователю. Обвязка над {@link resolveCreateRole}. */
+const assignFirstUserRole: CollectionBeforeValidateHook<UserRecord> = async ({
+  data,
+  operation,
+  req,
+}) => {
+  if (operation !== 'create' || data === undefined) {
+    return data;
+  }
+
+  const role = await resolveCreateRole({
+    countUsers: async () => {
+      const { totalDocs } = await req.payload.count({
+        collection: 'users',
+        overrideAccess: true,
+        req,
+      });
+      return totalDocs;
+    },
+    incomingRole: data.role,
+  });
+
+  if (role === null) {
+    return data;
+  }
+
+  req.payload.logger.info(
+    `[users] Первый пользователь создаётся с ролью ${role}: роль в запросе не задана, ` +
+      'а база пуста. Всем последующим пользователям роль задаётся явно — значения по ' +
+      'умолчанию у неё нет.',
+  );
+
+  return { ...data, role };
+};
 export const Users: CollectionConfig = {
   slug: 'users',
   labels: {
@@ -67,12 +147,16 @@ export const Users: CollectionConfig = {
     update: ({ id, req }) => isAdmin(req.user) || (Boolean(req.user) && req.user?.id === id),
     unlock: adminOnlyAccess,
   },
+  hooks: {
+    beforeValidate: [assignFirstUserRole],
+  },
   fields: [
     {
       name: 'role',
       type: 'select',
       required: true,
-      defaultValue: ROLES.admin,
+      // defaultValue отсутствует НАМЕРЕННО: см. шапку модуля. Дефолт «admin»
+      // выдавал право публикации любому запросу, где роль не указана.
       options: [
         { label: 'Администратор (человек)', value: ROLES.admin },
         { label: 'AI-редактор (сервисный аккаунт)', value: ROLES.aiEditor },
@@ -80,7 +164,8 @@ export const Users: CollectionConfig = {
       admin: {
         description:
           'admin — полные права, включая публикацию и index,follow. ' +
-          'ai-editor — черновики, метаданные, привязка к подборкам и перевод draft → review.',
+          'ai-editor — черновики, метаданные, привязка к подборкам и перевод draft → review. ' +
+          'Значения по умолчанию нет: роль указывается явно при создании пользователя.',
       },
       access: {
         // Роль назначает только admin — и на создании, и на обновлении.

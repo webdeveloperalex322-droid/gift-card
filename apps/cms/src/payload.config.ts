@@ -7,12 +7,15 @@ import { buildConfig } from 'payload';
 
 import { reservedRoutes } from '@otkritka/shared';
 
+import { CardImages } from './collections/card-images';
 import { Cards } from './collections/cards';
 import { Collections } from './collections/collections';
+import { ImageNameClaims } from './collections/image-name-claims';
 import { Redirects } from './collections/redirects';
 import { SeoHistory } from './collections/seo-history';
 import { Users } from './collections/users';
 import { adminPath, loadEnvFiles, requireEnv } from './env.mjs';
+import { MAX_UPLOAD_BYTES } from './images/upload-validation';
 import { seedFirstAdmin } from './seed-first-admin';
 
 /**
@@ -25,7 +28,15 @@ import { seedFirstAdmin } from './seed-first-admin';
  *
  * Что здесь ЕСТЬ: подключение к PostgreSQL, секрет, путь админки из окружения,
  * создание первого администратора и коллекции `users` (Э1-03), `cards` (Э1-04),
- * `collections` (Э1-05), `redirects` (Э1-06), `seo-history` (Э1-07).
+ * `collections` (Э1-05), `redirects` (Э1-06), `seo-history` (Э1-07),
+ * `card-images` и `image-name-claims` (Э2-04).
+ *
+ * Про изображения здесь ровно два решения, остальное — в самих коллекциях:
+ * предел размера тела запроса (иначе многогигабайтный файл читался бы в память
+ * до первой проверки) и отсутствие `sharp` в конфиге. Второе — сознательно:
+ * встроенные преобразования Payload (`imageSizes`, кроп, фокальная точка) не
+ * используются, производные считает `@otkritka/images`, а два независимых
+ * пайплайна давали бы два разных набора файлов для одного изображения.
  *
  * Хуки статусной модели (Э1-08) и неизменяемости URL (Э1-09) живут в самих
  * коллекциях: конфиг о них не знает и знать не должен — правило принадлежит
@@ -62,7 +73,7 @@ export default buildConfig({
   },
 
   // Порядок влияет только на меню админки: сверху то, с чем работают чаще.
-  collections: [Cards, Collections, Redirects, SeoHistory, Users],
+  collections: [Cards, Collections, CardImages, Redirects, SeoHistory, ImageNameClaims, Users],
 
   db: postgresAdapter({
     pool: {
@@ -89,6 +100,16 @@ export default buildConfig({
   // ЕДИНСТВЕННЫМ хелпером из SITE_URL (packages/shared), а админка живёт по
   // относительным путям. Второй источник хоста здесь означал бы, что canonical
   // и ссылки админки могут разойтись.
+
+  upload: {
+    limits: {
+      // Тот же предел, что проверяет хук загрузки. Здесь он режет тело запроса
+      // ДО чтения файла в память, поэтому значение обязано совпадать: два
+      // разных предела дали бы либо необъяснимый обрыв загрузки, либо проверку,
+      // до которой дело не доходит.
+      fileSize: MAX_UPLOAD_BYTES,
+    },
+  },
 
   typescript: {
     outputFile: path.resolve(dirname, 'payload-types.ts'),

@@ -171,8 +171,8 @@ export function validateCanonicalOverride(value: unknown): string | true {
  * доходит, и параметры стали бы неявным `any` — то есть проверка потеряла бы
  * типы ровно там, где она защищает индексацию.
  */
-function validateSlugValue(prefix: string): TextFieldSingleValidation {
-  return (value) => validateContentSlug(value, { prefix });
+function validateSlugValue(prefix: string, forbidYear: boolean): TextFieldSingleValidation {
+  return (value) => validateContentSlug(value, { forbidYear, prefix });
 }
 
 const validateRobotsValue: SelectFieldSingleValidation = (
@@ -202,6 +202,13 @@ export interface SlugFieldOptions {
   readonly unique?: boolean;
   /** Пояснение в админке, если путь собирается не как `<префикс>/<slug>`. */
   readonly description?: string;
+  /**
+   * Запрещён ли год в адресе (условие C3). У карточки — да: её адрес один
+   * навсегда, а повод повторяется каждый год. У подборки правило зависит от вида
+   * узла, поэтому здесь оно НЕ включается — его применяет
+   * `collections/collection-path.ts`, где вид узла известен.
+   */
+  readonly forbidYear?: boolean;
 }
 
 /** Поле slug. Валидация — по итоговому пути записи, а не по форме сегмента. */
@@ -224,7 +231,7 @@ export function slugField(options: SlugFieldOptions): Field {
           'Смена заголовка URL не меняет.',
       position: 'sidebar',
     },
-    validate: validateSlugValue(options.prefix),
+    validate: validateSlugValue(options.prefix, options.forbidYear === true),
   };
 }
 

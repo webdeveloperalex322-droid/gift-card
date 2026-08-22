@@ -69,8 +69,10 @@ export interface Config {
   collections: {
     cards: Card;
     collections: Collection;
+    'card-images': CardImage;
     redirects: Redirect;
     'seo-history': SeoHistory;
+    'image-name-claims': ImageNameClaim;
     users: User;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
@@ -81,8 +83,10 @@ export interface Config {
   collectionsSelect: {
     cards: CardsSelect<false> | CardsSelect<true>;
     collections: CollectionsSelect<false> | CollectionsSelect<true>;
+    'card-images': CardImagesSelect<false> | CardImagesSelect<true>;
     redirects: RedirectsSelect<false> | RedirectsSelect<true>;
     'seo-history': SeoHistorySelect<false> | SeoHistorySelect<true>;
+    'image-name-claims': ImageNameClaimsSelect<false> | ImageNameClaimsSelect<true>;
     users: UsersSelect<false> | UsersSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
@@ -143,6 +147,10 @@ export interface Card {
    * URL записи: /otkrytki/<slug>. Неизменяем после первой публикации (смена возможна только вместе с одиночным 301 — задача Э1-09). Смена заголовка URL не меняет.
    */
   slug: string;
+  /**
+   * Изображение открытки (ТЗ §8.1). Обязательно до перевода в review. После первой публикации сменить изображение может только admin: адреса всех производных при этом меняются (ТЗ §6.7), а URL файла постоянен (ТЗ §6.3). URL самой карточки не меняется никогда.
+   */
+  image?: (number | null) | CardImage;
   /**
    * Естественное описание изображения, не перечень ключей. Обязателен до перевода в review (проверка полноты — задача Э1-08).
    */
@@ -214,6 +222,45 @@ export interface Card {
     reason?: string | null;
   };
   /**
+   * Похожие открытки среди published и review (ТЗ §6.7 п. 4). Пока набор непуст, перевод в review заблокирован: решение принимает редактор, а порог похожести только подсказывает.
+   */
+  visualDuplicate?: {
+    /**
+     * Заполняется хуком при каждом сохранении: что нашлось по перцептивному хешу и на каком расстоянии Хэмминга. Снаружи не пишется.
+     */
+    similar?:
+      | {
+          card?: (number | null) | Card;
+          distance?: number | null;
+          id?: string | null;
+        }[]
+      | null;
+    /**
+     * Решение редактора о найденном наборе похожих. Только «уникально» открывает перевод в review; «это дубль» его закрывает — изображение нужно заменить.
+     */
+    decision?: ('unique' | 'duplicate') | null;
+    /**
+     * ОДНОРАЗОВОЕ подтверждение: отметьте его вместе с решением. Хук сбрасывает флаг после сохранения — иначе решение, принятое для прежней картинки, молча подтверждало бы и новую.
+     */
+    confirm?: boolean | null;
+    /**
+     * Отпечаток набора похожих, для которого выдано решение (хеш изображения плюс список найденных). Не совпал с текущим — решение устарело, и переход снова заблокирован.
+     */
+    decisionFor?: string | null;
+    /**
+     * Когда решение подтверждено.
+     */
+    decidedAt?: string | null;
+    /**
+     * Сколько записей просмотрено при последнем поиске похожих. Полнота проверки — часть её результата: без этого числа «похожих не найдено» невозможно отличить от «искали не везде».
+     */
+    scanned?: number | null;
+    /**
+     * Обход каталога оборвался по пределу — проверка НЕПОЛНАЯ, и пустой список похожих ничего не гарантирует. Отметка ставится хуком и попадает в журнал (находка ревизии от 2026-08-22: прежний предел 500 записей обрезал круг поиска молча).
+     */
+    scanTruncated?: boolean | null;
+  };
+  /**
    * Перцептивный хеш изображения. Считает @otkritka/images при загрузке (задача Э2-05); снаружи не пишется, иначе поиск визуальных дублей можно было бы обойти подстановкой чужого значения.
    */
   pHash?: string | null;
@@ -240,6 +287,78 @@ export interface Card {
   };
   updatedAt: string;
   createdAt: string;
+}
+/**
+ * Файлы открыток. При загрузке считаются производные AVIF/WebP/JPEG и перцептивный хеш; оригинал сохраняется вне публичного пространства. Имя файла и его URL постоянны: правка названия их не меняет.
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "card-images".
+ */
+export interface CardImage {
+  id: number;
+  /**
+   * Описательное название изображения — из него один раз строится ИМЯ ФАЙЛА на транслите (например «Открытка маме на 8 марта с тюльпанами» → otkrytka-mame-na-8-marta-s-tyulpanami). После первой загрузки правка этого поля имя файла и пути производных НЕ меняет: URL файла постоянен (ТЗ §6.3).
+   */
+  title: string;
+  /**
+   * Перцептивный хеш изображения (@otkritka/images). Снаружи не пишется: иначе поиск визуальных дублей обходился бы подстановкой чужого значения.
+   */
+  pHash?: string | null;
+  /**
+   * Имя файла на транслите вместе с суффиксом -N, занятое ОДИН раз при загрузке (реестр image-name-claims). При замене изображения остаётся прежним — меняется только revision.
+   */
+  nameStem?: string | null;
+  /**
+   * Число N в суффиксе -N. Пусто у первого имени. После удаления записи номер не переиспользуется: реестр занятых имён строк не теряет.
+   */
+  nameSuffix?: number | null;
+  /**
+   * Короткий хеш БАЙТОВ оригинала (Ч-28). Меняется только при замене изображения — тогда меняются URL всех производных при неизменном URL карточки (ТЗ §6.7). Сохранение записи ревизию не трогает (условие C2).
+   */
+  revision?: string | null;
+  /**
+   * Общая часть ключей производных: <префикс>/<revision>/<имя>. Хранится, а не пересчитывается (условие C1).
+   */
+  keyBase?: string | null;
+  /**
+   * Непредсказуемый идентификатор оригинала (128 бит). Читается только админом: публиковать его незачем, а оригинал по нему не отдаётся вовсе.
+   */
+  storageId?: string | null;
+  /**
+   * Ключ оригинала в НЕПУБЛИЧНОМ пространстве хранилища. Из публичного пути производной не выводится и по HTTP не отдаётся.
+   */
+  originalKey?: string | null;
+  /**
+   * Производные: ключ, формат и ФАКТИЧЕСКИЕ размеры каждого файла. Из этого поля apps/web берёт и путь, и дескриптор w в srcset, и атрибуты width/height — из одного места (условие C8), а не пересчитывает из настроек.
+   */
+  variants?:
+    | {
+        key: string;
+        format: 'avif' | 'webp' | 'jpeg';
+        width: number;
+        height: number;
+        byteSize: number;
+        id?: string | null;
+      }[]
+    | null;
+  /**
+   * Что было на входе, по метаданным: размеры ПОСЛЕ применения EXIF Orientation и значение самого тега. Нужны для разбора «почему производных меньше, чем ширин».
+   */
+  source?: {
+    width?: number | null;
+    height?: number | null;
+    format?: string | null;
+    exifOrientation?: number | null;
+  };
+  updatedAt: string;
+  createdAt: string;
+  url?: string | null;
+  thumbnailURL?: string | null;
+  filename?: string | null;
+  mimeType?: string | null;
+  filesize?: number | null;
+  width?: number | null;
+  height?: number | null;
 }
 /**
  * Подборки и посадочные. URL собирается из цепочки родителей: /podborki/<группа>/<повод>/<уточнение>. Порядок только «повод → уточнение». Новая запись — draft с noindex; публикует и открывает в индекс только человек.
@@ -382,7 +501,7 @@ export interface Collection {
 export interface User {
   id: number;
   /**
-   * admin — полные права, включая публикацию и index,follow. ai-editor — черновики, метаданные, привязка к подборкам и перевод draft → review.
+   * admin — полные права, включая публикацию и index,follow. ai-editor — черновики, метаданные, привязка к подборкам и перевод draft → review. Значения по умолчанию нет: роль указывается явно при создании пользователя.
    */
   role: 'admin' | 'ai-editor';
   updatedAt: string;
@@ -494,6 +613,33 @@ export interface SeoHistory {
   createdAt: string;
 }
 /**
+ * Служебный реестр: имена файлов изображений, которые когда-либо были выданы. Строки не удаляются — иначе номер -N достался бы другому изображению, и путь, уже известный поисковику, указывал бы на другой файл.
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "image-name-claims".
+ */
+export interface ImageNameClaim {
+  id: number;
+  /**
+   * Имя файла без расширения вместе с суффиксом (например otkrytka-mame-2). Уникальность держит индекс базы: гонка двух загрузок иначе выдала бы один путь.
+   */
+  stem: string;
+  /**
+   * Число N в суффиксе -N. Пусто у первого имени: у него суффикса нет вовсе, иначе у одного изображения было бы два законных пути («имя» и «имя-1»).
+   */
+  suffix?: number | null;
+  /**
+   * Описание, из которого имя построено. Нужно для разбора «почему -N».
+   */
+  description?: string | null;
+  /**
+   * Когда имя занято.
+   */
+  claimedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
@@ -526,12 +672,20 @@ export interface PayloadLockedDocument {
         value: number | Collection;
       } | null)
     | ({
+        relationTo: 'card-images';
+        value: number | CardImage;
+      } | null)
+    | ({
         relationTo: 'redirects';
         value: number | Redirect;
       } | null)
     | ({
         relationTo: 'seo-history';
         value: number | SeoHistory;
+      } | null)
+    | ({
+        relationTo: 'image-name-claims';
+        value: number | ImageNameClaim;
       } | null)
     | ({
         relationTo: 'users';
@@ -587,6 +741,7 @@ export interface CardsSelect<T extends boolean = true> {
   title?: T;
   h1?: T;
   slug?: T;
+  image?: T;
   alt?: T;
   caption?: T;
   description?: T;
@@ -609,6 +764,23 @@ export interface CardsSelect<T extends boolean = true> {
     | {
         confirm?: T;
         reason?: T;
+      };
+  visualDuplicate?:
+    | T
+    | {
+        similar?:
+          | T
+          | {
+              card?: T;
+              distance?: T;
+              id?: T;
+            };
+        decision?: T;
+        confirm?: T;
+        decisionFor?: T;
+        decidedAt?: T;
+        scanned?: T;
+        scanTruncated?: T;
       };
   pHash?: T;
   derivative?:
@@ -667,6 +839,47 @@ export interface CollectionsSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "card-images_select".
+ */
+export interface CardImagesSelect<T extends boolean = true> {
+  title?: T;
+  pHash?: T;
+  nameStem?: T;
+  nameSuffix?: T;
+  revision?: T;
+  keyBase?: T;
+  storageId?: T;
+  originalKey?: T;
+  variants?:
+    | T
+    | {
+        key?: T;
+        format?: T;
+        width?: T;
+        height?: T;
+        byteSize?: T;
+        id?: T;
+      };
+  source?:
+    | T
+    | {
+        width?: T;
+        height?: T;
+        format?: T;
+        exifOrientation?: T;
+      };
+  updatedAt?: T;
+  createdAt?: T;
+  url?: T;
+  thumbnailURL?: T;
+  filename?: T;
+  mimeType?: T;
+  filesize?: T;
+  width?: T;
+  height?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "redirects_select".
  */
 export interface RedirectsSelect<T extends boolean = true> {
@@ -694,6 +907,18 @@ export interface SeoHistorySelect<T extends boolean = true> {
   changedBy?: T;
   viaApiKey?: T;
   changedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "image-name-claims_select".
+ */
+export interface ImageNameClaimsSelect<T extends boolean = true> {
+  stem?: T;
+  suffix?: T;
+  description?: T;
+  claimedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }

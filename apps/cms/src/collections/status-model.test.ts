@@ -734,14 +734,144 @@ describe('пакетная операция (решение Ч-07, точка в
     );
   });
 
-  it('пакетная смена draft ↔ review остаётся доступной (ТЗ §8.5) и не требует id-выборки', () => {
+  it('пакетная смена draft ↔ review остаётся доступной ai-editor — но по ЯВНОЙ выборке', () => {
+    // ТЗ §8.5 дословно: «Массовое изменение статуса draft↔review для ВЫБРАННЫХ
+    // записей (published — только поштучно)». Прежняя реализация пускала такой
+    // пакет по любому фильтру, и это была дыра, а не послабление: фильтр мог
+    // задеть опубликованные записи — см. тесты снятия с публикации ниже.
     expect(
       assertBulkChangeAllowed({
         incoming: { status: 'review' },
         user: aiEditor,
+        where: selection,
+      }),
+    ).toEqual({ ids: [1, 2, 3], kind: 'status' });
+  });
+
+  it('пакет, не касающийся ни статуса, ни индексации, выборки не требует', () => {
+    expect(
+      assertBulkChangeAllowed({
+        incoming: { metaDescription: 'Общее описание' },
+        user: aiEditor,
         where: { status: { equals: 'draft' } },
       }),
     ).toEqual({ ids: null, kind: 'other' });
+  });
+
+  /**
+   * Пакетное СНЯТИЕ с публикации (находка ревизии от 2026-08-22, блокирующая).
+   *
+   * Прежний гейт срабатывал только на `status: published` во входных данных или
+   * на индексируемой robots-директиве. Переход ИЗ published уходил в ветку
+   * «прочее» ДО проверок роли, явной выборки и предела, поэтому одна операция
+   * `update` с фильтром «все опубликованные» и общим решением
+   * `withdrawal = { mode: '301', redirectTo: '/' }` создавала по 301 с каждого
+   * снятого пути на один адрес. Это ровно запрещённый п. 23 и разделом
+   * «HTTP-статусы» массовый редирект удалённых страниц на главную.
+   */
+  describe('уход из published пакетом', () => {
+    it('решение о судьбе URL в пакете отклоняется: одно решение на выборку невозможно', () => {
+      expectRule(
+        () =>
+          assertBulkChangeAllowed({
+            incoming: { status: 'draft', withdrawal: { mode: '301', redirectTo: '/' } },
+            user: admin,
+            where: selection,
+          }),
+        'bulk-withdrawal-forbidden',
+      );
+    });
+
+    it('один общий redirectTo отклоняется даже без указания режима', () => {
+      expectRule(
+        () =>
+          assertBulkChangeAllowed({
+            incoming: { withdrawal: { redirectTo: '/' } },
+            user: admin,
+            where: selection,
+          }),
+        'bulk-withdrawal-forbidden',
+      );
+    });
+
+    it('404 и 410 пакетом тоже нельзя: судьба URL решается по каждому пути', () => {
+      for (const mode of ['404', '410'] as const) {
+        expectRule(
+          () =>
+            assertBulkChangeAllowed({
+              incoming: { status: 'draft', withdrawal: { mode } },
+              user: admin,
+              where: selection,
+            }),
+          'bulk-withdrawal-forbidden',
+        );
+      }
+    });
+
+    it('снятие по ФИЛЬТРУ отклоняется: явная выборка обязательна и для ухода из published', () => {
+      expectRule(
+        () =>
+          assertBulkChangeAllowed({
+            incoming: { status: 'draft' },
+            user: admin,
+            where: { status: { equals: 'published' } },
+          }),
+        'bulk-requires-explicit-selection',
+      );
+      // «Выбрать все доступные» из админки — тот же фильтр.
+      expectRule(
+        () =>
+          assertBulkChangeAllowed({
+            incoming: { status: 'review' },
+            user: admin,
+            where: { and: [{ id: { not_equals: '' } }] },
+          }),
+        'bulk-requires-explicit-selection',
+      );
+    });
+
+    it('предел выборки действует и на уход из published', () => {
+      const ids = Array.from({ length: MAX_BATCH_SELECTION + 1 }, (_, index) => index + 1);
+      expectRule(
+        () =>
+          assertBulkChangeAllowed({
+            incoming: { status: 'draft' },
+            user: admin,
+            where: { id: { in: ids } },
+          }),
+        'bulk-too-large',
+      );
+    });
+
+    it('пустое решение о судьбе URL пакетом не запрещено само по себе', () => {
+      // Форма админки присылает группу целиком, поэтому пустая группа — это не
+      // «попытка снять пакетом», а обычный шум формы. Отказ на ней означал бы,
+      // что штатная пакетная правка перестаёт работать; опубликованные записи в
+      // такой выборке всё равно отклонит проверка каждой записи по отдельности
+      // (`unpublish-requires-decision`).
+      expect(
+        assertBulkChangeAllowed({
+          incoming: { status: 'review', withdrawal: { mode: null, redirectTo: null } },
+          user: admin,
+          where: selection,
+        }),
+      ).toEqual({ ids: [1, 2, 3], kind: 'status' });
+    });
+
+    it('поштучное снятие с публикации работает как раньше', () => {
+      // Пакетный гейт к одиночной операции не применяется вовсе (её ведёт
+      // `assertIncomingChangeAllowed` + `planStatusTransition`), поэтому здесь
+      // проверяется само правило: admin снимает запись с решением о судьбе URL.
+      const plan = planStatusTransition({
+        missingForReview: [],
+        next: { robots: DEFAULT_ROBOTS, status: 'draft', withdrawal: { mode: '301', redirectTo: '/otkrytki/drugaya' } },
+        previous: { publishedAt: '2026-08-01T00:00:00.000Z', robots: 'index,follow', status: 'published' },
+        user: admin,
+      });
+      expect(plan.withdrawn).toEqual({ mode: '301', redirectTo: '/otkrytki/drugaya' });
+      expect(plan.status).toBe('draft');
+      expect(plan.robots).toBe(DEFAULT_ROBOTS);
+    });
   });
 
   it('пакетная смена URL запрещена: 301 создаётся на каждый путь поштучно', () => {

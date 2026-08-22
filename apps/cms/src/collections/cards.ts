@@ -1,11 +1,13 @@
 import type { CollectionConfig, Field } from 'payload';
 
 import {
+  cardImageFieldAccess,
   contentDeleteAccess,
   contentReadAccess,
   contentWriteAccess,
   systemFieldAccess,
 } from '../access/policies';
+import { cardImageHooks } from '../images/card-image-hooks';
 import { CARD_PATH_PREFIX, buildCardPath } from '../seo/paths';
 import { collectFieldNames, contentHooks } from './content-hooks';
 import {
@@ -32,10 +34,6 @@ import { CARD_REVIEW_REQUIREMENTS } from './status-model';
  *
  * Чего в коллекции НЕТ и почему (это не забытые поля, а адресованные пробелы):
  *
- *   - `image` (upload, ТЗ §8.1) — поле типа `upload` требует коллекции с
- *     `upload: true`, а её конфигурация — это выбор хранилища (Ч-03: S3 отложен,
- *     локальная ФС за адаптером) и задача Э2-04. Заводить коллекцию файлов
- *     заранее означало бы решить за Э2-04, где лежат оригиналы и производные;
  *   - отдельные поля-атрибуты `occasion`, `recipient`, `style`, `mood` (ТЗ §8.1).
  *     Повод и адресат выражены связью `collections`: узел подборки уже несёт
  *     вид (`nodeKind`), поэтому «повод» карточки — это привязка к узлу вида
@@ -44,23 +42,33 @@ import { CARD_REVIEW_REQUIREMENTS } from './status-model';
  *     настроение подборками не создаются вовсе (решение Ч-04-3: неиндексируемый
  *     фильтр без собственных URL), а перечислять их значения здесь нельзя —
  *     списка стилей человек не утверждал (см. отчёт Э1-05);
- *   - `формы/размеры` — производные пайплайна изображений (Э2-05), в записи
- *     появляются вместе с вариантами.
+ *   - `формы/размеры` производных здесь не дублируются: они лежат в связанной
+ *     записи `card-images` (поле `variants`) вместе с ключами файлов. В карточке
+ *     только зеркало служебных полей пути (`derivative.*`, `pHash`), которое
+ *     заполняет хук: карточка — опубликованная сущность, поэтому условие C1
+ *     («ключ зафиксирован») и поиск дублей ПО СТАТУСУ формулируются про неё.
  *
  * Хуки статусной модели (Э1-08), неизменяемости URL с атомарным 301 (Э1-09) и
  * записи в `seo-history` (Э1-07) приходят из общей фабрики `contentHooks`: те же
  * правила обязаны действовать и для подборок, а две копии правил индексации
  * расходятся не ошибкой сборки, а страницей в индексе.
  *
- * Хуков, которых здесь по-прежнему нет: pHash и производные (Э2-05, Э2-06),
- * проверка дублей метатегов (Э5-01), перегенерация sitemap (Э4-05).
+ * Хуки изображения (Э2-05, Э2-06) приходят из `cardImageHooks`: зеркало полей
+ * пути, право заменить изображение публиковавшейся карточки и блокировка
+ * перевода в review при визуальном дубле. Сам пайплайн (производные, pHash,
+ * запись в хранилище) живёт в коллекции `card-images` — там, где появляются
+ * байты файла.
+ *
+ * Хуков, которых здесь по-прежнему нет: проверка дублей метатегов (Э5-01),
+ * перегенерация sitemap (Э4-05).
  */
 
 /**
  * Поля объявлены отдельной константой, потому что их имена нужны хукам: по
  * набору полей коллекции определяется, какие требования полноты применимы
- * СЕЙЧАС. Требование к полю `image`, которого до Э2-04 в схеме нет, иначе
- * заблокировало бы перевод любой карточки в review.
+ * СЕЙЧАС. С появлением поля `image` (Э2-04) требование «изображение заполнено»
+ * включилось само — механизм остаётся для будущих полей ТЗ §8.1, которых в схеме
+ * ещё нет.
  */
 const cardFields: Field[] = [
   {
@@ -74,7 +82,28 @@ const cardFields: Field[] = [
     },
   },
   headingField(),
-  slugField({ prefix: CARD_PATH_PREFIX }),
+  // forbidYear: адрес карточки один навсегда, а повод повторяется каждый год
+  // (условие C3). Поле даёт быстрый отказ в форме админки; авторитетная проверка
+  // стоит в хуке (`contentHooks`, опция `forbidYearInSlug`) — валидацию поля
+  // Payload умеет пропускать при сохранении черновиков версий, хук — нет.
+  slugField({ forbidYear: true, prefix: CARD_PATH_PREFIX }),
+  {
+    name: 'image',
+    type: 'upload',
+    relationTo: 'card-images',
+    index: true,
+    access: {
+      create: cardImageFieldAccess,
+      update: cardImageFieldAccess,
+    },
+    admin: {
+      description:
+        'Изображение открытки (ТЗ §8.1). Обязательно до перевода в review. После первой ' +
+        'публикации сменить изображение может только admin: адреса всех производных при ' +
+        'этом меняются (ТЗ §6.7), а URL файла постоянен (ТЗ §6.3). URL самой карточки не ' +
+        'меняется никогда.',
+    },
+  },
   {
     name: 'alt',
     type: 'text',
@@ -134,6 +163,117 @@ const cardFields: Field[] = [
   updatedContentAtField(),
   withdrawalField(),
   urlChangeField(),
+  {
+    name: 'visualDuplicate',
+    type: 'group',
+    label: 'Проверка визуальных дублей',
+    admin: {
+      description:
+        'Похожие открытки среди published и review (ТЗ §6.7 п. 4). Пока набор непуст, ' +
+        'перевод в review заблокирован: решение принимает редактор, а порог похожести ' +
+        'только подсказывает.',
+    },
+    fields: [
+      {
+        name: 'similar',
+        type: 'array',
+        access: {
+          create: systemFieldAccess,
+          update: systemFieldAccess,
+        },
+        admin: {
+          description:
+            'Заполняется хуком при каждом сохранении: что нашлось по перцептивному хешу и ' +
+            'на каком расстоянии Хэмминга. Снаружи не пишется.',
+          readOnly: true,
+        },
+        fields: [
+          { name: 'card', type: 'relationship', relationTo: 'cards' },
+          { name: 'distance', type: 'number' },
+        ],
+      },
+      {
+        name: 'decision',
+        type: 'select',
+        options: [
+          { label: 'Уникально — совпадение ложное', value: 'unique' },
+          { label: 'Это дубль', value: 'duplicate' },
+        ],
+        admin: {
+          description:
+            'Решение редактора о найденном наборе похожих. Только «уникально» открывает ' +
+            'перевод в review; «это дубль» его закрывает — изображение нужно заменить.',
+        },
+      },
+      {
+        name: 'confirm',
+        type: 'checkbox',
+        defaultValue: false,
+        admin: {
+          description:
+            'ОДНОРАЗОВОЕ подтверждение: отметьте его вместе с решением. Хук сбрасывает флаг ' +
+            'после сохранения — иначе решение, принятое для прежней картинки, молча ' +
+            'подтверждало бы и новую.',
+        },
+      },
+      {
+        name: 'decisionFor',
+        type: 'text',
+        access: {
+          create: systemFieldAccess,
+          update: systemFieldAccess,
+        },
+        admin: {
+          description:
+            'Отпечаток набора похожих, для которого выдано решение (хеш изображения плюс ' +
+            'список найденных). Не совпал с текущим — решение устарело, и переход снова ' +
+            'заблокирован.',
+          readOnly: true,
+        },
+      },
+      {
+        name: 'decidedAt',
+        type: 'date',
+        access: {
+          create: systemFieldAccess,
+          update: systemFieldAccess,
+        },
+        admin: { description: 'Когда решение подтверждено.', readOnly: true },
+      },
+      {
+        name: 'scanned',
+        type: 'number',
+        access: {
+          create: systemFieldAccess,
+          update: systemFieldAccess,
+        },
+        admin: {
+          description:
+            'Сколько записей просмотрено при последнем поиске похожих. Полнота проверки — ' +
+            'часть её результата: без этого числа «похожих не найдено» невозможно отличить ' +
+            'от «искали не везде».',
+          readOnly: true,
+        },
+      },
+      {
+        name: 'scanTruncated',
+        type: 'checkbox',
+        defaultValue: false,
+        access: {
+          create: systemFieldAccess,
+          update: systemFieldAccess,
+        },
+        admin: {
+          description:
+            'Обход каталога оборвался по пределу — проверка НЕПОЛНАЯ, и пустой список ' +
+            'похожих ничего не гарантирует. Отметка ставится хуком и попадает в журнал ' +
+            '(находка ревизии от 2026-08-22: прежний предел 500 записей обрезал круг ' +
+            'поиска молча).',
+          readOnly: true,
+        },
+      },
+    ],
+  },
   {
     name: 'pHash',
     type: 'text',
@@ -195,7 +335,14 @@ const cardFields: Field[] = [
       {
         name: 'nameSuffix',
         type: 'number',
-        min: 1,
+        // 2, а не 1: у первого имени суффикса нет вовсе (иначе у одного файла
+        // было бы два законных пути — «имя» и «имя-1»). Источник значения —
+        // `card-images.nameSuffix` (min: 2) и `normalizeUniqueSuffix` в
+        // `@otkritka/images`, который отклоняет всё меньше 2. Зеркало обязано
+        // повторять источник: расхождение границы в зеркале означало бы, что
+        // недопустимое значение проходит проверку на одной из двух сторон
+        // (находка ревизии от 2026-08-22).
+        min: 2,
         access: {
           create: systemFieldAccess,
           update: systemFieldAccess,
@@ -231,6 +378,38 @@ const cardFields: Field[] = [
   },
 ];
 
+/**
+ * Общие хуки контента плюс хуки изображения.
+ *
+ * Порядок внутри фазы значим: правила статусной модели (`contentHooks`) идут
+ * ПЕРВЫМИ — они проверяют право на переход и полноту записи, и отказ по правам
+ * должен звучать раньше отказа «есть похожее изображение». Зеркало служебных
+ * полей пути тоже ставится после них: писать его в запись, которая всё равно
+ * будет отклонена, незачем.
+ */
+function cardHooks(): NonNullable<CollectionConfig['hooks']> {
+  const base = contentHooks({
+    collectionSlug: 'cards',
+    // Условие C3: год не попадает в адрес карточки. У подборок то же правило
+    // применяется по виду узла в `collection-path.ts`.
+    forbidYearInSlug: true,
+    knownFields: collectFieldNames(cardFields),
+    // Канонический URL карточки — /otkrytki/<slug>, один навсегда: путь не
+    // хранится, потому что выводится из slug однозначно и другого источника у
+    // него нет.
+    pathOf: (doc) => (typeof doc.slug === 'string' && doc.slug !== '' ? buildCardPath(doc.slug) : null),
+    reviewRequirements: CARD_REVIEW_REQUIREMENTS,
+  });
+  const image = cardImageHooks();
+
+  return {
+    ...base,
+    beforeChange: [...base.beforeChange, ...image.beforeChange],
+    beforeOperation: [...base.beforeOperation, ...image.beforeOperation],
+    beforeValidate: [...base.beforeValidate, ...image.beforeValidate],
+  };
+}
+
 export const Cards: CollectionConfig = {
   slug: 'cards',
   labels: {
@@ -250,14 +429,6 @@ export const Cards: CollectionConfig = {
     read: contentReadAccess,
     update: contentWriteAccess,
   },
-  hooks: contentHooks({
-    collectionSlug: 'cards',
-    knownFields: collectFieldNames(cardFields),
-    // Канонический URL карточки — /otkrytki/<slug>, один навсегда: путь не
-    // хранится, потому что выводится из slug однозначно и другого источника у
-    // него нет.
-    pathOf: (doc) => (typeof doc.slug === 'string' && doc.slug !== '' ? buildCardPath(doc.slug) : null),
-    reviewRequirements: CARD_REVIEW_REQUIREMENTS,
-  }),
+  hooks: cardHooks(),
   fields: cardFields,
 };

@@ -15,7 +15,9 @@
  *     делается явно и одинаково для обоих входов.
  *   - `resolveAdminPath()` — путь админки берётся из env, а не хардкодится: на
  *     это значение опирается реестр зарезервированных маршрутов в
- *     `packages/shared` и генерация robots.txt.
+ *     `packages/shared` и генерация robots.txt. Сам РАЗБОР значения живёт в
+ *     `packages/shared` (`parseAdminPath`) и вызывается отсюда: два разбора
+ *     одного параметра уже разошлись однажды.
  *   - `adminPathRewrites()` — Payload 3 привязывает админку к ФИЗИЧЕСКОМУ
  *     каталогу `src/app/(payload)/admin/[[...segments]]`, а `routes.admin`
  *     влияет только на генерацию ссылок. Без переписывания запросов
@@ -29,7 +31,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { PAGINATION_SEGMENT, isValidSlug } from '@otkritka/shared';
+import { parseAdminPath } from '@otkritka/shared';
 
 /**
  * Значение `PAYLOAD_ADMIN_PATH`, которое лежит в `.env.example`.
@@ -67,6 +69,28 @@ function findWorkspaceRoot() {
     }
     dir = parent;
   }
+}
+
+/**
+ * Каталог монорепозитория как обязательное значение.
+ *
+ * Нужен там, где путь задаётся относительным значением окружения (корни
+ * хранилища изображений, задача Э2-04): разрешать такие пути от `process.cwd()`
+ * нельзя — у CMS два входа (`next dev` из `apps/cms` и `payload run` оттуда же,
+ * но скрипты и тесты запускаются из корня), и одно значение дало бы два разных
+ * дерева файлов.
+ *
+ * @returns {string}
+ */
+export function workspaceRoot() {
+  const root = findWorkspaceRoot();
+  if (!root) {
+    throw new Error(
+      'Не найден корень монорепозитория: вверх по дереву от apps/cms нет ни одного ' +
+        'pnpm-workspace.yaml. Относительные пути из окружения разрешать не от чего.',
+    );
+  }
+  return root;
 }
 
 let envLoaded = false;
@@ -122,70 +146,26 @@ export function requireEnv(name, source) {
 }
 
 /**
- * @param {string} value
- * @param {string} reason
- * @returns {never}
- */
-function rejectAdminPath(value, reason) {
-  throw new Error(
-    `PAYLOAD_ADMIN_PATH задан некорректно: «${value}» — ${reason}. ` +
-      'Ожидается путь из сегментов [a-z0-9-], например /admin или /cms/upravlenie. ' +
-      'Дефолта у этого параметра нет: путь админки участвует в реестре ' +
-      'зарезервированных маршрутов (packages/shared), и подстановка дефолта ' +
-      'зарезервировала бы не тот путь, что обслуживает CMS.',
-  );
-}
-
-/**
  * Разбирает и нормализует путь админки.
  *
- * Значения по умолчанию НЕТ намеренно — ровно как у `resolveAdminRoute` в
- * `packages/shared/src/reserved-routes.ts`. Дефолт здесь означал бы, что при
- * незаданной переменной CMS обслуживает `/admin`, а реестр отказывает (или
- * резервирует другой путь): рассинхронизация двух источников одного адреса.
- * Правила нормализации повторяют реестр буквально — та функция в
- * `packages/shared` не экспортируется; вынести её в общий пакет и убрать это
- * повторение стоит владельцу `packages/shared` (см. отчёт Э1-02).
+ * Тело функции — ОДИН вызов `parseAdminPath` из `@otkritka/shared`, и это
+ * принципиально. Раньше правила разбора были написаны здесь заново «по образцу»
+ * реестра зарезервированных маршрутов, и копии успели разойтись: сегмент
+ * пагинации отклоняла только эта (находка ревизии от 2026-08-22). Из одного
+ * значения выводятся два адреса одного и того же — путь, который обслуживает
+ * Next, и запись резерва, — поэтому разбор обязан быть один. Обёртка остаётся,
+ * потому что `next.config.mjs` зовёт её до какой-либо TypeScript-компиляции, и
+ * потому что имя параметра `PAYLOAD_ADMIN_PATH` привязано именно к слою
+ * окружения.
+ *
+ * Значения по умолчанию НЕТ намеренно: дефолт означал бы, что при незаданной
+ * переменной CMS обслуживает один путь, а реестр резервирует другой.
  *
  * @param {string | undefined} raw значение `PAYLOAD_ADMIN_PATH`
  * @returns {string} путь от корня без завершающего слеша
  */
 export function resolveAdminPath(raw) {
-  const trimmed = (raw ?? '').trim();
-
-  if (trimmed === '') {
-    throw new Error(
-      'PAYLOAD_ADMIN_PATH не задан, поэтому путь админки неизвестен. Значения по ' +
-        'умолчанию у него нет намеренно: тот же параметр вносит путь админки в ' +
-        'реестр зарезервированных маршрутов (packages/shared), и дефолт в одном из ' +
-        'двух мест развёл бы реальный адрес админки с зарезервированным. ' +
-        'Заполните .env по шаблону .env.example.',
-    );
-  }
-
-  if (trimmed.includes('?') || trimmed.includes('#')) {
-    rejectAdminPath(trimmed, 'путь не может содержать параметров и фрагмента');
-  }
-
-  const segments = trimmed.split('/').filter((segment) => segment !== '');
-
-  if (segments.length === 0) {
-    rejectAdminPath(trimmed, 'админка не может занимать корень сайта');
-  }
-
-  for (const segment of segments) {
-    if (segment === PAGINATION_SEGMENT) {
-      rejectAdminPath(
-        trimmed,
-        `сегмент «${PAGINATION_SEGMENT}» зарезервирован под пагинацию /${PAGINATION_SEGMENT}/N`,
-      );
-    }
-    if (!isValidSlug(segment)) {
-      rejectAdminPath(trimmed, `сегмент «${segment}» не проходит правила slug`);
-    }
-  }
-
-  return `/${segments.join('/')}`;
+  return parseAdminPath(raw);
 }
 
 /**

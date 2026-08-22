@@ -98,3 +98,41 @@ describe('validateContentSlug: отказы по реестру маршруто
     expect(String(result)).toContain('PAYLOAD_ADMIN_PATH');
   });
 });
+
+/**
+ * Год в адресе (условие C3, блокирующая находка ревизии от 2026-08-22).
+ *
+ * Здесь проверяется ВКЛЮЧАТЕЛЬ правила у валидатора поля: сам предикат живёт в
+ * `@otkritka/shared` и покрыт там, а авторитетная проверка карточки стоит в
+ * хуке (`collections/content-hooks.ts`) — валидацию поля Payload умеет
+ * пропускать.
+ */
+describe('validateContentSlug: год в адресе', () => {
+  it('с forbidYear год отклоняется, а отказ называет год', () => {
+    const result = validateContentSlug('novyy-god-2027', {
+      env,
+      forbidYear: true,
+      prefix: CARD_PATH_PREFIX,
+    });
+    expect(result).toEqual(expect.any(String));
+    expect(String(result)).toContain('2027');
+    expect(String(result)).toContain('/otkrytki/novyy-god-2027');
+  });
+
+  it('без forbidYear правило не применяется: область задаёт вызывающий', () => {
+    // У подборок область применения зависит от вида узла, поэтому включатель
+    // здесь выключен, а правило применяет `collection-path.ts`.
+    expect(
+      validateContentSlug('novyy-god-2027', { env, prefix: COLLECTION_PATH_PREFIX }),
+    ).toBe(true);
+  });
+
+  it('даты праздников проходят и с включённым правилом', () => {
+    for (const slug of ['8-marta', '23-fevralya', '1-sentyabrya', 'otkrytka-1920x1080']) {
+      expect(
+        validateContentSlug(slug, { env, forbidYear: true, prefix: CARD_PATH_PREFIX }),
+        slug,
+      ).toBe(true);
+    }
+  });
+});

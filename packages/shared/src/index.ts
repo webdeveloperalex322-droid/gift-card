@@ -36,6 +36,7 @@ export {
   checkReservedPath,
   isReservedPath,
   PAGINATION_SEGMENT,
+  parseAdminPath,
   PAYLOAD_ADMIN_PATH_ENV_KEY,
   type PathAvailability,
   type ReservedRoute,
@@ -58,10 +59,14 @@ export { buildAbsoluteUrl, resolveSiteOrigin, SITE_URL_ENV_KEY } from './site-ur
 
 export {
   DEFAULT_SLUG_MAX_LENGTH,
+  findYearInSlug,
+  hasYearInSlug,
   isValidSlug,
   SLUG_PATTERN,
   slugify,
   type SlugOptions,
+  YEAR_IN_SLUG_MAX,
+  YEAR_IN_SLUG_MIN,
 } from './slug.js';
 
 /** Статусная модель контента. Переход в `published` делает только человек. */

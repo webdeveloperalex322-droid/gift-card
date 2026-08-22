@@ -338,12 +338,21 @@ function createHarness(): Harness {
   };
 }
 
-/** Готовая к переводу в review карточка: все обязательные поля заполнены. */
+/**
+ * Готовая к переводу в review карточка: все обязательные поля заполнены.
+ *
+ * `image` появился в схеме на Э2-04, и требование полноты включилось само (см.
+ * `CARD_REVIEW_REQUIREMENTS`). Идентификатор указывает на запись `card-images`,
+ * которой в стенде нет: хук изображения на это отвечает пустым состоянием
+ * пайплайна, а проверяются здесь правила статусной модели, а не производные —
+ * их проверяет `../images/pipeline.test.ts`.
+ */
 function completeCard(slug: string): Doc {
   return {
     alt: 'Тюльпаны и открытка',
     caption: 'С 8 Марта!',
     collections: [10],
+    image: 500,
     robots: 'noindex,follow',
     slug,
     status: 'draft',
@@ -643,13 +652,13 @@ describe('Э1-08: снятие с публикации — с решением 3
     const withdrawn = await harness.update(
       'cards',
       5,
-      { status: 'draft', withdrawal: { mode: '301', redirectTo: '/otkrytki/mame-2026' } },
+      { status: 'draft', withdrawal: { mode: '301', redirectTo: '/otkrytki/mame-tyulpany' } },
       admin,
     );
 
     expect(withdrawn.robots).toBe('noindex,follow');
     expect(harness.docs('redirects')).toEqual([
-      expect.objectContaining({ code: '301', from: '/otkrytki/mame', to: '/otkrytki/mame-2026' }),
+      expect.objectContaining({ code: '301', from: '/otkrytki/mame', to: '/otkrytki/mame-tyulpany' }),
     ]);
   });
 
@@ -852,7 +861,7 @@ describe('Э1-08: пакетная операция (Ч-07) и точка вет
     );
   });
 
-  it('пакетная смена draft ↔ review остаётся доступной (ТЗ §8.5)', async () => {
+  it('пакетная смена draft ↔ review остаётся доступной (ТЗ §8.5) по явной выборке', async () => {
     const harness = createHarness();
     const ids = seedReviewed(harness);
 
@@ -864,6 +873,251 @@ describe('Э1-08: пакетная операция (Ч-07) и точка вет
     );
     expect(result.errors).toEqual([]);
     expect(result.updated.every((doc) => doc.status === 'draft')).toBe(true);
+  });
+
+  /**
+   * Блокирующая находка ревизии от 2026-08-22: пакетное СНЯТИЕ с публикации.
+   *
+   * Прежний гейт смотрел только на `status: published` во входных данных и на
+   * индексируемую robots-директиву, поэтому уход ИЗ published до проверок не
+   * доходил вовсе. Одна операция по фильтру «все опубликованные» с общим
+   * решением `withdrawal = { mode: '301', redirectTo: '/' }` создавала по 301 с
+   * каждого снятого пути на главную — прямой запрет п. 23 и раздела
+   * «HTTP-статусы» `CLAUDE.md`.
+   */
+  describe('пакетное снятие с публикации', () => {
+    const seedPublished = (harness: Harness): readonly number[] => {
+      const ids: number[] = [];
+      for (const slug of ['mame', 'pape']) {
+        const doc = harness.seed('cards', {
+          ...completeCard(slug),
+          publishedAt: '2026-08-01T00:00:00.000Z',
+          robots: 'index,follow',
+          status: 'published',
+        });
+        ids.push(doc.id as number);
+      }
+      return ids;
+    };
+
+    it('фильтр «все опубликованные» отклоняется целиком, ни один 301 не создаётся', async () => {
+      const harness = createHarness();
+      seedPublished(harness);
+
+      await expectRejected(
+        () =>
+          harness.runBulk(
+            'cards',
+            { status: { equals: 'published' } },
+            { status: 'draft', withdrawal: { mode: '301', redirectTo: '/' } },
+            admin,
+          ),
+        'Решение о судьбе URL нельзя применить к выборке',
+      );
+
+      expect(harness.docs('redirects')).toHaveLength(0);
+      expect(harness.docs('cards').every((doc) => doc.status === 'published')).toBe(true);
+    });
+
+    it('явная выборка с общим решением отклоняется тоже: судьба URL — у каждого своя', async () => {
+      const harness = createHarness();
+      const ids = seedPublished(harness);
+
+      await expectRejected(
+        () =>
+          harness.runBulk(
+            'cards',
+            { id: { in: [...ids] } },
+            { status: 'draft', withdrawal: { mode: '410' } },
+            admin,
+          ),
+        'Решение о судьбе URL нельзя применить к выборке',
+      );
+      expect(harness.docs('redirects')).toHaveLength(0);
+    });
+
+    it('снятие по фильтру без решения отклоняется на сыром слое, а не по записи', async () => {
+      const harness = createHarness();
+      seedPublished(harness);
+
+      await expectRejected(
+        () => harness.runBulk('cards', { status: { equals: 'published' } }, { status: 'draft' }, admin),
+        'ЯВНО выбранным',
+      );
+      expect(harness.docs('cards').every((doc) => doc.status === 'published')).toBe(true);
+    });
+
+    it('поштучное снятие с решением 301 работает как раньше: ровно один редирект', async () => {
+      const harness = createHarness();
+      const [id] = seedPublished(harness);
+      if (id === undefined) {
+        throw new Error('запись не создана');
+      }
+
+      const doc = await harness.update(
+        'cards',
+        id,
+        { status: 'draft', withdrawal: { mode: '301', redirectTo: '/otkrytki/pape' } },
+        admin,
+      );
+
+      expect(doc.status).toBe('draft');
+      expect(doc.robots).toBe('noindex,follow');
+      const redirects = harness.docs('redirects');
+      expect(redirects).toHaveLength(1);
+      expect(redirects[0]?.to).toBe('/otkrytki/pape');
+    });
+  });
+});
+
+/**
+ * Год в адресе карточки (условие C3, блокирующая находка ревизии от 2026-08-22).
+ *
+ * Проверяется ХУК, а не только валидатор поля: валидацию полей Payload умеет
+ * пропускать (`skipValidation` при сохранении черновика версии), а хук
+ * `beforeValidate` коллекции выполняется всегда — и для админки, и для REST, и
+ * для GraphQL.
+ */
+describe('условие C3: год не попадает в адрес карточки', () => {
+  it('создание карточки с годом в slug отклоняется', async () => {
+    const harness = createHarness();
+    await expectRejected(
+      () =>
+        harness.create(
+          'cards',
+          { ...completeCard('novyy-god-2027'), status: 'draft' },
+          aiEditor,
+        ),
+      'есть год 2027',
+    );
+    expect(harness.docs('cards')).toHaveLength(0);
+  });
+
+  it('смена slug на адрес с годом отклоняется у обеих ролей', async () => {
+    const harness = createHarness();
+    const doc = harness.seed('cards', { ...completeCard('novyy-god'), status: 'draft' });
+
+    for (const user of [aiEditor, admin]) {
+      await expectRejected(
+        () => harness.update('cards', doc.id as number, { slug: 'novyy-god-2027' }, user),
+        'есть год 2027',
+      );
+    }
+  });
+
+  it('адрес с числом даты праздника проходит', async () => {
+    const harness = createHarness();
+    const created = await harness.create(
+      'cards',
+      { ...completeCard('8-marta-mame'), status: 'draft' },
+      aiEditor,
+    );
+    expect(created.slug).toBe('8-marta-mame');
+  });
+
+  it('подборка: год отклоняется у повода и у пары под ним', async () => {
+    const harness = createHarness();
+    const group = harness.seed('collections', {
+      nodeKind: 'group',
+      path: '/podborki/prazdniki',
+      robots: 'noindex,follow',
+      slug: 'prazdniki',
+      status: 'draft',
+      title: 'Праздники',
+    });
+
+    await expectRejected(
+      () =>
+        harness.create(
+          'collections',
+          {
+            nodeKind: 'occasion',
+            parent: group.id,
+            robots: 'noindex,follow',
+            slug: 'novyy-god-2027',
+            status: 'draft',
+            title: 'Новый год 2027',
+          },
+          aiEditor,
+        ),
+      'есть год 2027',
+    );
+
+    const occasion = harness.seed('collections', {
+      nodeKind: 'occasion',
+      path: '/podborki/prazdniki/novyy-god',
+      robots: 'noindex,follow',
+      slug: 'novyy-god',
+      status: 'draft',
+      title: 'Новый год',
+    });
+
+    await expectRejected(
+      () =>
+        harness.create(
+          'collections',
+          {
+            nodeKind: 'recipient',
+            parent: occasion.id,
+            robots: 'noindex,follow',
+            slug: 'mame-2027',
+            status: 'draft',
+            title: 'Маме на Новый год',
+          },
+          aiEditor,
+        ),
+      'есть год 2027',
+    );
+  });
+
+  it('подборка: группа с годом и recipient прямо под группой отклоняются (вердикт url-guard)', async () => {
+    const harness = createHarness();
+
+    // Путь (а): сегмент группы входит в адрес каждого повода под ней.
+    await expectRejected(
+      () =>
+        harness.create(
+          'collections',
+          {
+            nodeKind: 'group',
+            robots: 'noindex,follow',
+            slug: 'prazdniki-2027',
+            status: 'draft',
+            title: 'Праздники 2027',
+          },
+          admin,
+        ),
+      'есть год 2027',
+    );
+    expect(harness.docs('collections')).toHaveLength(0);
+
+    const group = harness.seed('collections', {
+      nodeKind: 'group',
+      path: '/podborki/prazdniki',
+      robots: 'noindex,follow',
+      slug: 'prazdniki',
+      status: 'draft',
+      title: 'Праздники',
+    });
+
+    // Путь (б): вид узла recipient, родитель — группа; прежняя проверка по
+    // своему сегменту с видом узла это пропускала.
+    await expectRejected(
+      () =>
+        harness.create(
+          'collections',
+          {
+            nodeKind: 'recipient',
+            parent: group.id,
+            robots: 'noindex,follow',
+            slug: 'novyy-god-2027',
+            status: 'draft',
+            title: 'Новый год 2027',
+          },
+          admin,
+        ),
+      'есть год 2027',
+    );
   });
 });
 
@@ -877,7 +1131,7 @@ describe('Э1-09: карточка — смена URL только вместе 
     harness.seed('cards', publishedCard('mame', 5));
 
     await expectRejected(
-      () => harness.update('cards', 5, { slug: 'mame-2026' }, admin),
+      () => harness.update('cards', 5, { slug: 'mame-tyulpany' }, admin),
       'неизменяем после первой публикации',
     );
     expect(harness.docs('cards')[0]?.slug).toBe('mame');
@@ -893,7 +1147,7 @@ describe('Э1-09: карточка — смена URL только вместе 
         harness.update(
           'cards',
           5,
-          { slug: 'mame-2026', urlChange: { confirm: true } },
+          { slug: 'mame-tyulpany', urlChange: { confirm: true } },
           aiEditor,
         ),
       'меняет только admin',
@@ -916,13 +1170,13 @@ describe('Э1-09: карточка — смена URL только вместе 
     const moved = await harness.update(
       'cards',
       5,
-      { slug: 'mame-2026', urlChange: { confirm: true, reason: 'уточнён интент' } },
+      { slug: 'mame-tyulpany', urlChange: { confirm: true, reason: 'уточнён интент' } },
       admin,
     );
 
-    expect(moved.slug).toBe('mame-2026');
+    expect(moved.slug).toBe('mame-tyulpany');
     expect(harness.docs('redirects')).toEqual([
-      expect.objectContaining({ code: '301', from: '/otkrytki/mame', to: '/otkrytki/mame-2026' }),
+      expect.objectContaining({ code: '301', from: '/otkrytki/mame', to: '/otkrytki/mame-tyulpany' }),
     ]);
     expect(String(harness.docs('redirects')[0]?.comment)).toContain('уточнён интент');
   });
@@ -934,13 +1188,13 @@ describe('Э1-09: карточка — смена URL только вместе 
     const moved = await harness.update(
       'cards',
       5,
-      { slug: 'mame-2026', urlChange: { confirm: true } },
+      { slug: 'mame-tyulpany', urlChange: { confirm: true } },
       admin,
     );
     expect(moved.urlChange).toEqual(expect.objectContaining({ confirm: false }));
 
     await expectRejected(
-      () => harness.update('cards', 5, { slug: 'mame-2027' }, admin),
+      () => harness.update('cards', 5, { slug: 'mame-rozy' }, admin),
       'неизменяем после первой публикации',
     );
   });
@@ -954,22 +1208,22 @@ describe('Э1-09: карточка — смена URL только вместе 
       to: '/otkrytki/mame',
     });
 
-    await harness.update('cards', 5, { slug: 'mame-2026', urlChange: { confirm: true } }, admin);
+    await harness.update('cards', 5, { slug: 'mame-tyulpany', urlChange: { confirm: true } }, admin);
 
     const redirects = harness.docs('redirects');
     expect(redirects).toHaveLength(2);
-    expect(redirects.every((redirect) => redirect.to === '/otkrytki/mame-2026')).toBe(true);
+    expect(redirects.every((redirect) => redirect.to === '/otkrytki/mame-tyulpany')).toBe(true);
   });
 
   it('переезд на путь, с которого стоял редирект, освобождает этот путь', async () => {
     const harness = createHarness();
     harness.seed('cards', publishedCard('mame', 5));
-    harness.seed('redirects', { code: '301', from: '/otkrytki/mame-2026', to: '/otkrytki/mame' });
+    harness.seed('redirects', { code: '301', from: '/otkrytki/mame-tyulpany', to: '/otkrytki/mame' });
 
-    await harness.update('cards', 5, { slug: 'mame-2026', urlChange: { confirm: true } }, admin);
+    await harness.update('cards', 5, { slug: 'mame-tyulpany', urlChange: { confirm: true } }, admin);
 
     expect(harness.docs('redirects')).toEqual([
-      expect.objectContaining({ from: '/otkrytki/mame', to: '/otkrytki/mame-2026' }),
+      expect.objectContaining({ from: '/otkrytki/mame', to: '/otkrytki/mame-tyulpany' }),
     ]);
   });
 
@@ -977,10 +1231,10 @@ describe('Э1-09: карточка — смена URL только вместе 
     const harness = createHarness();
     harness.seed('cards', publishedCard('mame', 5));
 
-    await harness.update('cards', 5, { slug: 'mame-2026', urlChange: { confirm: true } }, admin);
+    await harness.update('cards', 5, { slug: 'mame-tyulpany', urlChange: { confirm: true } }, admin);
 
     expect(historyFor(harness, 'slug')).toEqual([
-      expect.objectContaining({ nextValue: 'mame-2026', previousValue: 'mame' }),
+      expect.objectContaining({ nextValue: 'mame-tyulpany', previousValue: 'mame' }),
     ]);
   });
 });

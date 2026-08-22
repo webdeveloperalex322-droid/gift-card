@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_SLUG_MAX_LENGTH,
+  findYearInSlug,
+  hasYearInSlug,
   isValidSlug,
   SLUG_PATTERN,
   slugify,
+  YEAR_IN_SLUG_MAX,
+  YEAR_IN_SLUG_MIN,
 } from '@otkritka/shared';
 
 /**
@@ -649,5 +653,64 @@ describe('прогон slug из docs/etap-0-struktura-url.md через вал�
     for (const [title, expected] of pairs) {
       expect(slugify(title), title).toBe(expected);
     }
+  });
+});
+
+/**
+ * Год в slug (условие C3, `CLAUDE.md` → «Правила URL»: «Год не добавляется в
+ * URL ежегодных праздников»).
+ *
+ * Правило живёт ЗДЕСЬ, а не в хуке коллекции, потому что оно про содержимое
+ * сегмента адреса — там же, где длина (Ч-26) и запрет slug из одних цифр
+ * (Ч-27). Область применения (у каких записей год запрещён) — дело
+ * вызывающего: `isValidSlug` года не отклоняет, иначе технические сегменты и
+ * записи, которым год не запрещён, попали бы под запрет заодно.
+ *
+ * Диапазон YEAR_IN_SLUG_MIN..YEAR_IN_SLUG_MAX — выбор агента (обоснование в
+ * докстринге `packages/shared/src/slug.ts`): он отделяет год от чисел, которые
+ * законно встречаются в адресе («8 марта», «формат 1920x1080»).
+ */
+describe('год в slug (условие C3)', () => {
+  it('находит год как число внутри сегмента', () => {
+    expect(findYearInSlug('novyy-god-2027')).toBe('2027');
+    expect(findYearInSlug('2027-novyy-god')).toBe('2027');
+    expect(findYearInSlug('otkrytki-2030-na-novyy-god')).toBe('2030');
+    // Без разделителя — тот же год, спрятанный в слове.
+    expect(findYearInSlug('novyygod2027')).toBe('2027');
+    expect(hasYearInSlug('novyy-god-2027')).toBe(true);
+  });
+
+  it('принимает на вход и целый путь: проверять надо ИТОГОВЫЙ адрес', () => {
+    expect(findYearInSlug('/podborki/prazdniki/novyy-god-2027')).toBe('2027');
+    expect(findYearInSlug('/otkrytki/8-marta')).toBeNull();
+  });
+
+  it('числа в датах праздников и в описании годом не считаются', () => {
+    for (const slug of [
+      '8-marta',
+      '1-sentyabrya',
+      '23-fevralya',
+      '9-maya',
+      'otkrytka-a4',
+      'otkrytka-1920x1080',
+      'novyy-god',
+      'den-rozhdeniya-100-let',
+    ]) {
+      expect(findYearInSlug(slug), slug).toBeNull();
+      expect(hasYearInSlug(slug), slug).toBe(false);
+    }
+  });
+
+  it('границы диапазона проверяются буквально', () => {
+    expect(hasYearInSlug(`prazdnik-${String(YEAR_IN_SLUG_MIN)}`)).toBe(true);
+    expect(hasYearInSlug(`prazdnik-${String(YEAR_IN_SLUG_MAX)}`)).toBe(true);
+    expect(hasYearInSlug(`prazdnik-${String(YEAR_IN_SLUG_MIN - 1)}`)).toBe(false);
+    expect(hasYearInSlug(`prazdnik-${String(YEAR_IN_SLUG_MAX + 1)}`)).toBe(false);
+  });
+
+  it('isValidSlug года НЕ отклоняет: область применения задаёт вызывающий', () => {
+    // Иначе под запрет попали бы технические сегменты (ревизия производной,
+    // Ч-28) и записи, для которых год не запрещён.
+    expect(isValidSlug('novyy-god-2027')).toBe(true);
   });
 });

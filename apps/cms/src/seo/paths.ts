@@ -27,6 +27,7 @@ import {
   canonicalizePath,
   checkReservedPath,
   currentEnv,
+  findYearInSlug,
   isValidSlug,
 } from '@otkritka/shared';
 
@@ -48,6 +49,35 @@ export interface ContentSlugOptions {
   /** Префикс пространства имён: {@link CARD_PATH_PREFIX} или путь родителя. */
   readonly prefix: string;
   readonly env?: SharedEnv;
+  /**
+   * Запрещён ли год в адресе (условие C3). Для карточки — да всегда, для
+   * подборки решает вид узла (см. `collections/collection-path.ts`).
+   */
+  readonly forbidYear?: boolean;
+}
+
+/**
+ * ЕДИНСТВЕННАЯ формулировка отказа «год в адресе» на весь проект.
+ *
+ * Правило одно (`hasYearInSlug` из `@otkritka/shared`), поэтому и текст один:
+ * его видят и редактор в админке, и внешний AI-редактор в ответе API. Две
+ * формулировки расходятся, а расхождение в этом правиле стоит дорого — адрес
+ * после первой публикации неизменяем.
+ */
+export function yearInPathRefusal(args: {
+  /** Одно предложение про эту запись: почему год запрещён именно здесь. */
+  readonly subject: string;
+  readonly target: string;
+  readonly year: string;
+}): string {
+  return (
+    `В адресе «${args.target}» есть год ${args.year}, а год в URL запрещён (CLAUDE.md, ` +
+    '«Правила URL»: «Год не добавляется в URL ежегодных праздников»). ' +
+    `${args.subject} Страница с годом в адресе через год устаревает: накопленные ссылки и ` +
+    'позиции достаются мёртвому URL, а новому году нужен новый адрес и редирект. Адрес ' +
+    'после первой публикации неизменяем, поэтому исправлять надо сейчас — уберите год из ' +
+    'slug, а год события укажите в заголовке, вводном тексте или в поле даты.'
+  );
 }
 
 const SLUG_RULES =
@@ -82,6 +112,19 @@ export function validateContentSlug(
 
   const env = options.env ?? currentEnv();
   const target = `${options.prefix}/${slug}`;
+
+  if (options.forbidYear === true) {
+    const year = findYearInSlug(slug);
+    if (year !== null) {
+      return yearInPathRefusal({
+        subject:
+          'У карточки открытки канонический адрес один навсегда, а поводы повторяются ' +
+          'каждый год.',
+        target: canonicalizePathSafe(target),
+        year,
+      });
+    }
+  }
 
   let availability: PathAvailability;
   try {

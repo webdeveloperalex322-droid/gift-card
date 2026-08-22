@@ -161,6 +161,32 @@ export function canEditSlug(
   return !hasBeenPublished(doc);
 }
 
+/**
+ * Вправе ли роль ЗАМЕНИТЬ изображение записи.
+ *
+ * Правило по форме совпадает с правом на правку slug, но записано отдельно
+ * НАМЕРЕННО: речь о другом постоянном URL — адресе файла (ТЗ §6.3), — и
+ * связывать два правила одной функцией нельзя. Иначе смена условий для URL
+ * страницы молча меняла бы условия для файлов, и наоборот.
+ *
+ * `admin` — всегда: замена изображения опубликованной карточки законна (ТЗ §6.7),
+ * это осознанное решение человека, при котором меняются URL всех производных.
+ * `ai-editor` — только до первой публикации: агент загружает новые изображения и
+ * работает с черновиками, но файлы опубликованной страницы не переписывает.
+ */
+export function canReplaceImage(
+  user: RoledUser | null | undefined,
+  doc: PublishableDoc | null | undefined,
+): boolean {
+  if (isAdmin(user)) {
+    return true;
+  }
+  if (!isAiEditor(user)) {
+    return false;
+  }
+  return !hasBeenPublished(doc);
+}
+
 /** Редиректы — только `admin` (ТЗ §9, CLAUDE.md). */
 export function canManageRedirects(user: RoledUser | null | undefined): boolean {
   return isAdmin(user);
@@ -282,6 +308,15 @@ export const slugFieldAccess: FieldAccess<TypeWithID & PublishableDoc> = ({ doc,
  * коллекции подборок стояло бы `slugFieldAccess` у поля `parent`.
  */
 export const urlShapeFieldAccess: FieldAccess<TypeWithID & PublishableDoc> = slugFieldAccess;
+
+/**
+ * Поле `image` карточки: после первой публикации меняет его только `admin`.
+ *
+ * Молчаливого отказа здесь недостаточно (Payload срезает поле и отдаёт 200),
+ * поэтому рядом стоит громкое правило в хуке карточки — как у slug (Э1-09).
+ */
+export const cardImageFieldAccess: FieldAccess<TypeWithID & PublishableDoc> = ({ doc, req }) =>
+  canReplaceImage(req.user, doc);
 
 /** Поле `robots`. */
 export const robotsFieldAccess: FieldAccess = ({ req }) => canSetRobots(req.user);
