@@ -4,11 +4,22 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node ../../scripts/not-scaffolded.mjs dev \"Astro в apps/web ещё не установлен\"",
-    "build": "node ../../scripts/not-scaffolded.mjs build \"Astro в apps/web ещё не установлен\""
+    "astro": "astro",
+    "build": "astro build",
+    "check": "astro check",
+    "dev": "astro dev",
+    "preview": "astro preview",
+    "smoke:slash": "node ./scripts/smoke-trailing-slash.mjs",
+    "sync": "astro sync"
   },
   "dependencies": {
+    "@astrojs/node": "^11.1.4",
+    "@otkritka/images": "workspace:*",
     "@otkritka/shared": "workspace:*",
-    "@otkritka/images": "workspace:*"
+    "astro": "^7.2.4"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "typescript": "catalog:"
   }
 }

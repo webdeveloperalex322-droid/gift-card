@@ -1,0 +1,118 @@
+---
+/**
+ * Базовый layout: голова документа и каркас страницы.
+ *
+ * Инварианты рендеринга (`CLAUDE.md`, раздел «Рендеринг»), закодированные здесь:
+ *   - `<html lang="ru">`;
+ *   - title, description, абсолютный self-canonical и директива robots
+ *     присутствуют в HTML-ответе сервера, без участия JS;
+ *   - критический CSS — инлайном в `<head>` первым, до любого содержимого;
+ *   - клиентского JS нет по умолчанию: ни одной директивы `client:*`, ни одного
+ *     `<script>`. Острова (кнопка скачивания, фильтры) добавляются точечно на
+ *     своих задачах и в этот layout не попадают.
+ *
+ * Почему canonical берётся из ЯВНОГО пропа `canonicalPath`, а не из
+ * `Astro.url.pathname`: canonical — это заявление, а не отражение адреса, по
+ * которому пришли. У пагинации, фильтров и внутреннего поиска канонический
+ * адрес не равен запрошенному, и вывод его из запроса штатно давал бы
+ * self-canonical на неканонический URL. Дополнительно `Astro.url.pathname` во
+ * время сборки заранее отрендеренной страницы содержит `.html` (следствие
+ * `build.format: 'file'`), то есть не является путём страницы вообще.
+ *
+ * `robots` — обязательный проп без значения по умолчанию. Дефолт здесь означал
+ * бы, что страница, автор которой забыл про директиву, получает её молча;
+ * решение об `index,follow` принимает человек (п. 7.1 и п. 23 ТЗ), поэтому
+ * забывчивость обязана быть ошибкой типов, а не поведением.
+ *
+ * Про `is:inline` у блока стилей: без этой директивы судьбу критического CSS
+ * решает Astro (`build.inlineStylesheets: 'auto'`) и при росте файла выносит его
+ * во внешний запрос. Критический CSS обязан приходить первым ответом, иначе
+ * первый экран ждёт сети — это LCP и CLS (`CLAUDE.md`,
+ * «Производительность»). Комментарий живёт здесь, а не рядом с тегом: HTML-
+ * комментарий уехал бы в каждый ответ сервера.
+ */
+import { canonicalUrlFor } from '../routing/canonical';
+import { serverEnv } from '../server-env';
+
+interface Props {
+  /** Содержимое `<title>`. Уникально в пределах сайта. */
+  title: string;
+  /** Содержимое `<meta name="description">`. Уникально в пределах сайта. */
+  description: string;
+  /** Путь страницы от корня — основа абсолютного self-canonical. */
+  canonicalPath: string;
+  /**
+   * Директива для поисковых роботов. `index,follow` допустим только по решению
+   * человека и только при выполнении условий п. 5.1 ТЗ.
+   */
+  robots: 'index,follow' | 'noindex,follow' | 'noindex,nofollow';
+}
+
+const { canonicalPath, description, robots, title } = Astro.props;
+
+const canonicalUrl = canonicalUrlFor(canonicalPath, serverEnv());
+---
+
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="robots" content={robots} />
+    <link rel="canonical" href={canonicalUrl} />
+    <style is:inline>
+      :root {
+        color-scheme: light dark;
+        --content-max: 60rem;
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      html {
+        font-family:
+          system-ui,
+          -apple-system,
+          'Segoe UI',
+          Roboto,
+          Arial,
+          sans-serif;
+        line-height: 1.5;
+        text-size-adjust: 100%;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      .layout__main {
+        flex: 1 0 auto;
+        width: 100%;
+        max-width: var(--content-max);
+        margin-inline: auto;
+        padding: 1rem;
+      }
+      h1 {
+        font-size: 1.75rem;
+        line-height: 1.2;
+        margin-block: 0 0.75rem;
+      }
+      img {
+        max-width: 100%;
+        height: auto;
+      }
+      a {
+        color: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="layout__main">
+      <slot />
+    </main>
+  </body>
+</html>

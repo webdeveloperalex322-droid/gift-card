@@ -8,10 +8,10 @@
   },
   "scripts": {
     "build:libs": "tsc -b tsconfig.json",
-    "dev": "pnpm run build:libs && pnpm --filter @otkritka/cms run dev",
-    "build": "node scripts/not-scaffolded.mjs build \"apps/web (Astro) ещё не установлен; CMS собирается командой pnpm --filter @otkritka/cms run build\"",
+    "dev": "pnpm run build:libs && pnpm --parallel --filter @otkritka/web --filter @otkritka/cms run dev",
+    "build": "pnpm run build:libs && pnpm --filter @otkritka/web run build && pnpm --filter @otkritka/cms run build",
     "generate:types": "pnpm run build:libs && pnpm --filter @otkritka/cms run generate:types",
-    "check": "pnpm run build:libs && pnpm --filter @otkritka/cms run check && eslint .",
+    "check": "pnpm run build:libs && pnpm --filter @otkritka/web run check && pnpm --filter @otkritka/cms run check && eslint .",
     "test": "vitest run",
     "test:seo": "node scripts/seo-gate.mjs",
     "verify": "pnpm run check && pnpm run test && pnpm run test:seo"
@@ -22,6 +22,7 @@
     "@otkritka/shared": "workspace:*",
     "@types/node": "catalog:",
     "eslint": "^9.39.0",
+    "eslint-plugin-astro": "^1.7.0",
     "sharp": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "^8.46.0",

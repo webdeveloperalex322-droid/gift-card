@@ -1,4 +1,5 @@
 import js from '@eslint/js';
+import astro from 'eslint-plugin-astro';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
@@ -37,6 +38,18 @@ export default tseslint.config(
       '@typescript-eslint/consistent-type-imports': 'error',
     },
   },
+  // Шаблоны Astro (apps/web). Файлы .astro разбирает astro-eslint-parser:
+  // без него eslint видит в них синтаксическую ошибку на первой же строке
+  // frontmatter, и шаблоны просто не линтуются — то есть требование «eslint
+  // зелёный на .astro» выполнялось бы формально, ничего не проверяя.
+  //
+  // Типизированных правил (recommendedTypeChecked) здесь НЕТ намеренно: они
+  // требуют, чтобы файл входил в программу TypeScript, а .astro в неё входит
+  // только через языковой сервер Astro. Проверку типов шаблонов делает
+  // `astro check` (скрипт check в apps/web/package.json, входит в корневой
+  // `pnpm check`) — она сильнее, чем типизированные правила eslint, и в отличие
+  // от них понимает `Astro.props`.
+  ...astro.configs['flat/recommended'],
   {
     // Конфиги и служебные скрипты: обычный JS без информации о типах.
     files: ['**/*.js', '**/*.mjs'],
@@ -45,7 +58,13 @@ export default tseslint.config(
       sourceType: 'module',
       globals: {
         console: 'readonly',
+        // Node >= 22: глобальные fetch/Response и таймеры. Нужны служебным
+        // скриптам, которые ходят по поднятому серверу
+        // (apps/web/scripts/smoke-trailing-slash.mjs).
+        fetch: 'readonly',
         process: 'readonly',
+        Response: 'readonly',
+        setTimeout: 'readonly',
         URL: 'readonly',
         __dirname: 'readonly',
       },

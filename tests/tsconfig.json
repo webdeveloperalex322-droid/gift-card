@@ -1,11 +1,21 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": ".",
+    "rootDir": "..",
     "outDir": "dist",
     "types": ["vitest/globals", "node"],
     "emitDeclarationOnly": true
   },
-  "include": ["unit/**/*.ts", "seo/**/*.ts"],
+  "include": [
+    "unit/**/*.ts",
+    "seo/**/*.ts",
+    // Чистые модули маршрутизации apps/web (Э3-01). Юнит-тесты на них живут в
+    // unit/, а composite-проект обязан перечислять все файлы программы —
+    // отсюда явный путь, а не весь apps/web. Граница узкая намеренно: сюда
+    // попадают только модули БЕЗ импортов .astro и без Astro-рантайма, иначе
+    // проект перестал бы собираться под NodeNext. Всё остальное в apps/web
+    // проверяет `astro check` (см. apps/web/package.json, скрипт check).
+    "../apps/web/src/routing/**/*.ts"
+  ],
   "references": [{ "path": "../packages/shared" }, { "path": "../packages/images" }]
 }
