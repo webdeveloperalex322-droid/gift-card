@@ -15,7 +15,11 @@ export default defineConfig({
   },
   test: {
     // tests/seo/ гоняется Playwright'ом через `pnpm test:seo`, не Vitest'ом.
-    include: ['tests/unit/**/*.test.ts', 'packages/*/src/**/*.test.ts'],
+    include: [
+      'tests/unit/**/*.test.ts',
+      'packages/*/src/**/*.test.ts',
+      'apps/*/src/**/*.test.ts',
+    ],
     environment: 'node',
   },
 });

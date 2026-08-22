@@ -4,12 +4,31 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node ../../scripts/not-scaffolded.mjs dev \"Payload в apps/cms ещё не установлен\"",
-    "build": "node ../../scripts/not-scaffolded.mjs build \"Payload в apps/cms ещё не установлен\"",
-    "generate:types": "node ../../scripts/not-scaffolded.mjs generate:types \"payload generate:types появится вместе с конфигом Payload\""
+    "build": "next build",
+    "check": "tsc --noEmit",
+    "dev": "next dev --port 3010",
+    "ensure-db": "node scripts/ensure-database.mjs",
+    "generate:importmap": "payload generate:importmap",
+    "generate:types": "payload generate:types",
+    "start": "next start --port 3010"
   },
   "dependencies": {
+    "@otkritka/images": "workspace:*",
     "@otkritka/shared": "workspace:*",
-    "@otkritka/images": "workspace:*"
+    "@payloadcms/db-postgres": "3.88.0",
+    "@payloadcms/next": "3.88.0",
+    "@payloadcms/richtext-lexical": "3.88.0",
+    "graphql": "^16.14.2",
+    "next": "^16.3.2",
+    "payload": "3.88.0",
+    "pg": "8.20.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
   }
 }

@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .astro/
+.next/
+next-env.d.ts
 .turbo/
 coverage/
 *.tsbuildinfo

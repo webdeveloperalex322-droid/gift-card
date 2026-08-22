@@ -5,20 +5,50 @@
  * которому утилита нужна, но контракт (экспорты и типы) правит только после
  * согласования, потому что от него зависят и web, и cms.
  *
- * Реализовано (задача Э1-01a):
- *   - транслитерация заголовка в slug и валидатор slug — `./slug.ts`. Это
- *     единственный источник правил slug: `apps/cms`, `apps/web` и
- *     `packages/images` зовут его, а не повторяют таблицу транслитерации.
+ * Состав (задача Э1-01 закрыта полностью):
+ *   - `./slug.ts` — транслитерация заголовка в slug и валидатор slug.
+ *     Единственный источник правил slug: `apps/cms`, `apps/web` и
+ *     `packages/images` зовут его, а не повторяют таблицу транслитерации;
+ *   - `./routes.ts` — единое правило завершающего слеша (решение Ч-21: БЕЗ
+ *     слеша), предикат `isPageRoute()` и приведение пути к канонической форме;
+ *   - `./site-url.ts` — ЕДИНСТВЕННЫЙ хелпер сборки абсолютного URL из
+ *     env-параметра `SITE_URL`. Хост не хардкодится: пустое значение валит
+ *     сборку, значений по умолчанию в коде нет;
+ *   - `./reserved-routes.ts` — реестр зарезервированных маршрутов (контейнеры и
+ *     занятые целиком), запрет сегмента `page` на любой позиции; путь админки
+ *     вычисляется из `PAYLOAD_ADMIN_PATH`, а не записан строкой;
+ *   - `./env.ts` — тип среза окружения; окружение всегда аргумент с дефолтом,
+ *     чтобы тесты не мутировали `process.env`.
  *
- * Запланировано ТЗ и CLAUDE.md, пока не реализовано (остаток задачи Э1-01):
- *   - сборка абсолютного canonical из env `SITE_URL` (пустое значение обязано
- *     валить сборку; значений по умолчанию в коде нет);
- *   - реестр зарезервированных маршрутов (контейнеры и занятые целиком) и
- *     запрет сегмента `page` на любой позиции;
- *   - предикат `isPageRoute()` для правила завершающего слеша.
- *
- * Реализовывать через TDD: тест в `tests/unit/`, затем код.
+ * Реализовано через TDD: тесты в `tests/unit/` (`slug`, `routes`, `site-url`,
+ * `reserved-routes`), затем код.
  */
+
+export { currentEnv, type SharedEnv } from './env.js';
+
+export {
+  assertPathNotReserved,
+  checkReservedPath,
+  isReservedPath,
+  PAGINATION_SEGMENT,
+  PAYLOAD_ADMIN_PATH_ENV_KEY,
+  type PathAvailability,
+  type ReservedRoute,
+  type ReservedRouteKind,
+  type ReservedRouteSource,
+  reservedRoutes,
+  type ReservedRule,
+} from './reserved-routes.js';
+
+export {
+  canonicalizePath,
+  isPageRoute,
+  looksLikeAbsoluteUrl,
+  pathSegments,
+  TRAILING_SLASH,
+} from './routes.js';
+
+export { buildAbsoluteUrl, resolveSiteOrigin, SITE_URL_ENV_KEY } from './site-url.js';
 
 export {
   DEFAULT_SLUG_MAX_LENGTH,
@@ -27,9 +57,6 @@ export {
   slugify,
   type SlugOptions,
 } from './slug.js';
-
-/** Единое правило завершающего слеша по всему сайту (выбрано: со слешем). */
-export const TRAILING_SLASH = true;
 
 /** Статусная модель контента. Переход в `published` делает только человек. */
 export const CONTENT_STATUSES = ['draft', 'review', 'published'] as const;

@@ -3,13 +3,25 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/.astro/**', '**/*.tsbuildinfo'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/.astro/**',
+      // Сборочный вывод Next.js (apps/cms) и его сгенерированные объявления:
+      // это не исходники, линтовать их бессмысленно, а часть файлов вообще не
+      // входит ни в один tsconfig-проект.
+      '**/.next/**',
+      '**/next-env.d.ts',
+      '**/*.tsbuildinfo',
+    ],
   },
   js.configs.recommended,
   {
     // Типизированные правила — только для TypeScript, который входит в проекты
     // из tsconfig.json. vitest.config.ts лежит вне них, поэтому разрешён явно.
-    files: ['**/*.ts'],
+    // `.tsx` включён вместе с `.ts`: маршруты админки Payload в apps/cms —
+    // компоненты React, и без этого шаблона они не линтовались бы вовсе.
+    files: ['**/*.ts', '**/*.tsx'],
     extends: [tseslint.configs.recommendedTypeChecked],
     languageOptions: {
       parserOptions: {

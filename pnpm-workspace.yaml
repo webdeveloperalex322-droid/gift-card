@@ -9,3 +9,11 @@ packages:
 # бинарь, чем поставляет пакет.
 catalog:
   sharp: ^0.35.3
+
+  # typescript и @types/node объявлены и в корне (solution-сборка `tsc -b`,
+  # eslint с projectService), и в apps/cms (Next проверяет типы своим tsc, а
+  # composite-проектом быть не может — см. apps/cms/tsconfig.json). Две разные
+  # версии дали бы расхождение: `pnpm check` был бы зелёным, а `next build`
+  # падал бы на тех же файлах, или наоборот.
+  typescript: ^5.9.3
+  '@types/node': ^24.10.1
