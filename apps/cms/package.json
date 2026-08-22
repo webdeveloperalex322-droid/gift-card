@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./config": "./src/payload.config.ts",
+    "./seo/paths": "./src/seo/paths.ts",
     "./types": "./src/payload-types.ts"
   },
   "scripts": {

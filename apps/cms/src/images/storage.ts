@@ -26,27 +26,32 @@
  *
  * Чего здесь НЕТ и почему: HTTP-отдачи `/media/...`. Маршрут принадлежит
  * `apps/web` (задача Э2-04b, этап 3) — CMS обеспечивает раскладку файлов и
- * контракт заголовков, а не роут. Константы {@link MEDIA_ROUTE_PREFIX} и
- * {@link IMMUTABLE_CACHE_CONTROL} существуют, чтобы `apps/web` взял их отсюда, а
- * не написал заново: два написания одного заголовка расходятся молча.
+ * контракт заголовков, а не роут.
+ *
+ * ПЕРЕЕЗД (задача Э2-04b): сам контракт публичной отдачи —
+ * {@link MEDIA_ROUTE_PREFIX}, {@link IMMUTABLE_CACHE_CONTROL},
+ * {@link assertStorageKey}, {@link derivativePublicPath},
+ * {@link derivativeCacheHeaders} — переехал в `@otkritka/images/media` и здесь
+ * только РЕЭКСПОРТИРУЕТСЯ. Причина: те же значения нужны входному серверу
+ * `apps/web`, а он настоящий Node ESM из `dist/` и импортировать `.ts` из
+ * `apps/cms` не может. Оставить их здесь означало бы второе написание
+ * `Cache-Control` в `apps/web` — расхождение, которое обнаруживается кешем на
+ * год. Реэкспорт сохранён, чтобы ни один существующий импорт из `apps/cms` не
+ * пришлось переписывать: источник один, адресов обращения к нему два.
  */
 import { buildAbsoluteUrl, currentEnv, type SharedEnv } from '@otkritka/shared';
-import { FILE_EXTENSION_BY_FORMAT, OUTPUT_FORMATS, type OutputFormat } from '@otkritka/images';
 
-/**
- * Публичный префикс пути производных (решение Ч-03). Не путать с корнем
- * файловой системы: это адрес, по которому отдаёт `apps/web`.
- */
-export const MEDIA_ROUTE_PREFIX = '/media';
+export {
+  assertStorageKey,
+  derivativeCacheHeaders,
+  derivativeKeyFromPublicPath,
+  derivativePublicPath,
+  IMMUTABLE_CACHE_CONTROL,
+  isStorageKey,
+  MEDIA_ROUTE_PREFIX,
+} from '@otkritka/images/media';
 
-/**
- * Заголовок кеширования производных — дословно из решения Ч-03.
- *
- * `immutable` законен ровно потому, что путь производной постоянен: он содержит
- * `revision` (короткий хеш байтов, Ч-28), поэтому замена изображения даёт другой
- * путь, а не другое содержимое по тому же пути.
- */
-export const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+import { derivativePublicPath } from '@otkritka/images/media';
 
 /**
  * Префикс пространства ПУБЛИЧНЫХ производных внутри хранилища.
@@ -63,66 +68,6 @@ export const DERIVATIVE_KEY_PREFIX = 'cards';
  */
 export const ORIGINAL_KEY_PREFIX = 'originals';
 
-/** MIME-тип по расширению файла производной. Набор закрыт набором форматов вывода. */
-const CONTENT_TYPE_BY_EXTENSION: Readonly<Record<string, string>> = Object.freeze(
-  Object.fromEntries(
-    OUTPUT_FORMATS.map((format: OutputFormat) => [
-      FILE_EXTENSION_BY_FORMAT[format],
-      format === 'jpeg' ? 'image/jpeg' : `image/${format}`,
-    ]),
-  ),
-);
-
-/** Промежуточный сегмент ключа: те же символы, что и в slug. */
-const KEY_SEGMENT = /^[a-z0-9-]+$/;
-/** Последний сегмент: имя файла с расширением. */
-const KEY_FILE_SEGMENT = /^[a-z0-9-]+\.[a-z0-9]{2,5}$/;
-
-/**
- * Проверяет форму ключа объекта: относительный путь из допустимых сегментов.
- *
- * Что отклоняется и почему: ведущий слеш и схема (это уже не ключ, а адрес),
- * `..` и пустые сегменты (выход за пределы пространства), обратный слеш (на
- * Windows он разделитель пути, и `cards\..\..` вышел бы наружу), верхний
- * регистр и пробелы (один файл получил бы два написания одного адреса),
- * параметры запроса (в ключе объекта их не бывает).
- *
- * @throws Error с указанием ключа: сообщение попадает в журнал загрузки.
- */
-export function assertStorageKey(key: string): string {
-  const segments = key.split('/');
-  const valid =
-    key !== '' &&
-    !key.includes('\\') &&
-    !key.includes('?') &&
-    !key.includes('#') &&
-    !key.includes(':') &&
-    segments.length >= 2 &&
-    segments.every((segment, index) =>
-      index === segments.length - 1 ? KEY_FILE_SEGMENT.test(segment) : KEY_SEGMENT.test(segment),
-    );
-
-  if (!valid) {
-    throw new Error(
-      `Ключ объекта «${key}» недопустим: ожидается относительный путь вида ` +
-        '«<префикс>/<сегменты>/<имя>.<расширение>» из символов [a-z0-9-], без схемы, хоста, ' +
-        'ведущего слеша, «..» и обратных слешей. Ключ приходит из данных записи, поэтому ' +
-        'проверяется до обращения к хранилищу: иначе путь мог бы указать наружу пространства.',
-    );
-  }
-
-  return key;
-}
-
-/**
- * Публичный путь производной: `/media/<ключ>`.
- *
- * Хоста в результате нет. Абсолютный адрес — {@link derivativeAbsoluteUrl}.
- */
-export function derivativePublicPath(key: string): string {
-  return `${MEDIA_ROUTE_PREFIX}/${assertStorageKey(key)}`;
-}
-
 /**
  * Абсолютный адрес производной. Хост берётся ТОЛЬКО из `SITE_URL` через
  * единственный хелпер `buildAbsoluteUrl` из `@otkritka/shared`.
@@ -131,29 +76,6 @@ export function derivativePublicPath(key: string): string {
  */
 export function derivativeAbsoluteUrl(key: string, env: SharedEnv = currentEnv()): string {
   return buildAbsoluteUrl(derivativePublicPath(key), env);
-}
-
-/**
- * Заголовки ответа для производной: тип содержимого и immutable-кеш.
- *
- * Возвращаются вместе, потому что вместе и применяются: `apps/web` (Э2-04b)
- * отдаёт файл именно с этой парой, а тест сравнивает ответ с этой функцией, а не
- * с переписанной строкой.
- */
-export function derivativeCacheHeaders(key: string): Record<string, string> {
-  assertStorageKey(key);
-  const extension = key.slice(key.lastIndexOf('.') + 1);
-  const contentType = CONTENT_TYPE_BY_EXTENSION[extension];
-
-  if (contentType === undefined) {
-    throw new Error(
-      `Расширение «${extension}» не входит в набор вывода пайплайна ` +
-        `(${Object.keys(CONTENT_TYPE_BY_EXTENSION).join(', ')}). Публичное пространство ` +
-        'производных содержит только файлы, созданные пайплайном.',
-    );
-  }
-
-  return { 'Cache-Control': IMMUTABLE_CACHE_CONTROL, 'Content-Type': contentType };
 }
 
 /**

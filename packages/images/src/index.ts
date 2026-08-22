@@ -52,6 +52,22 @@ export {
   type OutputFormat,
 } from './formats.js';
 
+/**
+ * Контракт публичной отдачи производных (`/media/<ключ>`). Реэкспорт — для
+ * потребителей, которым пакет нужен целиком (`apps/cms`); входной сервер
+ * `apps/web` берёт те же имена подпутём `@otkritka/images/media`, чтобы не
+ * тянуть в процесс отдачи файлов нативный `sharp`.
+ */
+export {
+  assertStorageKey,
+  derivativeCacheHeaders,
+  derivativeKeyFromPublicPath,
+  derivativePublicPath,
+  IMMUTABLE_CACHE_CONTROL,
+  isStorageKey,
+  MEDIA_ROUTE_PREFIX,
+} from './media.js';
+
 export {
   assertSourceImageWidth,
   generateDerivatives,

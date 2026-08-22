@@ -32,9 +32,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { adminRoutePrefix } from '../routing/path-policy.js';
-import { serverEnv } from '../server-env.js';
+import { serverEnv, workspaceRoot } from '../server-env.js';
 import { loadBuiltAstroApp } from './astro-app.js';
 import { createFrontDoor } from './front-door.js';
+import { resolveMediaRoot } from './media-files.js';
 
 /**
  * Порт по умолчанию нужен только когда его не назвали ни окружение (`PORT`), ни
@@ -58,6 +59,15 @@ export const handler = createFrontDoor({
   logError: (message: string) => {
     console.error(`[apps/web] ${message}`);
   },
+  /**
+   * Корень производных вычисляется ЛЕНИВО — при первом запросе к `/media/...`, а
+   * не при старте. Причина в шапке `FrontDoorOptions.mediaRoot`: без корня сайт
+   * работоспособен во всём, кроме изображений, и валить старт означало бы
+   * блокировать работу, которая от параметра не зависит. Пустое значение всё
+   * равно не подменяется дефолтом — оно даёт внятную ошибку и 500 на запрос
+   * файла.
+   */
+  mediaRoot: () => resolveMediaRoot(serverEnv(), workspaceRoot()),
 });
 
 function resolvePort(): number {

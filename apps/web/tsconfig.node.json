@@ -38,5 +38,9 @@
     "types": ["node"]
   },
   "include": ["src/routing/**/*.ts", "src/server/**/*.ts", "src/server/**/*.mts", "src/server-env.ts"],
-  "references": [{ "path": "../../packages/shared" }]
+  // `packages/images` добавлен вместе с отдачей `/media/...` (Э2-04b): контракт
+  // публичного пути, формы ключа и заголовков кеширования живёт там
+  // (`@otkritka/images/media`), а входной сервер обязан звать его, а не
+  // переписывать своей строкой.
+  "references": [{ "path": "../../packages/shared" }, { "path": "../../packages/images" }]
 }

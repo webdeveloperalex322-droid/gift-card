@@ -18,6 +18,7 @@
 ```text
 node dist/server/entry.mjs        (src/server/entry.mts)
   -> decideRequestTarget()        (src/routing/path-policy.ts)  решение по СЫРОЙ цели
+  -> производные /media/<ключ>    (src/server/media-files.ts)   файлы хранилища, без листинга
   -> статика из dist/client       (src/server/static-files.ts)  только файлы, без редиректов
   -> обработчик Astro             (dist/server/astro-app.mjs)   SSR-маршруты и 404
 ```
@@ -94,8 +95,16 @@ pnpm --filter @otkritka/web run smoke:slash               # 26 классов п
 
 | Проект | Что проверяет | Разрешение модулей |
 |---|---|---|
-| `tsconfig.json` (`astro check`) | шаблоны `.astro`, `src/middleware.ts`, всё под `src` | `Bundler` (пресет Astro) |
+| `tsconfig.json` (`astro check`) | шаблоны `.astro`, `src/middleware.ts`, `src/data`, `scripts`, всё под `src` | `Bundler` (пресет Astro) |
 | `tsconfig.node.json` (`tsc -b`) | `src/routing`, `src/server` + emit в `dist` | `NodeNext` |
+
+Отсюда же следует, где лежат юнит-тесты слоя данных: рядом с ним
+(`src/data/data-access.test.ts`), а не в `tests/unit/`. Модули `src/data`
+намеренно не входят в composite-проект `tsconfig.node.json` (они импортируют
+`.ts` из другого пакета и живут только внутри Vite), а тест из `tests/unit/`
+обязан импортировать файл, входящий в один из проектов, на которые ссылаются
+тесты, — иначе `tsc -b` отказывает (TS6307). Тесты `src/routing` и `src/server`
+остаются в `tests/unit/`: эти модули в composite-проект входят.
 
 Отсюда требование: **относительные импорты в `src/routing` и `src/server` — только
 с расширением `.js`** (для `.mts` — `.mjs`). Форма без расширения прошла бы
@@ -138,6 +147,65 @@ pnpm --filter @otkritka/web run smoke:slash               # 26 классов п
 одной страницей: `src/pages/404.astro` должна быть пререндеренной, тогда
 `dist/client/404.html` читают оба пути.
 
-Отдача `/media/<ключ>` с `Cache-Control: public, max-age=31536000, immutable` —
-задача Э2-04b. Статический слой к ней подготовлен (корень отдачи и правило
-`Cache-Control` — параметры), но второй корень в нём пока не подключён.
+## Производные изображений: `/media/<ключ>` (задача Э2-04b)
+
+Файлы отдаются из корня `IMAGE_STORAGE_DERIVATIVES_ROOT` — того же, куда их
+пишет `apps/cms` (решение Ч-03: S3 отложен, хранилище — локальная ФС за
+адаптером). Дефолта у корня нет: незаданное значение даёт внятную ошибку на
+запросе файла, а не «пустые» изображения.
+
+| Правило | Где живёт |
+|---|---|
+| форма ключа, `Cache-Control: public, max-age=31536000, immutable`, `Content-Type` | `@otkritka/images/media` — один источник на web и cms |
+| «наш путь / не наш / не адрес» | `src/server/media-files.ts` (`decideMediaRequest`) |
+| «файл лежит под корнем» (лексически и на диске) | `src/server/static-files.ts` (`resolveServableFile`) |
+| корень отдачи из окружения | `src/server/media-files.ts` (`resolveMediaRoot`) |
+
+Что закрыто по построению: каталог не отдаётся ни списком, ни индексным файлом
+(у каталога нет расширения, поэтому он не проходит форму ключа); оригиналы
+недостижимы — их корень лежит ВНЕ корня производных (условие C4), поэтому даже
+корректно сформированный ключ вида `originals/<id>.jpg` разрешается внутри
+дерева производных и даёт 404; dot-сегменты и любые формы `%2F`/`%5C`
+отклоняются политикой пути до этого слоя (400).
+
+Ветка `/media` есть и в `src/middleware.ts` — она нужна только `astro dev`, где
+нашего сервера нет: без неё изображения в dev не открывались бы, потому что
+файлы лежат вне `public/`. Своих правил у неё нет, она зовёт те же функции.
+
+```bash
+pnpm --filter @otkritka/web run build
+pnpm --filter @otkritka/web run smoke:media   # 32 проверки на живом сервере
+```
+
+## Чтение контента: слой доступа к данным (задача Э3-02)
+
+Шаблоны читают CMS только через `src/data/` — и только правами АНОНИМА:
+`overrideAccess` в значении false, пользователь не передаётся, поэтому фильтр
+«только `published`» ставит access control Payload, а не `apps/web`. Включение
+`overrideAccess` в `apps/web` запрещено и проверяется текстовым тестом
+(`src/data/data-access.test.ts`).
+
+| Модуль | Назначение |
+|---|---|
+| `src/data/payload-client.ts` | Local API Payload, один экземпляр на процесс; обоснование выбора против HTTP под API-ключом |
+| `src/data/read-scope.ts` | область чтения, постусловие по статусу, номер страницы пагинации |
+| `src/data/queries.ts` | чистые запросы: что именно спрашивается у Payload |
+| `src/data/content.ts` | выполнение запросов, типы результата из `@otkritka/cms/types` |
+
+Доступ — Local API (`getPayload` + `@otkritka/cms/config`), а не HTTP к CMS:
+API-ключ наследует роль своего пользователя, а обе роли проекта видят черновики,
+поэтому публичный рендер обязан читать без ключа. Слой работает ТОЛЬКО внутри
+сборки Astro (Vite): конфиг Payload — это `.ts` из другого пакета, и входной
+сервер (`src/server/*`, настоящий Node ESM) его импортировать не может.
+
+```bash
+pnpm exec vitest run apps/web/src/data/data-access.test.ts
+pnpm --filter @otkritka/web run smoke:data    # 21 проверка на живой базе, с уборкой
+```
+
+Известный пробел, важный для Э3-05…Э3-09: метаданные изображений
+(`card-images.variants[]` — ключи, ширины, высоты) этим слоем недостижимы.
+Доступ на чтение у коллекции — `authenticatedAccess`, поэтому аноним получает
+`Forbidden`, а население связи при `depth > 0` подставляет идентификатор. Значит
+`srcset` из сохранённых вариантов (условие C8) собрать пока нечем — вопрос
+владельцу `apps/cms`, зафиксирован в отчёте задачи Э3-02.

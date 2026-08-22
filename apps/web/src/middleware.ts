@@ -29,12 +29,54 @@
  * смоуком, и приёмкой SEO.
  */
 
+import { readFile } from 'node:fs/promises';
+
 import type { MiddlewareHandler } from 'astro';
 
 import { adminRoutePrefix, decideRequestTarget } from './routing/path-policy.js';
-import { serverEnv } from './server-env.js';
+import { decideMediaRequest, resolveMediaRoot } from './server/media-files.js';
+import { serverEnv, workspaceRoot } from './server-env.js';
+import { resolveServableFile } from './server/static-files.js';
 
-export const onRequest: MiddlewareHandler = (context, next) => {
+/**
+ * Производные изображений в тех входах, где нашего сервера нет, — то есть в
+ * `astro dev`.
+ *
+ * На собранном сервере эта ветка недостижима: `/media/...` перехватывает входной
+ * обработчик (`server/front-door.ts`) до маршрутизации Astro. Здесь она нужна
+ * ровно для того, чтобы `pnpm dev` показывал изображения: файлы лежат вне
+ * `public/`, и Vite про них ничего не знает.
+ *
+ * Своих правил у ветки нет: решение по пути — `decideMediaRequest`, заголовки —
+ * `derivativeCacheHeaders` внутри него, разрешение файла и обе проверки границы
+ * корня — `resolveServableFile`. Нет только `ETag`/304 и потоковой отдачи: это
+ * оптимизации HTTP, и в dev-сервере они ничего не решают.
+ */
+async function respondWithDerivative(pathname: string): Promise<Response | null> {
+  const decision = decideMediaRequest(pathname);
+  if (decision.action === 'not-media') {
+    return null;
+  }
+  if (decision.action === 'not-found') {
+    return new Response(null, { status: 404 });
+  }
+
+  const file = await resolveServableFile(
+    resolveMediaRoot(serverEnv(), workspaceRoot()),
+    decision.key,
+  );
+  if (file === null) {
+    return new Response(null, { status: 404 });
+  }
+
+  const body = await readFile(file.path);
+  return new Response(body, {
+    headers: { ...decision.headers, 'Content-Length': String(file.size) },
+    status: 200,
+  });
+}
+
+export const onRequest: MiddlewareHandler = async (context, next) => {
   // Заранее отрендеренные маршруты проходят без проверки, и это НЕ послабление.
   // Во время сборки Astro запрашивает такую страницу по имени её ФАЙЛА:
   // при `build.format: 'file'` это `/zzprobe.html`, при `directory` — путь с
@@ -86,6 +128,14 @@ export const onRequest: MiddlewareHandler = (context, next) => {
     // отдельный статус или отдельное тело подсказывали бы, что по этому адресу
     // что-то есть, а путь админки не публикуется (решение Ч-22).
     return new Response(null, { status: 404 });
+  }
+
+  // Ветка нужна только `astro dev`: на собранном сервере запрос к `/media/...`
+  // сюда не доходит. Стоит после всех отказов политики пути — то есть в том же
+  // порядке, что и во входном обработчике.
+  const derivative = await respondWithDerivative(decision.pathname);
+  if (derivative !== null) {
+    return derivative;
   }
 
   return next();

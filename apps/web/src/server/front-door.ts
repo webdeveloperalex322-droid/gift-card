@@ -6,9 +6,14 @@
  *
  *   1. решение по СЫРОЙ цели (`decideRequestTarget`) — до статики и до
  *      маршрутизации Astro;
- *   2. статика из `dist/client` — только файлы, только `GET`/`HEAD`, без
+ *   2. производные изображений из корня `/media` — только файлы, только
+ *      `GET`/`HEAD`, без редиректов и без листинга. Раньше статики сборки
+ *      намеренно: пространство `/media` принадлежит хранилищу (решение Ч-03), и
+ *      файл, случайно оказавшийся в `dist/client/media/...`, не должен уметь его
+ *      подменить;
+ *   3. статика из `dist/client` — только файлы, только `GET`/`HEAD`, без
  *      редиректов;
- *   3. приложение Astro — всё остальное, включая SSR-маршруты и собственный 404.
+ *   4. приложение Astro — всё остальное, включая SSR-маршруты и собственный 404.
  *
  * Почему порядок принадлежит нам, а не адаптеру: в `mode: 'standalone'` шаги 2 и
  * 3 выполнялись до пользовательского middleware, и три класса путей (`%2F`,
@@ -28,6 +33,7 @@ import path from 'node:path';
 
 import { decideRequestTarget } from '../routing/path-policy.js';
 import type { AstroNodeHandler } from './astro-app.js';
+import { decideMediaRequest, type MediaDecision } from './media-files.js';
 import { tryServeStaticFile } from './static-files.js';
 
 /** Имя файла заранее отрендеренной страницы 404 в корне статики. */
@@ -73,6 +79,16 @@ export interface FrontDoorOptions {
   readonly clientRoot: string;
   /** Путь админки Payload из `PAYLOAD_ADMIN_PATH`. */
   readonly adminPath: string;
+  /**
+   * Корень ПУБЛИЧНЫХ производных изображений (`IMAGE_STORAGE_DERIVATIVES_ROOT`).
+   *
+   * Функция, а не строка, и вызывается только на запросе к `/media/...`:
+   * значение обязательное и без дефолта, но без изображений сайт поднимается и
+   * страницы отдаёт. Валить старт сервера из-за незаполненного параметра
+   * означало бы блокировать работу, которая от него не зависит, — то же решение
+   * и по той же причине принято в `apps/cms` (`src/images/storage-env.ts`).
+   */
+  readonly mediaRoot: () => string;
   /** Куда писать диагностику. Отдельным параметром, чтобы тест не читал stderr. */
   readonly logError: (message: string) => void;
 }
@@ -151,6 +167,39 @@ export function createFrontDoor(
   };
 }
 
+/**
+ * Отдаёт производную изображения из корня хранилища.
+ *
+ * Приложению Astro запрос под `/media/` не передаётся НИКОГДА: пространство
+ * файлов и пространство страниц разные, и промах по файлу здесь — это 404, а не
+ * повод искать страницу с таким адресом. Промах по методу (`POST` и прочие) —
+ * тоже 404: у адреса файла других методов нет.
+ */
+async function serveMedia(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: FrontDoorOptions,
+  decision: Exclude<MediaDecision, { readonly action: 'not-media' }>,
+): Promise<void> {
+  if (decision.action === 'not-found') {
+    options.logError(`404 на «${req.url ?? '—'}»: ${decision.reason}`);
+    await respondNotFound(res, options.clientRoot);
+    return;
+  }
+
+  const served = await tryServeStaticFile({
+    headers: decision.headers,
+    relativePath: decision.key,
+    req,
+    res,
+    root: options.mediaRoot(),
+  });
+
+  if (!served) {
+    await respondNotFound(res, options.clientRoot);
+  }
+}
+
 async function route(
   req: IncomingMessage,
   res: ServerResponse,
@@ -191,6 +240,12 @@ async function route(
       return;
 
     case 'serve': {
+      const media = decideMediaRequest(decision.pathname);
+      if (media.action !== 'not-media') {
+        await serveMedia(req, res, options, media);
+        return;
+      }
+
       const served = await tryServeStaticFile({
         pathname: decision.pathname,
         req,

@@ -9,6 +9,8 @@
     "check": "astro check",
     "dev": "astro dev",
     "preview": "astro preview",
+    "smoke:data": "pnpm --filter @otkritka/cms exec payload run ../web/scripts/smoke-data.ts",
+    "smoke:media": "node ./scripts/smoke-media.mjs",
     "smoke:slash": "node ./scripts/smoke-trailing-slash.mjs",
     "start": "node ./dist/server/entry.mjs",
     "sync": "astro sync"
@@ -18,7 +20,9 @@
     "@otkritka/cms": "workspace:*",
     "@otkritka/images": "workspace:*",
     "@otkritka/shared": "workspace:*",
-    "astro": "^7.2.4"
+    "astro": "^7.2.4",
+    "graphql": "^16.14.2",
+    "payload": "3.88.0"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",

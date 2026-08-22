@@ -10,6 +10,11 @@ export default defineConfig({
   resolve: {
     alias: {
       '@otkritka/shared': resolvePath('./packages/shared/src/index.ts'),
+      // Подпуть объявлен ДО корневого и это обязательно: строковый алиас Vite
+      // сопоставляется по ПРЕФИКСУ, поэтому корневой алиас превратил бы
+      // «@otkritka/images/media» в «.../src/index.ts/media». Порядок ключей
+      // объекта сохраняется, первое совпадение выигрывает.
+      '@otkritka/images/media': resolvePath('./packages/images/src/media.ts'),
       '@otkritka/images': resolvePath('./packages/images/src/index.ts'),
     },
   },

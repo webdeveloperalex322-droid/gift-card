@@ -120,6 +120,12 @@ importers:
       astro:
         specifier: ^7.2.4
         version: 7.2.4(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.3)(@types/node@24.13.3)(sass@1.77.4)(tsx@4.22.4)(yaml@2.9.0)
+      graphql:
+        specifier: ^16.14.2
+        version: 16.14.2
+      payload:
+        specifier: 3.88.0
+        version: 3.88.0(graphql@16.14.2)(typescript@5.9.3)
     devDependencies:
       '@astrojs/check':
         specifier: ^0.9.10

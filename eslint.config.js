@@ -63,6 +63,9 @@ export default tseslint.config(
       ecmaVersion: 2023,
       sourceType: 'module',
       globals: {
+        // Buffer нужен смоуку отдачи файлов (apps/web/scripts/smoke-media.mjs):
+        // он сравнивает БАЙТЫ ответа с байтами файла, а не текст.
+        Buffer: 'readonly',
         console: 'readonly',
         // Node >= 22: глобальные fetch/Response и таймеры. Нужны служебным
         // скриптам, которые ходят по поднятому серверу
