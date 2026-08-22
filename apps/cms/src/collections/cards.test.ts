@@ -175,6 +175,72 @@ describe('cards: служебные поля не пишутся снаружи'
     }
   });
 
+  it('зеркало вариантов заведено и закрыто от записи снаружи (задача Э3-03a)', () => {
+    // Поле системное: его пишет только хук карточки, читающий связанную запись
+    // изображения. Открытое на запись, оно означало бы подмену src и srcset
+    // опубликованной страницы через API — при неизменном URL самой страницы.
+    const variants = findField(subFields(findField(Cards.fields, 'derivative')), 'variants');
+    expect(variants.type).toBe('array');
+    const access = 'access' in variants ? variants.access : undefined;
+    expect(access?.create).toBe(systemFieldAccess);
+    expect(access?.update).toBe(systemFieldAccess);
+  });
+
+  it('systemFieldAccess отказывает обеим ролям, а не только сервисному аккаунту', () => {
+    // Формальная опора предыдущего теста: «закрыто» означает отказ и админу
+    // тоже. Значение ставит сервер; ручная правка ключа производной означала бы
+    // расхождение записи с хранилищем.
+    for (const role of ['admin', 'ai-editor']) {
+      const decision = systemFieldAccess({
+        req: { user: { collection: 'users', id: 1, role } },
+      } as unknown as Parameters<typeof systemFieldAccess>[0]);
+      expect(decision, role).toBe(false);
+    }
+  });
+
+  it('состав зеркала вариантов — только то, что нужно разметке (условие C8)', () => {
+    // Ни `byteSize`, ни `targetWidth`: второй источник ширины в зеркале означал
+    // бы, что дескриптор w, атрибут width и ключ файла могут разойтись.
+    const mirror = subFields(
+      findField(subFields(findField(Cards.fields, 'derivative')), 'variants'),
+    );
+    expect(mirror.map((field) => ('name' in field ? field.name : '—'))).toEqual([
+      'key',
+      'format',
+      'width',
+      'height',
+    ]);
+  });
+
+  it('формы полей зеркала и источника совпадают поле в поле', () => {
+    // Сверяется с ИСТОЧНИКОМ (`card-images.variants`), а не с литералами: два
+    // описания одного поля расходятся молча, и обнаружилось бы это на странице.
+    const mirror = subFields(
+      findField(subFields(findField(Cards.fields, 'derivative')), 'variants'),
+    );
+    const source = subFields(findField(CardImages.fields, 'variants'));
+    for (const name of ['key', 'format', 'width', 'height']) {
+      expect(findField(mirror, name), name).toEqual(findField(source, name));
+    }
+    // byteSize есть только у источника: разметке он не нужен.
+    expect(source.map((field) => ('name' in field ? field.name : '—'))).toContain('byteSize');
+  });
+
+  it('зеркало ЧИТАЕТСЯ анонимно: у поля нет ограничения на чтение', () => {
+    // Обратная сторона запрета на запись. Публичный рендер читает карточку как
+    // аноним, поэтому ограничение чтения на этом поле сделало бы зеркало
+    // бесполезным — ровно от этого оно и завелось. Отсекает черновики
+    // `contentReadAccess` на уровне КОЛЛЕКЦИИ (тест в policies.test.ts): анониму
+    // отдаются только записи со status=published, а вместе с ними и зеркало.
+    const derivative = findField(Cards.fields, 'derivative');
+    const variants = findField(subFields(derivative), 'variants');
+    for (const field of [derivative, variants, ...subFields(variants)]) {
+      const access = 'access' in field ? field.access : undefined;
+      expect(access?.read, 'name' in field ? String(field.name) : 'derivative').toBeUndefined();
+    }
+    expect(Cards.access?.read).toBe(contentReadAccess);
+  });
+
   it('граница nameSuffix совпадает с источником: зеркало не мягче оригинала', () => {
     // Находка ревизии от 2026-08-22: у зеркала стояло `min: 1`, у источника
     // (`card-images.nameSuffix`) и у `normalizeUniqueSuffix` в @otkritka/images

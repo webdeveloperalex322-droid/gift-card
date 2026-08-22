@@ -9,15 +9,19 @@
  * документом, поэтому там зеркало полей и проверка того, что БУДЕТ записано;
  * `beforeChange` — сброс одноразового подтверждения:
  *
- *   1. **зеркалирование состояния файла в карточку.** Поля `pHash` и
- *      `derivative.{keyBase,nameStem,nameSuffix,revision}` заведены в `cards`
- *      задачей Э1-04 и заполняются отсюда — из связанной записи `card-images`.
- *      Это осознанная денормализация, а не второй источник истины: карточка —
- *      опубликованная сущность, и условие C1 («ключ зафиксирован при первой
- *      публикации») формулируется именно про неё. Плюс поиск визуальных дублей
- *      идёт по СТАТУСУ (`published` и `review`), а статус живёт у карточки:
- *      без зеркала пришлось бы читать все изображения и потом сопоставлять их с
- *      карточками;
+ *   1. **зеркалирование состояния файла в карточку.** Поля `pHash`,
+ *      `derivative.{keyBase,nameStem,nameSuffix,revision}` и
+ *      `derivative.variants[]` заполняются отсюда — из связанной записи
+ *      `card-images`. Это осознанная денормализация, а не второй источник
+ *      истины, и у неё три причины: коллекция `card-images` анонимно не
+ *      читается, а публичный рендер читает как аноним на `depth: 0` — без
+ *      зеркала `srcset` и `width`/`height` собрать нечем (задача Э3-03a);
+ *      карточка — опубликованная сущность, и условие C1 («ключ зафиксирован при
+ *      первой публикации») формулируется именно про неё; поиск визуальных дублей
+ *      идёт по СТАТУСУ (`published` и `review`), а статус живёт у карточки — без
+ *      зеркала пришлось бы читать все изображения и сопоставлять их с
+ *      карточками. Форма строки варианта общая с источником
+ *      (`./image-mirror.ts`), поэтому описания полей не могут разъехаться;
  *   2. **смена изображения у публиковавшейся карточки — только `admin`.**
  *      Замена меняет URL всех производных (ТЗ §6.7), а URL файла постоянен
  *      (ТЗ §6.3). Право проверяется и на уровне поля (`cardImageFieldAccess`,
@@ -52,6 +56,13 @@ import {
   isVisualDuplicateDecision,
   similarFingerprint,
 } from './duplicates';
+import {
+  type ImageMirror,
+  EMPTY_IMAGE_MIRROR,
+  readImageMirror,
+  readMirroredVariants,
+  sameMirroredVariants,
+} from './image-mirror';
 
 /**
  * Отказ «сменить изображение публиковавшейся карточки может только admin».
@@ -121,26 +132,24 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null;
 }
 
-interface ImagePipelineState {
-  readonly keyBase: string | null;
-  readonly nameStem: string | null;
-  readonly nameSuffix: number | null;
-  readonly pHash: string | null;
-  readonly revision: string | null;
-}
-
-const EMPTY_STATE: ImagePipelineState = {
-  keyBase: null,
-  nameStem: null,
-  nameSuffix: null,
-  pHash: null,
-  revision: null,
-};
-
+/**
+ * Состояние связанного файла для зеркала.
+ *
+ * Читается с `overrideAccess: true` намеренно: хук работает от имени сервера, а
+ * не от имени вызывающего. Иначе сервисный аккаунт, которому часть полей
+ * изображения не отдаётся (`originalKey`, `storageId` — только `admin`), получал
+ * бы карточку с частично пустым зеркалом, и состав зеркала зависел бы от того,
+ * КТО сохранил запись.
+ *
+ * Число прочитанных строк `variants` возвращается отдельно от пригодных: их
+ * расхождение означает битую строку в источнике, и хук об этом предупреждает —
+ * «производных стало меньше» иначе прошло бы молча и вылезло бы более узким
+ * `srcset` на странице.
+ */
 async function readImageState(args: {
   readonly imageId: string;
   readonly req: PayloadRequest;
-}): Promise<ImagePipelineState> {
+}): Promise<{ readonly mirror: ImageMirror; readonly rawVariantRows: number }> {
   const image = await args.req.payload.findByID({
     collection: 'card-images',
     id: args.imageId,
@@ -151,16 +160,13 @@ async function readImageState(args: {
   });
 
   if (image === null) {
-    return EMPTY_STATE;
+    return { mirror: EMPTY_IMAGE_MIRROR, rawVariantRows: 0 };
   }
 
   const doc = asRecord(image);
   return {
-    keyBase: readString(doc.keyBase),
-    nameStem: readString(doc.nameStem),
-    nameSuffix: typeof doc.nameSuffix === 'number' ? doc.nameSuffix : null,
-    pHash: readString(doc.pHash),
-    revision: readString(doc.revision),
+    mirror: readImageMirror(doc),
+    rawVariantRows: Array.isArray(doc.variants) ? doc.variants.length : 0,
   };
 }
 
@@ -272,7 +278,30 @@ function mirrorImageAndGuardDuplicates(
       rethrow(imageChangeRefusal());
     }
 
-    const state = imageId === null ? EMPTY_STATE : await readImageState({ imageId, req });
+    const read =
+      imageId === null
+        ? { mirror: EMPTY_IMAGE_MIRROR, rawVariantRows: 0 }
+        : await readImageState({ imageId, req });
+    const state = read.mirror;
+
+    if (read.rawVariantRows !== state.variants.length) {
+      req.payload.logger.warn(
+        `[cards] У изображения #${String(imageId)} из ${String(read.rawVariantRows)} строк ` +
+          `variants пригодны ${String(state.variants.length)}: остальные отброшены как ` +
+          'непригодные (пустой ключ, неизвестный формат, неположительный размер). srcset ' +
+          'страницы будет уже ожидаемого — это дефект записи изображения, а не разметки.',
+      );
+    }
+
+    // Строки массива, уже лежащие в записи. Если значения не изменились, они
+    // остаются КАК ЕСТЬ (вместе с внутренними id строк): несодержательное
+    // сохранение карточки тогда не переписывает массив в базе вовсе, а не
+    // «переписывает теми же значениями». Условие C1 звучит про ключи, и
+    // буквальная неизменность проверяется проще, чем равенство.
+    const storedDerivative = asRecord(previous.derivative);
+    const keepStoredVariants =
+      Array.isArray(storedDerivative.variants) &&
+      sameMirroredVariants(readMirroredVariants(storedDerivative), state.variants);
 
     next.pHash = state.pHash;
     next.derivative = {
@@ -281,6 +310,7 @@ function mirrorImageAndGuardDuplicates(
       nameStem: state.nameStem,
       nameSuffix: state.nameSuffix,
       revision: state.revision,
+      variants: keepStoredVariants ? storedDerivative.variants : state.variants,
     };
 
     const gate = asRecord(next.visualDuplicate);

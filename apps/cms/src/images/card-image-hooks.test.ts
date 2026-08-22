@@ -200,6 +200,7 @@ describe('зеркало служебных полей пути', () => {
       nameStem: 'otkrytka-mame',
       nameSuffix: null,
       revision: 'a1b2c3d4',
+      variants: [],
     });
   });
 
@@ -215,6 +216,270 @@ describe('зеркало служебных полей пути', () => {
     expect(result.pHash).toBeNull();
     expect((result.visualDuplicate as Doc).similar).toEqual([]);
     expect((result.visualDuplicate as Doc).decisionFor).toBeNull();
+  });
+});
+
+/**
+ * Зеркало вариантов производных (задача Э3-03a) — блокер публичного рендера
+ * Э3-04/Э3-05.
+ *
+ * Проверяется главное свойство: значения в зеркале совпадают с
+ * `card-images.variants[]` ДО ЕДИНИЦЫ. Ни округления, ни «запрошенной» ширины
+ * (`targetWidth`), ни пересчёта из настроек пайплайна: дескриптор `w` в srcset,
+ * атрибут `width` и ключ производной обязаны собираться из одного и того же
+ * значения (условие C8).
+ */
+describe('зеркало вариантов производных', () => {
+  /**
+   * Запись изображения со «неровными» размерами. Значения намеренно не круглые:
+   * 427 при запрошенных 640 — ровно тот случай, в котором `targetWidth` и
+   * фактическая ширина расходятся, и подмена одного другим прошла бы незаметно.
+   */
+  const image: Doc = {
+    id: 100,
+    keyBase: 'cards/a1b2c3d4/otkrytka-mame',
+    nameStem: 'otkrytka-mame',
+    nameSuffix: null,
+    pHash: 'ffffffffffffffff',
+    revision: 'a1b2c3d4',
+    variants: [
+      {
+        byteSize: 3120,
+        format: 'avif',
+        height: 213,
+        id: 'row-1',
+        key: 'cards/a1b2c3d4/otkrytka-mame-320.avif',
+        targetWidth: 320,
+        width: 320,
+      },
+      {
+        byteSize: 8801,
+        format: 'webp',
+        height: 427,
+        id: 'row-2',
+        key: 'cards/a1b2c3d4/otkrytka-mame-640.webp',
+        targetWidth: 640,
+        width: 640,
+      },
+      {
+        byteSize: 12045,
+        format: 'jpeg',
+        height: 427,
+        id: 'row-3',
+        key: 'cards/a1b2c3d4/otkrytka-mame-640.jpg',
+        targetWidth: 640,
+        width: 640,
+      },
+    ],
+  };
+
+  function variantsOf(result: Doc): unknown {
+    return (result.derivative as Doc).variants;
+  }
+
+  it('значения совпадают с card-images.variants[] до единицы', async () => {
+    const { req } = stand({ images: { '100': image }, user: ADMIN });
+    const result = (await beforeValidate({
+      data: { image: 100, status: 'draft' },
+      operation: 'update',
+      originalDoc: { ...DRAFT_CARD, status: 'draft' },
+      req,
+    })) as Doc;
+
+    expect(variantsOf(result)).toEqual([
+      { format: 'avif', height: 213, key: 'cards/a1b2c3d4/otkrytka-mame-320.avif', width: 320 },
+      { format: 'webp', height: 427, key: 'cards/a1b2c3d4/otkrytka-mame-640.webp', width: 640 },
+      { format: 'jpeg', height: 427, key: 'cards/a1b2c3d4/otkrytka-mame-640.jpg', width: 640 },
+    ]);
+  });
+
+  it('в зеркало не попадают ни targetWidth, ни byteSize, ни id строки источника', async () => {
+    const { req } = stand({ images: { '100': image }, user: ADMIN });
+    const result = (await beforeValidate({
+      data: { image: 100, status: 'draft' },
+      operation: 'update',
+      originalDoc: { ...DRAFT_CARD, status: 'draft' },
+      req,
+    })) as Doc;
+
+    const rows = variantsOf(result) as Record<string, unknown>[];
+    for (const row of rows) {
+      expect(Object.keys(row).sort()).toEqual(['format', 'height', 'key', 'width']);
+    }
+  });
+
+  it('порядок строк источника сохраняется', async () => {
+    // Порядок источника — группами по формату в порядке предпочтения
+    // (avif, webp, jpeg), внутри группы по возрастанию ширины. Зеркало его не
+    // трогает: перестановка означала бы, что <source> в <picture> встанут в
+    // другом порядке, а первый подходящий и выбирается браузером.
+    const { req } = stand({ images: { '100': image }, user: ADMIN });
+    const result = (await beforeValidate({
+      data: { image: 100, status: 'draft' },
+      operation: 'update',
+      originalDoc: { ...DRAFT_CARD, status: 'draft' },
+      req,
+    })) as Doc;
+
+    const rows = variantsOf(result) as { format: string; key: string }[];
+    expect(rows.map((row) => row.format)).toEqual(['avif', 'webp', 'jpeg']);
+    expect(rows.map((row) => row.key)).toEqual(
+      (image.variants as { key: string }[]).map((row) => row.key),
+    );
+  });
+
+  it('снаружи зеркало не принимается: значение из запроса игнорируется', async () => {
+    // Второй контур защиты. Первый — доступ к полю (`systemFieldAccess`), он
+    // срезает значение до этой фазы; здесь проверяется, что даже дошедшее
+    // значение затирается прочитанным из записи изображения. Иначе внешний
+    // клиент подменил бы src опубликованной карточки на чужой файл.
+    const { req } = stand({ images: { '100': image }, user: AI_EDITOR });
+    const result = (await beforeValidate({
+      data: {
+        derivative: {
+          keyBase: 'chuzhoy/kluch',
+          revision: 'deadbeef',
+          variants: [
+            { format: 'webp', height: 1, key: 'chuzhoy/kluch/podmena-1.webp', width: 1 },
+          ],
+        },
+        image: 100,
+        status: 'draft',
+      },
+      operation: 'update',
+      originalDoc: { ...DRAFT_CARD, status: 'draft' },
+      req,
+    })) as Doc;
+
+    const mirror = result.derivative as Doc;
+    expect(mirror.keyBase).toBe('cards/a1b2c3d4/otkrytka-mame');
+    expect(mirror.revision).toBe('a1b2c3d4');
+    expect(variantsOf(result)).toEqual([
+      { format: 'avif', height: 213, key: 'cards/a1b2c3d4/otkrytka-mame-320.avif', width: 320 },
+      { format: 'webp', height: 427, key: 'cards/a1b2c3d4/otkrytka-mame-640.webp', width: 640 },
+      { format: 'jpeg', height: 427, key: 'cards/a1b2c3d4/otkrytka-mame-640.jpg', width: 640 },
+    ]);
+  });
+
+  it('несодержательное сохранение ключи не меняет — строки остаются те же (условие C1)', async () => {
+    // Сохранённое зеркало передаётся в originalDoc так, как его отдаёт база:
+    // со внутренними id строк. Если значения не изменились, эти же строки и
+    // остаются — массив в базе не переписывается вовсе.
+    const storedRows = [
+      { format: 'avif', height: 213, id: 'stored-1', key: 'cards/a1b2c3d4/otkrytka-mame-320.avif', width: 320 },
+      { format: 'webp', height: 427, id: 'stored-2', key: 'cards/a1b2c3d4/otkrytka-mame-640.webp', width: 640 },
+      { format: 'jpeg', height: 427, id: 'stored-3', key: 'cards/a1b2c3d4/otkrytka-mame-640.jpg', width: 640 },
+    ];
+    const { req } = stand({ images: { '100': image }, user: ADMIN });
+
+    const result = (await beforeValidate({
+      data: { image: 100, status: 'published', title: 'Заголовок изменён' },
+      operation: 'update',
+      originalDoc: {
+        ...PUBLISHED_CARD,
+        derivative: {
+          keyBase: 'cards/a1b2c3d4/otkrytka-mame',
+          nameStem: 'otkrytka-mame',
+          nameSuffix: null,
+          revision: 'a1b2c3d4',
+          variants: storedRows,
+        },
+      },
+      req,
+    })) as Doc;
+
+    expect(variantsOf(result)).toBe(storedRows);
+    expect((result.derivative as Doc).revision).toBe('a1b2c3d4');
+  });
+
+  it('замена байтов (новая revision) даёт новые ключи в зеркале (Э2-06)', async () => {
+    const replaced: Doc = {
+      ...image,
+      keyBase: 'cards/99999999/otkrytka-mame',
+      revision: '99999999',
+      variants: [
+        {
+          byteSize: 8801,
+          format: 'webp',
+          height: 427,
+          key: 'cards/99999999/otkrytka-mame-640.webp',
+          width: 640,
+        },
+      ],
+    };
+    const { req } = stand({ images: { '100': replaced }, user: ADMIN });
+
+    const result = (await beforeValidate({
+      data: { image: 100, status: 'published' },
+      operation: 'update',
+      originalDoc: {
+        ...PUBLISHED_CARD,
+        derivative: {
+          keyBase: 'cards/a1b2c3d4/otkrytka-mame',
+          nameStem: 'otkrytka-mame',
+          nameSuffix: null,
+          revision: 'a1b2c3d4',
+          variants: [
+            { format: 'webp', height: 427, id: 'stored-2', key: 'cards/a1b2c3d4/otkrytka-mame-640.webp', width: 640 },
+          ],
+        },
+      },
+      req,
+    })) as Doc;
+
+    expect((result.derivative as Doc).revision).toBe('99999999');
+    expect(variantsOf(result)).toEqual([
+      { format: 'webp', height: 427, key: 'cards/99999999/otkrytka-mame-640.webp', width: 640 },
+    ]);
+  });
+
+  it('снятое изображение опустошает зеркало вариантов', async () => {
+    const { req } = stand({ user: ADMIN });
+    const result = (await beforeValidate({
+      data: { image: null, status: 'draft' },
+      operation: 'update',
+      originalDoc: {
+        ...DRAFT_CARD,
+        derivative: {
+          variants: [
+            { format: 'webp', height: 427, id: 'stored-2', key: 'cards/a1b2c3d4/otkrytka-mame-640.webp', width: 640 },
+          ],
+        },
+      },
+      req,
+    })) as Doc;
+
+    expect(variantsOf(result)).toEqual([]);
+    expect((result.derivative as Doc).keyBase).toBeNull();
+  });
+
+  it('битая строка источника отбрасывается и попадает в журнал', async () => {
+    const warnings: string[] = [];
+    const broken: Doc = {
+      ...image,
+      variants: [
+        { format: 'webp', height: 0, key: 'cards/a1b2c3d4/otkrytka-mame-640.webp', width: 640 },
+        (image.variants as Doc[])[2],
+      ],
+    };
+    const { req } = stand({ images: { '100': broken }, user: ADMIN });
+    (req.payload as unknown as { logger: { warn: (message: unknown) => void } }).logger.warn = (
+      message: unknown,
+    ) => {
+      warnings.push(String(message));
+    };
+
+    const result = (await beforeValidate({
+      data: { image: 100, status: 'draft' },
+      operation: 'update',
+      originalDoc: { ...DRAFT_CARD, status: 'draft' },
+      req,
+    })) as Doc;
+
+    expect(variantsOf(result)).toEqual([
+      { format: 'jpeg', height: 427, key: 'cards/a1b2c3d4/otkrytka-mame-640.jpg', width: 640 },
+    ]);
+    expect(warnings.some((line) => line.includes('пригодны 1'))).toBe(true);
   });
 });
 

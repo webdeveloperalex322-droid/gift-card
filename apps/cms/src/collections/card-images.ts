@@ -7,7 +7,7 @@ import {
   contentWriteAccess,
   systemFieldAccess,
 } from '../access/policies';
-import { OUTPUT_FORMATS } from '@otkritka/images';
+import { imageVariantFields } from '../images/image-mirror';
 import { cardImageUploadHooks } from '../images/upload-hooks';
 import { ACCEPTED_IMAGE_MIME_TYPES } from '../images/upload-validation';
 
@@ -39,9 +39,6 @@ import { ACCEPTED_IMAGE_MIME_TYPES } from '../images/upload-validation';
  * же изображение в разных контекстах описывается по-разному, а alt — часть
  * страницы, а не файла.
  */
-
-/** Формат производной: набор закрыт набором вывода пайплайна. */
-const formatOptions = OUTPUT_FORMATS.map((format) => ({ label: format, value: format }));
 
 const systemAccess = { create: systemFieldAccess, update: systemFieldAccess } as const;
 
@@ -171,18 +168,17 @@ const cardImageFields: Field[] = [
     access: systemAccess,
     admin: {
       description:
-        'Производные: ключ, формат и ФАКТИЧЕСКИЕ размеры каждого файла. Из этого поля ' +
-        'apps/web берёт и путь, и дескриптор w в srcset, и атрибуты width/height — из ' +
-        'одного места (условие C8), а не пересчитывает из настроек.',
+        'Производные: ключ, формат и ФАКТИЧЕСКИЕ размеры каждого файла. ИСТОЧНИК зеркала ' +
+        'в карточке (cards.derivative.variants): публичный рендер читает как аноним, а эта ' +
+        'коллекция анонимно не читается, поэтому те же четыре поля хук переносит в карточку. ' +
+        'Формы полей общие с зеркалом (imageVariantFields), чтобы им нельзя было ' +
+        'разъехаться: и путь, и дескриптор w в srcset, и атрибуты width/height берутся из ' +
+        'одного места (условие C8), а не пересчитываются из настроек.',
       readOnly: true,
     },
-    fields: [
-      { name: 'key', type: 'text', required: true },
-      { name: 'format', type: 'select', options: formatOptions, required: true },
-      { name: 'width', type: 'number', required: true },
-      { name: 'height', type: 'number', required: true },
-      { name: 'byteSize', type: 'number', required: true },
-    ],
+    // `byteSize` есть только здесь: в зеркале его нет, потому что разметка его не
+    // использует (см. шапку `../images/image-mirror.ts`).
+    fields: imageVariantFields({ includeByteSize: true }),
   },
   {
     name: 'source',

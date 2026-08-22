@@ -24,6 +24,7 @@ interface HookArgs {
   readonly doc?: Doc;
   readonly operation?: string;
   readonly originalDoc?: Doc;
+  readonly previousDoc?: Doc;
   readonly req: PayloadRequest;
 }
 
@@ -62,11 +63,15 @@ const AI_EDITOR = { collection: 'users', id: 2, role: 'ai-editor' };
 
 interface Stand {
   readonly claims: string[];
+  /** Идентификаторы карточек, которые хук пересохранил, в порядке вызова. */
+  readonly resaved: (number | string)[];
   readonly req: PayloadRequest;
   readonly storage: ReturnType<typeof memoryStorage>;
 }
 
 function stand(options: {
+  /** Карточки, ссылающиеся на изображение: их зеркало обязано обновиться. */
+  readonly cards?: readonly Doc[];
   readonly file?: Buffer;
   /** Имена, которые реестр считает занятыми. */
   readonly takenStems?: readonly string[];
@@ -76,6 +81,7 @@ function stand(options: {
 }): Stand {
   const storage = memoryStorage();
   const claims: string[] = [];
+  const resaved: (number | string)[] = [];
   const taken = new Set(options.takenStems ?? []);
 
   const req = {
@@ -103,16 +109,36 @@ function stand(options: {
         claims.push(stem);
         return Promise.resolve({ id: claims.length });
       },
-      find: ({ collection }: { collection: string }) =>
-        collection === 'image-name-claims'
-          ? Promise.resolve({ docs: [...taken].map((stem) => ({ stem })) })
-          : Promise.resolve({ docs: [] }),
+      find: ({ collection }: { collection: string }) => {
+        if (collection === 'image-name-claims') {
+          return Promise.resolve({ docs: [...taken].map((stem) => ({ stem })) });
+        }
+        if (collection === 'cards') {
+          return Promise.resolve({ docs: [...(options.cards ?? [])] });
+        }
+        return Promise.resolve({ docs: [] });
+      },
       logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      update: ({ collection, data, id }: { collection: string; data: Doc; id: number | string }) => {
+        if (collection !== 'cards') {
+          return Promise.reject(new Error(`неожиданная коллекция ${collection}`));
+        }
+        // Данные пустые НАМЕРЕННО: зеркало пишет хук карточки, перечитывая
+        // запись изображения. Стенд это фиксирует — второй автор зеркала был бы
+        // ошибкой.
+        if (Object.keys(data).length > 0) {
+          return Promise.reject(
+            new Error(`пересинхронизация передала данные: ${JSON.stringify(data)}`),
+          );
+        }
+        resaved.push(id);
+        return Promise.resolve({ id });
+      },
     },
     user: options.user,
   } as unknown as PayloadRequest;
 
-  return { claims, req, storage };
+  return { claims, req, resaved, storage };
 }
 
 function hooksFor(storage: ImageStorage): {
@@ -309,6 +335,117 @@ describe('замена байтов: право и уборка', () => {
     expect(storage.derivatives.has('cards/aaaaaaaa/otkrytka-mame-320.webp')).toBe(false);
     expect(storage.originals.has(String(STORED.originalKey))).toBe(false);
   }, 60_000);
+});
+
+/**
+ * Пересинхронизация зеркала в карточках (задача Э3-03a).
+ *
+ * Зеркало (`cards.derivative.*`, `cards.derivative.variants[]`) заполняет хук
+ * КАРТОЧКИ при её сохранении. Значит, замена байтов изображения сама по себе его
+ * не обновляет: прежние файлы удаляются, а опубликованная карточка продолжает
+ * ссылаться на удалённые ключи — до следующего сохранения карточки, которого
+ * может не случиться никогда. Именно это и проверяется здесь.
+ */
+describe('зеркало в карточках после сохранения изображения', () => {
+  const OLD_STATE: Doc = {
+    ...STORED,
+    variants: [
+      { byteSize: 100, format: 'webp', height: 200, key: 'cards/aaaaaaaa/otkrytka-mame-320.webp', width: 320 },
+    ],
+  };
+  const NEW_STATE: Doc = {
+    ...STORED,
+    keyBase: 'cards/bbbbbbbb/otkrytka-mame',
+    revision: 'bbbbbbbb',
+    variants: [
+      { byteSize: 100, format: 'webp', height: 200, key: 'cards/bbbbbbbb/otkrytka-mame-320.webp', width: 320 },
+    ],
+  };
+
+  it('новые ключи после замены байтов доводятся до карточек сразу', async () => {
+    const { req, resaved, storage } = stand({
+      cards: [{ id: 11, slug: 'otkrytka-mame' }],
+      user: ADMIN,
+    });
+    const hooks = hooksFor(storage);
+
+    await hooks.afterChange({
+      doc: NEW_STATE,
+      operation: 'update',
+      previousDoc: OLD_STATE,
+      req,
+    });
+
+    expect(resaved).toEqual([11]);
+  });
+
+  it('несодержательное сохранение изображения карточки не трогает (условие C1)', async () => {
+    // Правка названия изображения: ключи те же. Пересохранение карточек здесь
+    // было бы не «безвредным», а лишним изменением записи, которое попадает в
+    // updatedAt опубликованной страницы.
+    const { req, resaved, storage } = stand({
+      cards: [{ id: 11, slug: 'otkrytka-mame' }],
+      user: ADMIN,
+    });
+    const hooks = hooksFor(storage);
+
+    await hooks.afterChange({
+      doc: { ...OLD_STATE, title: 'Другое название' },
+      operation: 'update',
+      previousDoc: OLD_STATE,
+      req,
+    });
+
+    expect(resaved).toEqual([]);
+  });
+
+  it('первая загрузка карточек не касается: ссылок на новое изображение ещё нет', async () => {
+    const { req, resaved, storage } = stand({
+      cards: [{ id: 11, slug: 'otkrytka-mame' }],
+      user: ADMIN,
+    });
+    const hooks = hooksFor(storage);
+
+    await hooks.afterChange({ doc: NEW_STATE, operation: 'create', req });
+
+    expect(resaved).toEqual([]);
+  });
+
+  it('изменившаяся высота одного варианта — уже причина обновить зеркало', async () => {
+    // Не только ключи: разметка резервирует место по height, и расхождение на
+    // пиксель — это CLS.
+    const nudged: Doc = {
+      ...OLD_STATE,
+      variants: [
+        { byteSize: 100, format: 'webp', height: 201, key: 'cards/aaaaaaaa/otkrytka-mame-320.webp', width: 320 },
+      ],
+    };
+    const { req, resaved, storage } = stand({ cards: [{ id: 11 }], user: ADMIN });
+    const hooks = hooksFor(storage);
+
+    await hooks.afterChange({
+      doc: nudged,
+      operation: 'update',
+      previousDoc: OLD_STATE,
+      req,
+    });
+
+    expect(resaved).toEqual([11]);
+  });
+
+  it('карточек нет — пересинхронизировать нечего, и это не ошибка', async () => {
+    const { req, resaved, storage } = stand({ user: ADMIN });
+    const hooks = hooksFor(storage);
+
+    await hooks.afterChange({
+      doc: NEW_STATE,
+      operation: 'update',
+      previousDoc: OLD_STATE,
+      req,
+    });
+
+    expect(resaved).toEqual([]);
+  });
 });
 
 describe('удаление записи', () => {

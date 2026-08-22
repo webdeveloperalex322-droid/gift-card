@@ -16,13 +16,15 @@
  *     уже определил mime-тип по СОДЕРЖИМОМУ файла и размеры, а проверки доступа
  *     к полям отработали, поэтому служебные значения не будут срезаны. Файлы на
  *     этой фазе НЕ пишутся — только считаются (см. ниже);
- *   - `afterChange` — запись подготовленных файлов и уборка объектов, которые
- *     заменённая версия оставила позади. Запись именно здесь (находка ревизии от
- *     2026-08-22): на фазе `beforeChange` документа ещё нет, и любой отказ
- *     дальше по операции оставлял бы производные в ПУБЛИЧНОМ пространстве без
- *     записи, а хука «операция провалилась» у Payload нет. Уборка тоже здесь и
- *     после записи новых файлов: удалить прежние раньше значит на время оставить
- *     запись, ссылающуюся на несуществующие файлы;
+ *   - `afterChange` — запись подготовленных файлов, пересинхронизация зеркала в
+ *     карточках и уборка объектов, которые заменённая версия оставила позади.
+ *     Запись именно здесь (находка ревизии от 2026-08-22): на фазе
+ *     `beforeChange` документа ещё нет, и любой отказ дальше по операции
+ *     оставлял бы производные в ПУБЛИЧНОМ пространстве без записи, а хука
+ *     «операция провалилась» у Payload нет. Уборка тоже здесь и после записи
+ *     новых файлов: удалить прежние раньше значит на время оставить запись,
+ *     ссылающуюся на несуществующие файлы. Пересинхронизация зеркала стоит
+ *     МЕЖДУ ними — см. {@link resyncMirroredCards};
  *   - `afterDelete` — удаление и производных, и оригинала удалённой записи.
  *     Имя файла при этом НЕ освобождается: реестр `image-name-claims` строк не
  *     теряет, поэтому суффикс `-N` после удаления не переиспользуется.
@@ -47,6 +49,7 @@ import {
 import { isAdmin } from '../access/roles';
 import { rethrow } from '../collections/content-hooks';
 import { ContentRuleError } from '../collections/status-model';
+import { readImageMirror, sameImageMirror } from './image-mirror';
 import { type StemCandidate, MAX_NAME_SUFFIX } from './keys';
 import {
   type PendingObjects,
@@ -388,6 +391,128 @@ function retireReplacedObjects(
   };
 }
 
+/**
+ * Пределы обхода карточек при пересинхронизации зеркала.
+ *
+ * ПРОВЕНАНС ЗНАЧЕНИЙ: выбор агента, не решение человека (кандидаты в реестр
+ * решений). Практически одно изображение стоит на одной карточке — поле `image`
+ * не `hasMany`, — но уникальность этой связи ничем не обеспечена, и молчаливое
+ * усечение обхода оставило бы часть карточек с зеркалом на УДАЛЁННЫЕ файлы.
+ * Поэтому обход постраничный по курсору, а достижение предела — громкое
+ * предупреждение, а не тихий выход.
+ */
+const MIRROR_RESYNC_PAGE_SIZE = 100;
+const MIRROR_RESYNC_MAX_CARDS = 1000;
+
+/**
+ * Обновляет зеркало у карточек, ссылающихся на это изображение (задача Э3-03a).
+ *
+ * ЗАЧЕМ. Зеркало (`cards.derivative.*`, `cards.derivative.variants[]`,
+ * `cards.pHash`) заполняет хук КАРТОЧКИ при её сохранении. Значит, замена байтов
+ * изображения (Э2-06) сама по себе зеркало не обновляет: у записи изображения
+ * появляются новая `revision` и новые ключи, прежние файлы удаляются
+ * ({@link retireReplacedObjects}), а опубликованная карточка продолжает ссылаться
+ * на ключи, которых больше нет, — до следующего сохранения карточки, которого
+ * может не случиться никогда. На публичной странице это отсутствующее
+ * изображение при 200 в HTML.
+ *
+ * ПОЧЕМУ `data: {}`, а не подстановка новых значений. Единственный автор зеркала
+ * — хук карточки: он перечитывает связанную запись и пишет то, что там лежит.
+ * Передать значения отсюда значило бы завести второй автор одного поля, и
+ * расхождение между ними было бы видно только на странице.
+ *
+ * ПОЧЕМУ это не «публикация кодом» и не обход правил. Операция не меняет ни
+ * статус, ни `robots`, ни slug: все проверки статусной модели построены на
+ * ИЗМЕНЕНИИ этих значений (`statusChanged` в `planStatusTransition`,
+ * `assertVisualDuplicateResolved`), поэтому сохранение без их изменения проходит
+ * ровно те же хуки и ничего не открывает. Право заменить байты уже проверено
+ * выше ({@link assertReplacementAllowed}) — до пайплайна и до этой фазы.
+ *
+ * ПОЧЕМУ ФАЗА ИМЕННО ЗДЕСЬ И В ЭТОМ ПОРЯДКЕ: после записи новых файлов и ДО
+ * удаления прежних. Обратный порядок оставлял бы промежуток, в котором зеркало
+ * карточки указывает на уже удалённые объекты.
+ */
+function resyncMirroredCards(): CollectionAfterChangeHook<ImageRecord> {
+  return async ({ doc, operation, previousDoc, req }) => {
+    if (operation !== 'update') {
+      return doc;
+    }
+
+    const next = readImageMirror(asRecord(doc));
+    const previous = readImageMirror(asRecord(previousDoc));
+    if (sameImageMirror(previous, next)) {
+      // Несодержательное сохранение изображения (правка названия): ключи те же,
+      // трогать карточки незачем. Это и есть условие C1 со стороны карточки.
+      return doc;
+    }
+
+    let cursor: number | string | null = null;
+    const touched: string[] = [];
+    let truncated = false;
+
+    for (;;) {
+      // Тип страницы объявлен ЯВНО по той же причине, что в поиске визуальных
+      // дублей: иначе вывод типа замыкается на сужение `cursor` (TS7022).
+      const page: { docs: { id: number | string; slug?: string | null }[] } =
+        await req.payload.find({
+          collection: 'cards',
+          depth: 0,
+          limit: MIRROR_RESYNC_PAGE_SIZE,
+          overrideAccess: true,
+          req,
+          select: { slug: true },
+          sort: 'id',
+          where: {
+            and: [
+              { image: { equals: doc.id } },
+              ...(cursor === null ? [] : [{ id: { greater_than: cursor } }]),
+            ],
+          },
+        });
+
+      for (const card of page.docs) {
+        // Пустые данные: зеркало пишет хук карточки, перечитывая изображение.
+        await req.payload.update({
+          collection: 'cards',
+          id: card.id,
+          data: {},
+          depth: 0,
+          overrideAccess: true,
+          req,
+        });
+        touched.push(readString(card.slug) ?? `#${String(card.id)}`);
+      }
+
+      const last = page.docs.at(-1);
+      if (last === undefined || page.docs.length < MIRROR_RESYNC_PAGE_SIZE) {
+        break;
+      }
+      if (touched.length >= MIRROR_RESYNC_MAX_CARDS) {
+        truncated = true;
+        break;
+      }
+      cursor = last.id;
+    }
+
+    req.payload.logger.info(
+      `[card-images] Ключи производных изменились (revision ${String(previous.revision)} → ` +
+        `${String(next.revision)}): зеркало обновлено у карточек ${String(touched.length)} ` +
+        `(${touched.join(', ')}). Иначе опубликованная страница ссылалась бы на удалённые ` +
+        'файлы до следующего сохранения карточки.',
+    );
+
+    if (truncated) {
+      req.payload.logger.error(
+        `[card-images] Обход карточек ОБОРВАН по пределу ${String(MIRROR_RESYNC_MAX_CARDS)}: ` +
+          'часть карточек осталась с зеркалом на удалённые файлы. Требуется ручная ' +
+          'пересинхронизация — молчать об этом нельзя, на страницах не будет изображений.',
+      );
+    }
+
+    return doc;
+  };
+}
+
 /** Удаляет файлы удалённой записи. Имя файла при этом остаётся занятым навсегда. */
 function deleteStoredObjects(options: UploadHookOptions): CollectionAfterDeleteHook<ImageRecord> {
   return async ({ doc, req }) => {
@@ -421,8 +546,10 @@ export interface UploadHooks {
 
 export function cardImageUploadHooks(options: UploadHookOptions = {}): UploadHooks {
   return {
-    // Порядок значим: сначала записать новое, потом убрать прежнее.
-    afterChange: [writePendingObjects(options), retireReplacedObjects(options)],
+    // Порядок значим: записать новое → перевести на него зеркало карточек →
+    // убрать прежнее. Любая другая расстановка оставляет промежуток, в котором
+    // запись или зеркало ссылаются на файлы, которых нет.
+    afterChange: [writePendingObjects(options), resyncMirroredCards(), retireReplacedObjects(options)],
     afterDelete: [deleteStoredObjects(options)],
     // Хранилище этой фазе больше не нужно: она только считает, а пишет
     // `writePendingObjects` из afterChange.
