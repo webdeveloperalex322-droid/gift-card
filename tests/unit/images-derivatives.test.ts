@@ -5,16 +5,17 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import {
+  assertSourceImageWidth,
   buildDerivativeObjectKey,
   computePerceptualHash,
   DEFAULT_ENCODE_QUALITY,
-  DEFAULT_IMAGE_WIDTHS,
   FALLBACK_FORMAT,
   generateDerivatives,
   hammingDistance,
   IMAGE_ENCODE_QUALITY_ENV_KEY,
-  IMAGE_WIDTHS_ENV_KEY,
+  IMAGE_WIDTHS,
   METADATA_CONTAINER_BY_FORMAT,
+  MIN_SOURCE_IMAGE_WIDTH,
   OUTPUT_FORMATS,
 } from '@otkritka/images';
 import {
@@ -46,10 +47,10 @@ afterAll(async () => {
 });
 
 describe('генерация производных: форматы и ширины', () => {
-  it('на дефолтном наборе ширин даёт все форматы для каждой подходящей ширины', async () => {
+  it('на окончательном наборе ширин даёт все форматы для каждой подходящей ширины', async () => {
     const result = await generateDerivatives(sourcePng, { env: {} });
 
-    const expectedWidths = DEFAULT_IMAGE_WIDTHS.filter((width) => width <= SOURCE_WIDTH);
+    const expectedWidths = IMAGE_WIDTHS.filter((width) => width <= SOURCE_WIDTH);
     expect(expectedWidths.length).toBeGreaterThan(1);
 
     for (const format of OUTPUT_FORMATS) {
@@ -114,45 +115,25 @@ describe('генерация производных: форматы и шири�
   });
 });
 
-describe('генерация производных: апскейл и границы', () => {
+describe('генерация производных: апскейл — норма, вариант пропускается (блок 5 п. 1)', () => {
   it('не апскейлит: ширина больше исходной пропускается и попадает в отчёт', async () => {
-    const result = await generateDerivatives(sourcePng, {
-      widths: [640, SOURCE_WIDTH, SOURCE_WIDTH + 1, 4096],
-    });
+    // Апскейл подтверждён человеком как норма 2026-08-21: он портит качество и
+    // раздувает вес без выигрыша, поэтому вариант не выдумывается.
+    const narrow = await createPatternPng({ width: 700, height: 525 });
+    const result = await generateDerivatives(narrow, { formats: [FALLBACK_FORMAT] });
 
-    expect(result.skippedWidths).toEqual([SOURCE_WIDTH + 1, 4096]);
-    const producedWidths = [...new Set(result.variants.map((variant) => variant.targetWidth))];
-    expect(producedWidths).toEqual([640, SOURCE_WIDTH]);
+    expect(result.requestedWidths).toEqual([...IMAGE_WIDTHS]);
+    expect(result.skippedWidths).toEqual(IMAGE_WIDTHS.filter((width) => width > 700));
+    const producedWidths = [...new Set(result.variants.map((variant) => variant.width))];
+    expect(producedWidths).toEqual([320, 640]);
     for (const variant of result.variants) {
-      expect(variant.width).toBeLessThanOrEqual(SOURCE_WIDTH);
+      expect(variant.width).toBeLessThanOrEqual(700);
     }
-  });
-
-  it('исходник уже всех настроенных ширин: отдаётся натуральная ширина, а не пустой результат', async () => {
-    // Пустой набор вариантов Э2-05 не отличит от успеха, и карточка ушла бы
-    // без изображения. Поэтому крайний случай даёт ровно один вариант на
-    // формат — в натуральную ширину исходника, без апскейла, с явным признаком.
-    const tiny = await createPatternPng({ width: 240, height: 180 });
-    const result = await generateDerivatives(tiny, { widths: [320, 640] });
-
-    expect(result.variants).toHaveLength(OUTPUT_FORMATS.length);
-    expect(result.nativeWidthFallback).toBe(true);
-    expect(result.skippedWidths).toEqual([320, 640]);
-    expect(result.source.width).toBe(240);
-    for (const variant of result.variants) {
-      expect(variant.targetWidth).toBe(240);
-      expect(variant.width).toBe(240);
-      expect(variant.height).toBe(180);
-    }
-    expect(new Set(result.variants.map((variant) => variant.format))).toEqual(
-      new Set(OUTPUT_FORMATS),
-    );
   });
 
   it('вариантов не бывает ноль: набор форматов всегда даёт хотя бы один файл', async () => {
     for (const source of [
-      await createPatternPng({ width: 240, height: 180 }),
-      await createPatternPng({ width: 4, height: 4 }),
+      await createPatternPng({ width: MIN_SOURCE_IMAGE_WIDTH, height: 480 }),
       sourcePng,
     ]) {
       const result = await generateDerivatives(source, { widths: [320, 640] });
@@ -161,25 +142,94 @@ describe('генерация производных: апскейл и гран�
   });
 });
 
-describe('генерация производных: набор ширин — параметр, а не константа', () => {
-  it('переопределение через IMAGE_WIDTHS реально меняет результат', async () => {
-    const overridden = await generateDerivatives(sourcePng, {
-      env: { [IMAGE_WIDTHS_ENV_KEY]: '400,800' },
-    });
+describe('минимальная ширина исходника 640 px (Ч-09, блок 5 п. 2)', () => {
+  it('исходник уже 640 px отклоняется с внятной ошибкой и в пайплайн не идёт', async () => {
+    for (const width of [4, 240, 500, MIN_SOURCE_IMAGE_WIDTH - 1]) {
+      const tiny = await createPatternPng({ width, height: Math.max(1, Math.round(width * 0.75)) });
 
-    expect(overridden.requestedWidths).toEqual([400, 800]);
-    expect([...new Set(overridden.variants.map((variant) => variant.width))]).toEqual([400, 800]);
-    expect(overridden.variants).toHaveLength(2 * OUTPUT_FORMATS.length);
+      await expect(
+        generateDerivatives(tiny, { widths: [320], formats: [FALLBACK_FORMAT] }),
+      ).rejects.toThrow(new RegExp(String(MIN_SOURCE_IMAGE_WIDTH)));
+      await expect(
+        generateDerivatives(tiny, { widths: [320], formats: [FALLBACK_FORMAT] }),
+      ).rejects.toThrow(/ширин/i);
+    }
   });
 
-  it('явные widths в вызове важнее окружения', async () => {
-    const result = await generateDerivatives(sourcePng, {
-      widths: [500],
-      env: { [IMAGE_WIDTHS_ENV_KEY]: '400,800' },
+  it('ровно 640 px принимается: граница включительна', async () => {
+    const border = await createPatternPng({ width: MIN_SOURCE_IMAGE_WIDTH, height: 480 });
+    const result = await generateDerivatives(border, {
+      widths: [320, 640],
+      formats: [FALLBACK_FORMAT],
     });
 
-    expect(result.requestedWidths).toEqual([500]);
-    expect([...new Set(result.variants.map((variant) => variant.width))]).toEqual([500]);
+    expect(result.source.width).toBe(MIN_SOURCE_IMAGE_WIDTH);
+    expect(result.variants.map((variant) => variant.width)).toEqual([320, 640]);
+  });
+
+  it('порог доступен Э2-05 отдельной проверкой — до чтения байтов пайплайном', () => {
+    expect(assertSourceImageWidth(MIN_SOURCE_IMAGE_WIDTH)).toBe(MIN_SOURCE_IMAGE_WIDTH);
+    expect(assertSourceImageWidth(1920)).toBe(1920);
+    for (const width of [0, -1, 1.5, 639, Number.NaN]) {
+      expect(() => assertSourceImageWidth(width), String(width)).toThrow(/ширин/i);
+    }
+  });
+
+  it('при пороге 640 nativeWidthFallback недостижим (условие C8)', async () => {
+    // Признак остаётся в типе как legacy: он описывает записи, загруженные до
+    // введения порога. Текущий пайплайн выставить его не может ни на одном
+    // допустимом входе — минимальная ширина любого разрешённого набора не
+    // превышает 640, а исходник уже 640 px до пайплайна не доходит.
+    const sources = [
+      await createPatternPng({ width: MIN_SOURCE_IMAGE_WIDTH, height: 480 }),
+      await createPatternPng({ width: 700, height: 525 }),
+      sourcePng,
+    ];
+
+    for (const source of sources) {
+      for (const widths of [undefined, [320], [640], [320, 640], [320, 1920]]) {
+        const result = await generateDerivatives(source, {
+          ...(widths === undefined ? {} : { widths }),
+          formats: [FALLBACK_FORMAT],
+        });
+
+        expect(result.nativeWidthFallback, JSON.stringify(widths)).toBe(false);
+        expect(result.variants.length).toBeGreaterThan(0);
+        expect(Math.min(...result.variants.map((variant) => variant.width))).toBeLessThanOrEqual(
+          MIN_SOURCE_IMAGE_WIDTH,
+        );
+      }
+    }
+  });
+});
+
+describe('генерация производных: набор ширин окончателен (Ч-09)', () => {
+  it('окружение набор не меняет: расширить его через IMAGE_WIDTHS невозможно', async () => {
+    const result = await generateDerivatives(sourcePng, {
+      formats: [FALLBACK_FORMAT],
+      env: { IMAGE_WIDTHS: '400,800,3840' },
+    });
+
+    expect(result.requestedWidths).toEqual([...IMAGE_WIDTHS]);
+    expect(result.variants.map((variant) => variant.width)).toEqual(
+      IMAGE_WIDTHS.filter((width) => width <= SOURCE_WIDTH),
+    );
+  });
+
+  it('явные widths сужают набор, но добавить ширину не могут', async () => {
+    const result = await generateDerivatives(sourcePng, {
+      widths: [320, 960],
+      formats: [FALLBACK_FORMAT],
+    });
+
+    expect(result.requestedWidths).toEqual([320, 960]);
+    expect(result.variants.map((variant) => variant.width)).toEqual([320, 960]);
+
+    for (const widths of [[320, 400], [500], [320, 3840]]) {
+      await expect(
+        generateDerivatives(sourcePng, { widths, formats: [FALLBACK_FORMAT] }),
+      ).rejects.toThrow(/ширин/i);
+    }
   });
 
   it('набор форматов без резервного JPEG отклоняется (ТЗ §6.2)', async () => {
@@ -332,47 +382,42 @@ describe('генерация производных: EXIF-ориентация (
   });
 });
 
-describe('генерация производных: fallback делает ключ зависимым от настроек (условие C7)', () => {
-  it('добавление ширины убирает fallback и меняет ключ уже опубликованного файла', async () => {
-    const narrow = await createPatternPng({ width: 500, height: 500 });
+describe('условие C7 закрыто: ключ производной не зависит от настроек', () => {
+  it('ключ воспроизводится повторным прогоном того же исходника', async () => {
+    // Раньше сценарий «исходник 500 px, ширины 640/960 → ключ -500, потом
+    // добавили 320 → ключ не воспроизводится» был открытым риском (C7). Теперь
+    // он невозможен с двух сторон: набор ширин заморожен (добавить нельзя), а
+    // исходник 500 px до пайплайна не доходит.
+    const narrow = await createPatternPng({ width: 700, height: 525 });
     const keyOf = (width: number): string =>
       buildDerivativeObjectKey({
         prefix: 'cards',
-        revision: 'r1',
+        revision: '9f3a1c7d',
         description: 'otkrytka mame',
         format: FALLBACK_FORMAT,
         width,
       });
 
-    const before = await generateDerivatives(narrow, {
-      widths: [640, 960],
-      formats: [FALLBACK_FORMAT],
-    });
-    const after = await generateDerivatives(narrow, {
-      widths: [320, 640, 960],
-      formats: [FALLBACK_FORMAT],
-    });
+    const first = await generateDerivatives(narrow, { formats: [FALLBACK_FORMAT] });
+    const second = await generateDerivatives(narrow, { formats: [FALLBACK_FORMAT] });
 
-    expect(before.nativeWidthFallback).toBe(true);
-    expect(before.variants[0]?.width).toBe(500);
-    // Ширины только ДОБАВИЛИ, а fallback исчез и ширина варианта другая.
-    expect(after.nativeWidthFallback).toBe(false);
-    expect(after.variants[0]?.width).toBe(320);
-    expect(keyOf(after.variants[0]?.width ?? 0)).not.toBe(keyOf(before.variants[0]?.width ?? 0));
+    expect(first.nativeWidthFallback).toBe(false);
+    expect(second.variants.map((variant) => keyOf(variant.width))).toEqual(
+      first.variants.map((variant) => keyOf(variant.width)),
+    );
+    expect(first.variants.map((variant) => variant.width)).toEqual([320, 640]);
   });
 
-  it('в режиме fallback «запрошенные минус пропущенные» пусто, а варианты есть', async () => {
-    const narrow = await createPatternPng({ width: 500, height: 500 });
+  it('«запрошенные минус пропущенные» = ширины вариантов: сложного случая больше нет', async () => {
+    const narrow = await createPatternPng({ width: 700, height: 525 });
 
-    const result = await generateDerivatives(narrow, {
-      widths: [640, 960],
-      formats: [FALLBACK_FORMAT],
-    });
+    const result = await generateDerivatives(narrow, { formats: [FALLBACK_FORMAT] });
 
-    expect(result.requestedWidths).toEqual([640, 960]);
-    expect(result.skippedWidths).toEqual([640, 960]);
-    expect(result.variants).toHaveLength(1);
-    expect(result.variants[0]?.targetWidth).toBe(500);
+    expect(result.requestedWidths).toEqual([...IMAGE_WIDTHS]);
+    expect(result.skippedWidths).toEqual([960, 1280, 1920]);
+    expect(result.variants.map((variant) => variant.targetWidth)).toEqual(
+      result.requestedWidths.filter((width) => !result.skippedWidths.includes(width)),
+    );
   });
 });
 

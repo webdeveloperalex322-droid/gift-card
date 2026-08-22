@@ -3,15 +3,16 @@ import * as imagesPackage from '@otkritka/images';
 import {
   comparePerceptualHashes,
   DEFAULT_ENCODE_QUALITY,
-  DEFAULT_IMAGE_WIDTHS,
+  DEFAULT_PHASH_DISTANCE_THRESHOLD,
   findSimilarPerceptualHashes,
   IMAGE_ENCODE_QUALITY_ENV_KEY,
-  IMAGE_WIDTHS_ENV_KEY,
+  IMAGE_WIDTHS,
+  MIN_SOURCE_IMAGE_WIDTH,
   OUTPUT_FORMATS,
   PHASH_BITS,
   PHASH_DISTANCE_THRESHOLD_ENV_KEY,
+  resolveDerivativeWidths,
   resolveEncodeQuality,
-  resolveImageWidths,
   resolvePhashDistanceThreshold,
 } from '@otkritka/images';
 
@@ -43,49 +44,89 @@ afterEach(() => {
   }
 });
 
-// Конфигурация пайплайна изображений: набор ширин (Ч-09) и порог pHash (Ч-08).
-// Оба вопроса человеком не закрыты, поэтому проверяется именно механизм:
-// ширины — параметр с документированным дефолтом из примера ТЗ §6.2,
-// порог — параметр БЕЗ дефолта, потому что числа нет ни в ТЗ, ни в решениях.
-describe('конфигурация: набор ширин (IMAGE_WIDTHS, Ч-09)', () => {
-  it('без переменной окружения отдаёт документированный ряд из примера ТЗ §6.2', () => {
-    expect(resolveImageWidths({})).toEqual([320, 640, 960, 1280, 1920]);
-    expect(DEFAULT_IMAGE_WIDTHS).toEqual([320, 640, 960, 1280, 1920]);
+// Конфигурация пайплайна изображений. Оба вопроса закрыты человеком 2026-08-21:
+// набор ширин (Ч-09) — 320/640/960/1280/1920 окончательно, добавление
+// запрещено; порог pHash (Ч-08) — 14, с возможностью переопределить настройкой.
+describe('конфигурация: набор ширин окончателен (Ч-09)', () => {
+  it('набор — константа пакета: 320/640/960/1280/1920, защищена от правки', () => {
+    expect(IMAGE_WIDTHS).toEqual([320, 640, 960, 1280, 1920]);
+    expect(Object.isFrozen(IMAGE_WIDTHS)).toBe(true);
   });
 
-  it('пустое значение читает как «не сконфигурировано» и берёт дефолт', () => {
-    expect(resolveImageWidths({ [IMAGE_WIDTHS_ENV_KEY]: '   ' })).toEqual(DEFAULT_IMAGE_WIDTHS);
-  });
+  it('без аргумента отдаёт весь набор, и каждый вызов — свежая копия', () => {
+    const first = resolveDerivativeWidths();
+    const second = resolveDerivativeWidths();
 
-  it('читает ширины из окружения, сортирует и убирает повторы', () => {
-    expect(resolveImageWidths({ [IMAGE_WIDTHS_ENV_KEY]: '960, 480,960' })).toEqual([480, 960]);
-  });
-
-  it('не подменяет дефолтом мусорное значение, а сообщает об ошибке', () => {
-    expect(() => resolveImageWidths({ [IMAGE_WIDTHS_ENV_KEY]: '640,abc' })).toThrow(
-      /IMAGE_WIDTHS/,
-    );
-    expect(() => resolveImageWidths({ [IMAGE_WIDTHS_ENV_KEY]: '0' })).toThrow(/IMAGE_WIDTHS/);
-    expect(() => resolveImageWidths({ [IMAGE_WIDTHS_ENV_KEY]: '-640' })).toThrow(/IMAGE_WIDTHS/);
-    expect(() => resolveImageWidths({ [IMAGE_WIDTHS_ENV_KEY]: '640.5' })).toThrow(/IMAGE_WIDTHS/);
-  });
-
-  it('отдаёт свежую копию, а сам дефолт защищён от правки', () => {
-    const first = resolveImageWidths({});
-    const second = resolveImageWidths({});
+    expect(first).toEqual([...IMAGE_WIDTHS]);
     expect(first).not.toBe(second);
-    expect(first).toEqual(second);
-    expect(Object.isFrozen(DEFAULT_IMAGE_WIDTHS)).toBe(true);
+    expect(first).not.toBe(IMAGE_WIDTHS);
+  });
+
+  it('набор НЕЛЬЗЯ расширить через окружение: переменной IMAGE_WIDTHS больше нет', () => {
+    // Проверка по поведению: любое значение в окружении набор не меняет.
+    setProcessEnv('IMAGE_WIDTHS', '400,800,3840');
+    expect(resolveDerivativeWidths()).toEqual([...IMAGE_WIDTHS]);
+
+    // И дополнительно по API: ключа окружения для набора ширин пакет не
+    // экспортирует — иначе «добавление запрещено» нечем проверить.
+    const suspicious = Object.keys(imagesPackage).filter((name) =>
+      /WIDTHS.*ENV|ENV.*WIDTHS/i.test(name),
+    );
+    expect(suspicious).toEqual([]);
+  });
+
+  it('добавление ширины отклоняется, даже если она «разумная»', () => {
+    for (const widths of [
+      [320, 400],
+      [320, 3840],
+      [320, 640, 641],
+      [200, 320],
+    ]) {
+      expect(() => resolveDerivativeWidths(widths), widths.join(',')).toThrow(/добавл/i);
+    }
+  });
+
+  it('сужение до подмножества разрешено', () => {
+    expect(resolveDerivativeWidths([640, 320])).toEqual([320, 640]);
+    expect(resolveDerivativeWidths([320])).toEqual([320]);
+    expect(resolveDerivativeWidths([320, 320, 1920])).toEqual([320, 1920]);
+    // Ровно порог исходника — граница включительно.
+    expect(resolveDerivativeWidths([640])).toEqual([640]);
+  });
+
+  it('сужение не поднимает минимальную ширину выше порога исходника', () => {
+    // Иначе допустимый по порогу исходник (640 px) снова не попадал бы ни в
+    // одну ширину, включался бы nativeWidthFallback и ключ снова зависел бы от
+    // набора настроек (условие C7).
+    for (const widths of [[960], [960, 1280], [1920]]) {
+      expect(() => resolveDerivativeWidths(widths), widths.join(',')).toThrow(
+        new RegExp(String(MIN_SOURCE_IMAGE_WIDTH)),
+      );
+    }
+  });
+
+  it('пустое сужение отклоняется', () => {
+    expect(() => resolveDerivativeWidths([])).toThrow(/пуст/i);
+  });
+
+  it('минимальная ширина набора не превышает порога исходника — отсюда недостижимость fallback', () => {
+    expect(MIN_SOURCE_IMAGE_WIDTH).toBe(640);
+    expect(Math.min(...IMAGE_WIDTHS)).toBeLessThanOrEqual(MIN_SOURCE_IMAGE_WIDTH);
+    expect(IMAGE_WIDTHS).toContain(MIN_SOURCE_IMAGE_WIDTH);
   });
 });
 
-describe('конфигурация: порог pHash (PHASH_DISTANCE_THRESHOLD, Ч-08)', () => {
-  it('без заданного порога отказывает с внятной ошибкой, а не берёт число из кода', () => {
-    expect(() => resolvePhashDistanceThreshold({})).toThrow(/PHASH_DISTANCE_THRESHOLD/);
-    expect(() => resolvePhashDistanceThreshold({})).toThrow(/Ч-08/);
-    expect(() => resolvePhashDistanceThreshold({ [PHASH_DISTANCE_THRESHOLD_ENV_KEY]: '' })).toThrow(
-      /PHASH_DISTANCE_THRESHOLD/,
-    );
+describe('конфигурация: порог pHash (PHASH_DISTANCE_THRESHOLD, Ч-08 закрыт)', () => {
+  it('без настройки берёт утверждённое значение 14, а не отказывает', () => {
+    expect(DEFAULT_PHASH_DISTANCE_THRESHOLD).toBe(14);
+    expect(resolvePhashDistanceThreshold({})).toBe(DEFAULT_PHASH_DISTANCE_THRESHOLD);
+    expect(resolvePhashDistanceThreshold({ [PHASH_DISTANCE_THRESHOLD_ENV_KEY]: '' })).toBe(14);
+    expect(resolvePhashDistanceThreshold({ [PHASH_DISTANCE_THRESHOLD_ENV_KEY]: '   ' })).toBe(14);
+  });
+
+  it('дефолт лежит в вилке замеров 12 ≤ порог < 24', () => {
+    expect(DEFAULT_PHASH_DISTANCE_THRESHOLD).toBeGreaterThanOrEqual(12);
+    expect(DEFAULT_PHASH_DISTANCE_THRESHOLD).toBeLessThan(24);
   });
 
   it('читает целое значение из окружения', () => {
@@ -93,8 +134,8 @@ describe('конфигурация: порог pHash (PHASH_DISTANCE_THRESHOLD, 
     expect(resolvePhashDistanceThreshold({ [PHASH_DISTANCE_THRESHOLD_ENV_KEY]: ' 0 ' })).toBe(0);
   });
 
-  it('отвергает значения вне диапазона расстояния Хэмминга и нецелые', () => {
-    for (const value of ['-1', '65', '4.5', 'близко']) {
+  it('мусорное значение — ошибка, а не молчаливая подмена дефолтом', () => {
+    for (const value of ['-1', '65', '4.5', 'близко', '14,15']) {
       expect(() =>
         resolvePhashDistanceThreshold({ [PHASH_DISTANCE_THRESHOLD_ENV_KEY]: value }),
       ).toThrow(/PHASH_DISTANCE_THRESHOLD/);
@@ -102,23 +143,12 @@ describe('конфигурация: порог pHash (PHASH_DISTANCE_THRESHOLD, 
     expect(PHASH_BITS).toBe(64);
   });
 
-  it('дефолта порога нет нигде: на пустом окружении отказывает КАЖДАЯ функция сравнения', () => {
-    // Основное доказательство — поведение, а не имена экспортов: функция с
-    // безобидным названием, но с зашитым числом, провалит именно этот тест.
+  it('на пустом окружении сравнение работает и берёт дефолт (подсказка, а не блокировка)', () => {
     const hash = '0'.repeat(16);
     setProcessEnv(PHASH_DISTANCE_THRESHOLD_ENV_KEY, undefined);
 
-    expect(() => comparePerceptualHashes(hash, hash)).toThrow(/PHASH_DISTANCE_THRESHOLD/);
-    expect(() => findSimilarPerceptualHashes(hash, [{ id: 'a', hash }])).toThrow(
-      /PHASH_DISTANCE_THRESHOLD/,
-    );
-  });
-
-  it('дополнительно: имени с дефолтом порога в публичном API тоже нет', () => {
-    const suspicious = Object.keys(imagesPackage).filter(
-      (name) => /phash/i.test(name) && /default|threshold_value|fallback/i.test(name),
-    );
-    expect(suspicious).toEqual([]);
+    expect(comparePerceptualHashes(hash, hash).threshold).toBe(DEFAULT_PHASH_DISTANCE_THRESHOLD);
+    expect(findSimilarPerceptualHashes(hash, [{ id: 'a', hash }])).toHaveLength(1);
   });
 
   it('читает порог из process.env, когда срез окружения не передан', () => {
@@ -131,17 +161,6 @@ describe('конфигурация: порог pHash (PHASH_DISTANCE_THRESHOLD, 
 });
 
 describe('конфигурация: чтение process.env — ветка, которая работает в продакшене', () => {
-  it('ширины берутся из process.env, когда срез окружения не передан', () => {
-    setProcessEnv(IMAGE_WIDTHS_ENV_KEY, '480,960');
-    expect(resolveImageWidths()).toEqual([480, 960]);
-
-    setProcessEnv(IMAGE_WIDTHS_ENV_KEY, undefined);
-    expect(resolveImageWidths()).toEqual(DEFAULT_IMAGE_WIDTHS);
-
-    setProcessEnv(IMAGE_WIDTHS_ENV_KEY, 'широко');
-    expect(() => resolveImageWidths()).toThrow(/IMAGE_WIDTHS/);
-  });
-
   it('качество берётся из process.env, когда срез окружения не передан', () => {
     setProcessEnv(IMAGE_ENCODE_QUALITY_ENV_KEY, 'jpeg=70');
     expect(resolveEncodeQuality().jpeg).toBe(70);
@@ -151,14 +170,16 @@ describe('конфигурация: чтение process.env — ветка, к�
   });
 });
 
-describe('конфигурация: качество кодирования (IMAGE_ENCODE_QUALITY)', () => {
-  it('без переменной отдаёт дефолты по всем форматам вывода', () => {
+describe('конфигурация: качество кодирования (IMAGE_ENCODE_QUALITY, Ч-29 закрыт)', () => {
+  it('без переменной отдаёт утверждённые значения по всем форматам вывода', () => {
     const quality = resolveEncodeQuality({});
 
     expect(Object.keys(quality).sort()).toEqual([...OUTPUT_FORMATS].sort());
     for (const format of OUTPUT_FORMATS) {
       expect(quality[format]).toBe(DEFAULT_ENCODE_QUALITY[format]);
     }
+    // Решение Ч-29: avif 50 / webp 80 / jpeg 82.
+    expect(DEFAULT_ENCODE_QUALITY).toEqual({ avif: 50, webp: 80, jpeg: 82 });
   });
 
   it('переопределяет только указанные форматы', () => {
@@ -171,9 +192,9 @@ describe('конфигурация: качество кодирования (IMA
 
   it('не подменяет дефолтом мусорное значение', () => {
     for (const value of ['jpeg', 'jpeg=', 'jpeg=0', 'jpeg=101', 'jpeg=82.5', 'gif=50', '=50']) {
-      expect(() =>
-        resolveEncodeQuality({ [IMAGE_ENCODE_QUALITY_ENV_KEY]: value }),
-      ).toThrow(/IMAGE_ENCODE_QUALITY/);
+      expect(() => resolveEncodeQuality({ [IMAGE_ENCODE_QUALITY_ENV_KEY]: value })).toThrow(
+        /IMAGE_ENCODE_QUALITY/,
+      );
     }
   });
 

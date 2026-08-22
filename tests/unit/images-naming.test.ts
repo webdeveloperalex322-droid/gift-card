@@ -1,25 +1,35 @@
-import { describe, expect, it } from 'vitest';
-import { DEFAULT_SLUG_MAX_LENGTH, isValidSlug, slugify } from '@otkritka/shared';
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DEFAULT_SLUG_MAX_LENGTH, isValidSlug, slugify, SLUG_PATTERN } from '@otkritka/shared';
 import * as imagesPackage from '@otkritka/images';
 import {
   assertOutputFormat,
   buildDerivativeObjectKey,
   buildImageFileStem,
   buildOriginalObjectKey,
+  computeImageRevision,
   createOpaqueImageStorageId,
   DEFAULT_IMAGE_NAME_MAX_LENGTH,
   FILE_EXTENSION_BY_FORMAT,
+  IMAGE_REVISION_HASH_ALGORITHM,
+  IMAGE_REVISION_LENGTH,
+  IMAGE_REVISION_MAX_LENGTH,
   isOpaqueImageStorageId,
   OUTPUT_FORMATS,
 } from '@otkritka/images';
+import { createPatternPng } from './fixtures/images.js';
 
 // Э2-02, ТЗ §6.1, §6.3, §6.7, §11.
 //
-// Значения префиксов синтетические: реальные бакеты и CDN — решение Ч-03,
-// человеком не принятое. Пакет их не знает и знать не должен.
+// Значения префиксов синтетические: конкретные корни хранилища задаёт адаптер
+// Э2-04 (по решению Ч-03 до переезда на S3 это локальная ФС). Пакет их не знает
+// и знать не должен — он отдаёт относительный ключ.
 const ORIGINALS_PREFIX = 'private-originals-test';
 const DERIVATIVES_PREFIX = 'public-derivatives-test';
-const REVISION = 'r2';
+const REVISION = '9f3a1c7d';
 const TITLE = 'Открытка маме на 8 марта с тюльпанами';
 
 function pathSegments(key: string): string[] {
@@ -43,8 +53,8 @@ describe('имя файла: транслит через shared, без втор
 
   it('даёт короткое описательное имя на транслите', () => {
     // «тюльпанами» → «tyulpanami»: правило ю → yu задано таблицей в
-    // packages/shared. Образец в CLAUDE.md написан как «s-tulpanami» — это
-    // расхождение вынесено человеку, а не сглажено локальным исключением.
+    // packages/shared. Расхождение с прежним образцом в CLAUDE.md закрыто
+    // решением Ч-24 — правится образец, таблица остаётся нормой.
     expect(buildImageFileStem(TITLE)).toBe('otkrytka-mame-na-8-marta-s-tyulpanami');
   });
 
@@ -86,6 +96,24 @@ describe('имя файла: транслит через shared, без втор
       expect(() => buildImageFileStem(source), source).toThrow(/не поддерживают/);
       expect(() => buildImageFileStem(source), source).not.toThrow(/нет ни букв/);
     }
+  });
+
+  it('причина отказа названа верно: во входе только цифры (Ч-27 про имя файла — про адрес)', () => {
+    // Имя файла — часть публичного адреса, поэтому запрет Ч-27 на него
+    // распространяется, в отличие от технической ревизии. Подсказка редактору
+    // обязана называть именно эту причину, а не «литеры не поддерживаются».
+    for (const source of ['2027', '8', '  0042  ']) {
+      expect(() => buildImageFileStem(source), source).toThrow(/только цифры/);
+      expect(() => buildImageFileStem(source), source).not.toThrow(/не поддерживают/);
+    }
+
+    // Запрет ровно на «одни цифры»: «12 34» даёт «12-34» и остаётся законным
+    // именем — расширять запрет за формулировку Ч-27 нельзя.
+    expect(buildImageFileStem('  12 34  ')).toBe('12-34');
+  });
+
+  it('лимит, не оставляющий места под суффикс, — ошибка вызывающего кода', () => {
+    expect(() => buildImageFileStem(TITLE, { maxLength: 2, uniqueSuffix: 2 })).toThrow(/лимит/i);
   });
 
   it('пустой результат транслитерации — внятная ошибка, а не пустой сегмент', () => {
@@ -250,7 +278,7 @@ describe('постоянство URL файла (ТЗ §6.3)', () => {
   });
 
   it('отклоняет ревизию, которая не является одним валидным сегментом', () => {
-    for (const revision of ['', 'R3', 'r 3', 'ревизия', 'a/b', '-r3']) {
+    for (const revision of ['', 'R3', 'r 3', 'ревизия', 'a/b', '-r3', 'a'.repeat(33)]) {
       expect(() =>
         buildDerivativeObjectKey({
           prefix: DERIVATIVES_PREFIX,
@@ -261,6 +289,230 @@ describe('постоянство URL файла (ТЗ §6.3)', () => {
         }),
       ).toThrow(/ревизи/i);
     }
+  });
+
+  // Реальный баг, найденный владельцем packages/shared: ревизия проверялась
+  // через isValidSlug, а тот по решению Ч-27 отклоняет значение из одних цифр.
+  // Ревизия по Ч-28 — короткий хеш байтов, и примерно в 2 % случаев 8 hex-цифр
+  // состоят только из цифр: загрузка падала бы на случайных изображениях.
+  it('ревизия из одних цифр допустима: адресом страницы она не является (Ч-27 не про неё)', () => {
+    const digitsOnly = '12345678';
+
+    // Тот же самый строкой slug валидатор адресов по-прежнему отклоняет.
+    expect(isValidSlug(digitsOnly)).toBe(false);
+    expect(SLUG_PATTERN.test(digitsOnly)).toBe(true);
+
+    const key = buildDerivativeObjectKey({
+      prefix: DERIVATIVES_PREFIX,
+      revision: digitsOnly,
+      description: TITLE,
+      format: 'webp',
+      width: 640,
+    });
+
+    expect(key.startsWith(`${DERIVATIVES_PREFIX}/${digitsOnly}/`)).toBe(true);
+  });
+
+  it('ревизия из одних цифр принимается на всей длине хеша, а не только в одном примере', () => {
+    for (const revision of ['0', '00000000', '99999999', '2027', '8']) {
+      expect(isValidSlug(revision), revision).toBe(false);
+      expect(() =>
+        buildDerivativeObjectKey({
+          prefix: DERIVATIVES_PREFIX,
+          revision,
+          description: TITLE,
+          format: 'webp',
+          width: 640,
+        }),
+      ).not.toThrow();
+    }
+  });
+});
+
+describe('ревизия: короткий хеш байтов оригинала (Ч-28)', () => {
+  let workDir: string;
+  let base: Buffer;
+  let sameBytesCopy: Buffer;
+  let otherBytes: Buffer;
+
+  beforeAll(async () => {
+    workDir = await mkdtemp(join(tmpdir(), 'otkritka-revision-'));
+    base = await createPatternPng({ width: 640, height: 480 });
+    sameBytesCopy = Buffer.from(base);
+    otherBytes = await createPatternPng({ width: 640, height: 480, composition: 'rings' });
+  });
+
+  afterAll(async () => {
+    await rm(workDir, { recursive: true, force: true });
+  });
+
+  it('имеет форму технического сегмента: 8 hex-символов в нижнем регистре', async () => {
+    const revision = await computeImageRevision(base);
+
+    expect(IMAGE_REVISION_LENGTH).toBe(8);
+    expect(IMAGE_REVISION_MAX_LENGTH).toBeGreaterThanOrEqual(IMAGE_REVISION_LENGTH);
+    expect(revision).toMatch(/^[0-9a-f]{8}$/);
+    expect(SLUG_PATTERN.test(revision)).toBe(true);
+  });
+
+  it('алгоритм зафиксирован: префикс sha256 от байтов, без соли и без состояния', async () => {
+    expect(IMAGE_REVISION_HASH_ALGORITHM).toBe('sha256');
+    expect(await computeImageRevision(base)).toBe(
+      createHash(IMAGE_REVISION_HASH_ALGORITHM).update(base).digest('hex').slice(0, IMAGE_REVISION_LENGTH),
+    );
+  });
+
+  it('сохранение без замены байтов не меняет ключ (условие C2)', async () => {
+    const first = await computeImageRevision(base);
+    const second = await computeImageRevision(sameBytesCopy);
+
+    expect(second).toBe(first);
+
+    const keyOf = (revision: string): string =>
+      buildDerivativeObjectKey({
+        prefix: DERIVATIVES_PREFIX,
+        revision,
+        description: TITLE,
+        format: 'webp',
+        width: 640,
+      });
+
+    expect(keyOf(second)).toBe(keyOf(first));
+  });
+
+  it('замена байтов меняет ревизию и ключ (условие C2)', async () => {
+    const before = await computeImageRevision(base);
+    const after = await computeImageRevision(otherBytes);
+
+    expect(after).not.toBe(before);
+
+    const keyOf = (revision: string): string =>
+      buildDerivativeObjectKey({
+        prefix: DERIVATIVES_PREFIX,
+        revision,
+        description: TITLE,
+        format: 'webp',
+        width: 640,
+      });
+
+    expect(keyOf(after)).not.toBe(keyOf(before));
+  });
+
+  it('одного изменённого байта достаточно: ревизия не «примерная»', async () => {
+    const tweaked = Buffer.from(base);
+    const lastIndex = tweaked.length - 1;
+    tweaked[lastIndex] = ((tweaked[lastIndex] ?? 0) + 1) % 256;
+
+    expect(await computeImageRevision(tweaked)).not.toBe(await computeImageRevision(base));
+  });
+
+  it('не зависит ни от имени файла, ни от времени, ни от состояния хранилища', async () => {
+    const first = join(workDir, 'otkrytka-mame-na-8-marta.png');
+    const second = join(workDir, 'sovsem-drugoe-imya.png');
+    await writeFile(first, base);
+    await writeFile(second, base);
+
+    const fromFirstPath = await computeImageRevision(first);
+    const fromSecondPath = await computeImageRevision(second);
+    const fromBuffer = await computeImageRevision(base);
+
+    // Одинаковые байты под разными именами и в разных местах — одна ревизия.
+    expect(fromSecondPath).toBe(fromFirstPath);
+    expect(fromBuffer).toBe(fromFirstPath);
+
+    // Повторный вызов позже во времени — та же ревизия: ни Date.now, ни
+    // счётчика сохранений в ней нет (иначе каждое сохранение переписывало бы
+    // URL всех производных).
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await writeFile(first, base);
+    expect(await computeImageRevision(first)).toBe(fromFirstPath);
+
+    // Удаление другого файла состояние ревизии не меняет.
+    await rm(second);
+    expect(await computeImageRevision(first)).toBe(fromFirstPath);
+  });
+
+  it('вычисленная ревизия принимается построителем ключа как есть', async () => {
+    // В том числе если хеш вышел из одних цифр — форму проверяет SLUG_PATTERN,
+    // а не валидатор адресов (Ч-27).
+    for (const width of [320, 640]) {
+      const revision = await computeImageRevision(base);
+      expect(() =>
+        buildDerivativeObjectKey({
+          prefix: DERIVATIVES_PREFIX,
+          revision,
+          description: TITLE,
+          format: 'webp',
+          width,
+        }),
+      ).not.toThrow();
+    }
+  });
+});
+
+describe('суффикс -N: принимается параметром, пакетом не вычисляется (блок 5 п. 3)', () => {
+  const base = {
+    prefix: DERIVATIVES_PREFIX,
+    revision: REVISION,
+    description: TITLE,
+    format: 'webp',
+    width: 640,
+  } as const;
+
+  it('добавляется к имени файла перед суффиксом ширины', () => {
+    const key = buildDerivativeObjectKey({ ...base, uniqueSuffix: 2 });
+
+    expect(key.endsWith('otkrytka-mame-na-8-marta-s-tyulpanami-2-640.webp')).toBe(true);
+    expect(buildImageFileStem(TITLE, { uniqueSuffix: 2 })).toBe(
+      'otkrytka-mame-na-8-marta-s-tyulpanami-2',
+    );
+  });
+
+  it('разные N дают разные ключи, а отсутствие N — первое имя без суффикса', () => {
+    const withoutSuffix = buildDerivativeObjectKey(base);
+    const second = buildDerivativeObjectKey({ ...base, uniqueSuffix: 2 });
+    const third = buildDerivativeObjectKey({ ...base, uniqueSuffix: 3 });
+
+    expect(new Set([withoutSuffix, second, third]).size).toBe(3);
+    expect(withoutSuffix).not.toContain('-1-640');
+  });
+
+  it('N не вычисляется пакетом: без параметра совпадающий вход даёт совпадающий ключ', () => {
+    // Граница обязанностей: без состояния хранилища вычислить N невозможно, а
+    // вычисление сделало бы путь зависимым от этого состояния. Присвоение и
+    // хранение N — задача Э2-05 в apps/cms.
+    const first = buildDerivativeObjectKey(base);
+    const second = buildDerivativeObjectKey({ ...base });
+
+    expect(second).toBe(first);
+    // Ни счётчика, ни попытки развести совпадение сам пакет не делает.
+    const suspicious = Object.keys(imagesPackage).filter((name) =>
+      /counter|sequence|nextsuffix|allocate|reserve|dedupe/i.test(name),
+    );
+    expect(suspicious).toEqual([]);
+  });
+
+  it('N — целое число от 2: у первого имени суффикса нет, иначе получилось бы два пути', () => {
+    for (const uniqueSuffix of [0, 1, -2, 2.5, Number.NaN]) {
+      expect(() => buildDerivativeObjectKey({ ...base, uniqueSuffix }), String(uniqueSuffix)).toThrow(
+        /суффикс/i,
+      );
+    }
+  });
+
+  it('суффикс не выносит имя за лимит длины: место под него резервируется', () => {
+    const long = 'Очень длинный заголовок открытки про весну цветы и поздравления маме';
+
+    for (const uniqueSuffix of [2, 10, 12345]) {
+      const stem = buildImageFileStem(long, { uniqueSuffix });
+      expect(stem.length).toBeLessThanOrEqual(DEFAULT_IMAGE_NAME_MAX_LENGTH);
+      expect(stem.endsWith(`-${String(uniqueSuffix)}`)).toBe(true);
+      expect(isValidSlug(stem)).toBe(true);
+    }
+
+    const short = buildImageFileStem(long, { maxLength: 12, uniqueSuffix: 2 });
+    expect(short.length).toBeLessThanOrEqual(12);
+    expect(short.endsWith('-2')).toBe(true);
   });
 });
 

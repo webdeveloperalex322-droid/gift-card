@@ -67,6 +67,8 @@ export interface Config {
   };
   blocks: {};
   collections: {
+    cards: Card;
+    redirects: Redirect;
     users: User;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
@@ -75,6 +77,8 @@ export interface Config {
   };
   collectionsJoins: {};
   collectionsSelect: {
+    cards: CardsSelect<false> | CardsSelect<true>;
+    redirects: RedirectsSelect<false> | RedirectsSelect<true>;
     users: UsersSelect<false> | UsersSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
@@ -116,17 +120,141 @@ export interface UserAuthOperations {
   };
 }
 /**
+ * Карточка открытки. URL — /otkrytki/<slug>, один навсегда. Новая запись создаётся в draft с noindex; публикует и открывает в индекс только человек.
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "cards".
+ */
+export interface Card {
+  id: number;
+  /**
+   * Заголовок страницы (title). Уникален в пределах каталога — совпадения проверяются при сохранении (задача Э5-01). Смена заголовка URL не меняет.
+   */
+  title: string;
+  /**
+   * H1 страницы. Пустой — совпадает с title (ТЗ §8.1).
+   */
+  h1?: string | null;
+  /**
+   * URL записи: /otkrytki/<slug>. Неизменяем после первой публикации (смена возможна только вместе с одиночным 301 — задача Э1-09). Смена заголовка URL не меняет.
+   */
+  slug: string;
+  /**
+   * Естественное описание изображения, не перечень ключей. Обязателен до перевода в review (проверка полноты — задача Э1-08).
+   */
+  alt?: string | null;
+  /**
+   * Подпись или текст поздравления, видимый на странице.
+   */
+  caption?: string | null;
+  /**
+   * Описание открытки для страницы (видимый текст).
+   */
+  description?: string | null;
+  /**
+   * Meta description. Задаётся отдельно от описания (ТЗ §8.1); совпадения по каталогу проверяются при сохранении (задача Э5-01).
+   */
+  metaDescription?: string | null;
+  /**
+   * Условия использования изображения. Из этого поля берутся license и copyrightNotice в JSON-LD ImageObject (этап 3): если условия у открытки общие, поле остаётся пустым и подставляются условия проекта.
+   */
+  usageTerms?: string | null;
+  /**
+   * draft → review → published. Перевод в published — осознанное действие человека с ролью admin; сервисный аккаунт ai-editor доводит запись до review.
+   */
+  status: 'draft' | 'review' | 'published';
+  /**
+   * index,follow — только для published и только по решению администратора при выполнении условий п. 5.1 SEO ТЗ (подтверждённый спрос, отдельный интент, достаточный объём, уникальные тексты, страница в навигации).
+   */
+  robots: 'index,follow' | 'noindex,follow' | 'noindex,nofollow';
+  /**
+   * Пусто = self-canonical (норма). Переопределение — только администратор и только путём от корня: абсолютный URL собирается из SITE_URL, вручную его вписывать нельзя.
+   */
+  canonical?: string | null;
+  /**
+   * Дата первой публикации. Ставится автоматически при первом переводе в published (Э1-08) и далее не меняется: по ней определяется, что URL уже был известен поисковику.
+   */
+  publishedAt?: string | null;
+  /**
+   * Меняется ТОЛЬКО при содержательном обновлении: это lastmod в sitemap. Техническая правка (опечатка, служебное поле) дату не двигает — иначе lastmod перестаёт что-либо означать для поисковика.
+   */
+  updatedContentAt?: string | null;
+  /**
+   * Перцептивный хеш изображения. Считает @otkritka/images при загрузке (задача Э2-05); снаружи не пишется, иначе поиск визуальных дублей можно было бы обойти подстановкой чужого значения.
+   */
+  pHash?: string | null;
+  /**
+   * Служебные поля постоянства URL файлов. Заполняются пайплайном изображений (Э2-05, Э2-06) и не пишутся снаружи ни через админку, ни через API.
+   */
+  derivative?: {
+    /**
+     * СОХРАНЁННЫЙ ключ производной (<префикс>/<revision>/<имя>), условие C1. Хранится, а не пересчитывается: сегодня ключ — функция от описания, лимита длины имени и таблицы транслитерации, поэтому правка заголовка или пополнение таблицы дали бы другой путь при том же содержимом. Фиксируется при первой публикации и далее неизменяем.
+     */
+    keyBase?: string | null;
+    /**
+     * Имя файла на транслите вместе с суффиксом уникальности, присвоенное при загрузке. Хранится отдельно от ключа, потому что при замене изображения меняется только revision, а имя остаётся тем же.
+     */
+    nameStem?: string | null;
+    /**
+     * Число N в суффиксе -N, уникализирующем имя файла (решение человека, блок 5 п. 3). Присваивается ОДИН раз при загрузке и хранится: если вычислять его заново, удаление ранней записи освободило бы N и путь другой записи изменился бы незаметно. После удаления N не переиспользуется.
+     */
+    nameSuffix?: number | null;
+    /**
+     * Короткий хеш байтов оригинала (решение Ч-28, вариант «а»). Меняется ТОЛЬКО при замене изображения — тогда меняются URL производных при неизменном URL карточки (ТЗ §6.7). Выводить revision из updatedAt или счётчика сохранений запрещено: каждое сохранение переписывало бы URL всех производных (условие C2).
+     */
+    revision?: string | null;
+  };
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * Одиночные 301 и 410. Цепочки запрещены: новый редирект, создающий цепочку, схлопывается автоматически, а петля отклоняется.
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "redirects".
+ */
+export interface Redirect {
+  id: number;
+  /**
+   * Старый путь от корня сайта, например /otkrytki/staraya-otkrytka. Уникален: два правила для одного пути сделали бы ответ зависимым от порядка строк.
+   */
+  from: string;
+  /**
+   * Новый путь от корня сайта. Обязателен для 301 и обязан быть ПУСТЫМ для 410. Абсолютный URL недопустим: хост собирается из SITE_URL.
+   */
+  to?: string | null;
+  /**
+   * Только 301 и 410. Временных редиректов в модели нет: перенос страницы — постоянное решение, а 302 не передаёт сигналы старого URL новому.
+   */
+  code: '301' | '410';
+  /**
+   * Кто создал правило: заполняется сервером и не приходит из запроса.
+   */
+  createdBy?: (number | null) | User;
+  /**
+   * Зачем создан редирект: причина переноса, ссылка на задачу.
+   */
+  comment?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * Две роли: admin (человек, полные права) и ai-editor (сервисный аккаунт с API-ключом, доводит контент до review).
+ *
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "users".
  */
 export interface User {
   id: number;
   /**
-   * admin — полные права, включая публикацию и index/follow. ai-editor — только черновики и перевод draft → review.
+   * admin — полные права, включая публикацию и index,follow. ai-editor — черновики, метаданные, привязка к подборкам и перевод draft → review.
    */
   role: 'admin' | 'ai-editor';
   updatedAt: string;
   createdAt: string;
+  enableAPIKey?: boolean | null;
+  apiKey?: string | null;
+  apiKeyIndex?: string | null;
   email: string;
   resetPasswordToken?: string | null;
   resetPasswordExpiration?: string | null;
@@ -167,10 +295,19 @@ export interface PayloadKv {
  */
 export interface PayloadLockedDocument {
   id: number;
-  document?: {
-    relationTo: 'users';
-    value: number | User;
-  } | null;
+  document?:
+    | ({
+        relationTo: 'cards';
+        value: number | Card;
+      } | null)
+    | ({
+        relationTo: 'redirects';
+        value: number | Redirect;
+      } | null)
+    | ({
+        relationTo: 'users';
+        value: number | User;
+      } | null);
   globalSlug?: string | null;
   user: {
     relationTo: 'users';
@@ -215,12 +352,58 @@ export interface PayloadMigration {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "cards_select".
+ */
+export interface CardsSelect<T extends boolean = true> {
+  title?: T;
+  h1?: T;
+  slug?: T;
+  alt?: T;
+  caption?: T;
+  description?: T;
+  metaDescription?: T;
+  usageTerms?: T;
+  status?: T;
+  robots?: T;
+  canonical?: T;
+  publishedAt?: T;
+  updatedContentAt?: T;
+  pHash?: T;
+  derivative?:
+    | T
+    | {
+        keyBase?: T;
+        nameStem?: T;
+        nameSuffix?: T;
+        revision?: T;
+      };
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "redirects_select".
+ */
+export interface RedirectsSelect<T extends boolean = true> {
+  from?: T;
+  to?: T;
+  code?: T;
+  createdBy?: T;
+  comment?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "users_select".
  */
 export interface UsersSelect<T extends boolean = true> {
   role?: T;
   updatedAt?: T;
   createdAt?: T;
+  enableAPIKey?: T;
+  apiKey?: T;
+  apiKeyIndex?: T;
   email?: T;
   resetPasswordToken?: T;
   resetPasswordExpiration?: T;
