@@ -44,12 +44,18 @@ import {
   collectionByIdQuery,
   collectionByPathQuery,
   collectionCardsQuery,
+  collectionsByIdsQuery,
   type PublicCollectionSlug,
   type PublicFindQuery,
   recentCardsQuery,
   relatedCollectionsQuery,
+  RELATED_COLLECTIONS_MAX,
   seasonalCollectionsQuery,
+  SIMILAR_CARDS_MAX,
+  SIMILAR_CARDS_TARGET_MIN,
+  similarCardsQuery,
 } from './queries.js';
+import { orderByIds } from './relations.js';
 import {
   assertPageNumber,
   assertPublicallyReadable,
@@ -213,6 +219,59 @@ describe('запросы к коллекциям', () => {
     });
   });
 
+  it('похожие открытки: те же подборки, кроме самой карточки (ТЗ §5.4)', () => {
+    // Исключение самой карточки делает ЗАПРОС, а не шаблон: отфильтрованная
+    // после выборки карточка уменьшала бы блок на одну позицию непредсказуемо.
+    const query = required(similarCardsQuery({ collectionIds: [7, 9], excludeCardId: 3 }));
+
+    expect(query.collection).toBe('cards');
+    expect(query.limit).toBe(SIMILAR_CARDS_MAX);
+    expect(query.sort).toEqual(['-publishedAt', '-id']);
+    expect(query.where).toEqual({
+      and: [{ collections: { in: [7, 9] } }, { id: { not_equals: 3 } }],
+    });
+  });
+
+  it('блок «Похожие» держится в границах 6–12 из ТЗ', () => {
+    expect(SIMILAR_CARDS_MAX).toBe(12);
+    expect(SIMILAR_CARDS_TARGET_MIN).toBe(6);
+    expect(SIMILAR_CARDS_TARGET_MIN).toBeLessThan(SIMILAR_CARDS_MAX);
+  });
+
+  it('карточка без подборок не превращает «похожие» в весь каталог', () => {
+    expect(similarCardsQuery({ collectionIds: [], excludeCardId: 3 })).toBeNull();
+  });
+
+  it('смежные подборки ограничены шестью, а подборки карточки читаются целиком', () => {
+    // У блока перелинковки предел из ТЗ §5.3 (3–6 вбок); у связи `collections`
+    // карточки предела нет: из неё получаются видимые атрибуты, и обрезать их
+    // числом значило бы спрятать часть привязок открытки.
+    const ids = [1, 2, 3, 4, 5, 6, 7, 8];
+
+    expect(required(relatedCollectionsQuery(ids)).limit).toBe(RELATED_COLLECTIONS_MAX);
+    expect(required(collectionsByIdsQuery(ids)).limit).toBe(ids.length);
+    expect(required(collectionsByIdsQuery(ids)).where).toEqual({ id: { in: ids } });
+    expect(collectionsByIdsQuery([])).toBeNull();
+  });
+
+  it('порядок редактора восстанавливается по списку идентификаторов', () => {
+    // Первая подборка карточки — основная, и порядок задаёт редактор. Запрос
+    // возвращает записи по заголовку, потому что сортировать «по списку
+    // идентификаторов» на стороне БД нечем.
+    const docs = [
+      { id: 9, title: 'А' },
+      { id: 7, title: 'Б' },
+    ];
+
+    expect(orderByIds(docs, [7, 9]).map((doc) => doc.id)).toEqual([7, 9]);
+    // Записи, которой в ответе нет (неопубликованная), в результате не будет:
+    // ссылки на неё не существует.
+    expect(orderByIds(docs, [7, 100, 9]).map((doc) => doc.id)).toEqual([7, 9]);
+    // Повтор идентификатора не даёт вторую одинаковую ссылку.
+    expect(orderByIds(docs, [7, 7, 9]).map((doc) => doc.id)).toEqual([7, 9]);
+    expect(orderByIds(docs, [])).toEqual([]);
+  });
+
   it('каждый запрос уходит с областью чтения публичного рендера', () => {
     const queries = [
       cardBySlugQuery('x'),
@@ -221,6 +280,8 @@ describe('запросы к коллекциям', () => {
       required(childCollectionsQuery(1)),
       required(collectionByIdQuery(1)),
       required(relatedCollectionsQuery([1])),
+      required(collectionsByIdsQuery([1])),
+      required(similarCardsQuery({ collectionIds: [1], excludeCardId: 2 })),
       recentCardsQuery(4),
       seasonalCollectionsQuery(new Date()),
     ];

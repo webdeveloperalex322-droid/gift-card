@@ -47,6 +47,7 @@ import {
   type BreadcrumbTrail,
   buildBreadcrumbTrail,
 } from '../seo/breadcrumbs.js';
+import { recordHeading } from '../seo/headings.js';
 import type { RecordId } from './queries.js';
 import { relationId, relationIds } from './relations.js';
 
@@ -69,17 +70,15 @@ export type CardCrumbSource = Pick<Card, 'title' | 'h1' | 'slug'>;
 export type CollectionReader = (id: RecordId) => Promise<CollectionCrumbNode | null>;
 
 /**
- * Видимый текст звена: H1 записи, а при пустом H1 — title.
+ * Видимый текст звена — заголовок записи (H1, при пустом H1 — title).
  *
- * Порядок именно такой: крошка ведёт на страницу, и её текст обязан совпадать с
- * заголовком, который посетитель там увидит. Правило «пустой H1 совпадает с
- * title» — правило контентных коллекций проекта (ТЗ §8.1), второй трактовки у
- * него быть не должно.
+ * Правило «пустой H1 совпадает с title» (ТЗ §8.1) с задачи Э3-05 живёт в
+ * единственной функции проекта — `recordHeading` из `../seo/headings.ts`.
+ * Локальная копия была здесь до неё, и именно она делала выразимым расхождение:
+ * крошка ведёт на страницу, и её текст обязан совпадать с H1, который посетитель
+ * там увидит, а два места трактовки одного правила расходятся молча.
  */
-function crumbLabel(record: { readonly title: string; readonly h1?: string | null }): string {
-  const heading = record.h1?.trim() ?? '';
-  return heading === '' ? record.title : heading;
-}
+const crumbLabel = recordHeading;
 
 /**
  * Звено для подборки или `null`, если у записи нет сохранённого пути.

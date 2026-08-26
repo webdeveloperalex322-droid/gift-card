@@ -1,0 +1,204 @@
+---
+/**
+ * Страница подборки — `/podborki/<taxonomy-path>` (задача Э3-06).
+ *
+ * Норма: ТЗ §5.3 (состав страницы), `CLAUDE.md` — разделы «Рендеринг»,
+ * «Правила URL» (таксономия с группирующими узлами, порядок сегментов только
+ * «повод → уточнение»), «Структурированные данные», решения Ч-04-5 и Ч-04-7.
+ *
+ * ## Один маршрут на всю ветвь — и почему это не упрощение
+ *
+ * Адрес подборки — её СОХРАНЁННОЕ поле `path` (уникальный индекс БД, считает
+ * CMS). Поэтому маршрут не разбирает таксономию на сегменты и не знает про виды
+ * узлов: он берёт путь из адреса и спрашивает запись с таким путём. Отсюда
+ * следствия, которых иначе пришлось бы добиваться проверками:
+ *
+ *   - `/podborki/prazdniki`, `/podborki/prazdniki/8-marta`,
+ *     `/podborki/prazdniki/8-marta/mame` и `/podborki/adresaty/mame` работают
+ *     одним кодом, потому что различаются только данными;
+ *   - обратный порядок сегментов («адресат → повод») не создаётся никогда: такой
+ *     записи просто нет, а маршрут ничего не собирает сам. Правило Ч-04-7 живёт в
+ *     данных и в хуках CMS, шаблон его не дублирует;
+ *   - второго адреса у страницы не появляется: путь берётся у записи, а не
+ *     складывается из параметров.
+ *
+ * ## Инварианты, закодированные здесь
+ *
+ *   - **ровно один `<h1>`** — заголовок записи; заголовки блоков `<h2>`,
+ *     заголовки внутри вводного текста понижает разбор;
+ *   - **первое крупное изображение одно:** первая плитка сетки
+ *     (`prioritizeFirst`), остальные ленивые. Ничего крупнее выше сетки на
+ *     странице нет;
+ *   - **ноль клиентского JS**, навигация только `<a href>`, ссылки — только на
+ *     опубликованные страницы (слой данных других не отдаёт);
+ *   - **директива робота из записи**: `index,follow` ставит человек.
+ *
+ * ## Почему у подборки без содержимого 404, а не 200
+ *
+ * Пустая сетка под заголовком — это soft 404, ровно то, чем список чаще всего и
+ * попадает в индекс мусором (ТЗ §5.3: «пустая и слабая страница не отдаёт 200 как
+ * полноценная посадочная»). Решение принимает слой данных
+ * (`collectionPageContent` → `null`), маршрут превращает его в ответ. Содержимым
+ * считаются либо открытки, либо дочерние узлы: у группирующего узла таксономии
+ * своих открыток нет, и содержание у него — именно список детей.
+ *
+ * ЖЁСТКИЙ МИНИМУМ 20 ОТКРЫТОК (условие 5.1.3, решение Ч-06) здесь НЕ проверяется,
+ * и это осознанно: это условие ПУБЛИКАЦИИ и открытия в индекс, а решение о
+ * публикации принимает человек. Шаблон, отдающий 404 на странице, которую человек
+ * опубликовал, спорил бы с ним молча. Место этой проверки — переход в `published`
+ * в CMS; вынесено в отчёт задачи как предложение человеку.
+ *
+ * ## Чего на странице ещё нет и кто это делает
+ *
+ *   - **пагинация** (`/page/N`) — задача Э3-07. Сейчас выводится ПЕРВАЯ страница
+ *     списка по базовому URL; `/page/1` не существует и в ссылках не появляется.
+ *     Пока пагинации нет, открытки за первой страницей достижимы блоком «Похожие
+ *     открытки» на карточках (решение Ч-04-8), а не отсутствующими ссылками;
+ *   - **рекламные места** (Ч-11) — Э3-12. Ряд под H1 (над сеткой) и ряд после
+ *     пагинации встают в плоскую разметку без переделки;
+ *   - **каталог `/podborki`** — Э3-08. Этот маршрут по нему отвечает 404: рест-
+ *     параметр совпадает и с пустым значением, а страницы каталога ещё нет.
+ */
+import CardGrid from '../../components/CardGrid.astro';
+import Breadcrumbs from '../../components/Breadcrumbs.astro';
+import RichText from '../../components/RichText.astro';
+import {
+  collectionBreadcrumbTrail,
+  collectionPageContent,
+  findCollectionById,
+  findCollectionByPath,
+  listChildCollections,
+  listCollectionCards,
+  listRelatedCollections,
+  relationId,
+  relationIds,
+} from '../../data';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { jsonLdScriptText } from '../../seo/json-ld';
+import { richTextBlocks } from '../../seo/rich-text';
+import { serverEnv } from '../../server-env';
+import { COLLECTION_PATH_PREFIX } from '@otkritka/cms/seo/paths';
+
+export const prerender = false;
+
+const rest = Astro.params.path ?? '';
+// Пустой рест-параметр — это адрес каталога `/podborki` (задача Э3-08). Пока
+// каталога нет, честный ответ 404, а не список всех подборок: страница, которой
+// не существует, не должна появляться как побочный эффект маршрута ветви.
+const node = rest === '' ? null : await findCollectionByPath(`${COLLECTION_PATH_PREFIX}/${rest}`);
+if (node === null) {
+  return new Response(null, { status: 404 });
+}
+
+const env = serverEnv();
+const [cardsPage, children, parent, related] = await Promise.all([
+  // Первая страница списка живёт по базовому URL (решение Ч-05).
+  listCollectionCards({ collectionId: node.id, page: 1 }),
+  listChildCollections(node.id),
+  findCollectionById(relationId(node.parent)),
+  listRelatedCollections(relationIds(node.related)),
+]);
+
+const content = collectionPageContent({
+  cards: cardsPage.cards,
+  children,
+  env,
+  node,
+  parent,
+  related,
+});
+if (content === null) {
+  return new Response(null, { status: 404 });
+}
+
+const trail = await collectionBreadcrumbTrail(node);
+const intro = richTextBlocks(content.intro);
+const jsonLd = jsonLdScriptText(content.jsonLd);
+// Дата содержательного обновления показывается ровно тогда, когда она есть в
+// записи, и в разметку `dateModified` попадает то же значение (ТЗ §5.3).
+// Формат — ISO в атрибуте `datetime` и день по-русски в тексте.
+const updatedAt = content.updatedContentAt === null ? null : new Date(content.updatedContentAt);
+const updatedLabel =
+  updatedAt === null || Number.isNaN(updatedAt.getTime())
+    ? null
+    : updatedAt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+---
+
+<BaseLayout
+  title={content.title}
+  description={content.metaDescription}
+  canonicalPath={content.canonicalPath}
+  robots={content.robots}
+>
+  <Breadcrumbs trail={trail} />
+
+  <h1>{content.heading}</h1>
+
+  {intro.length === 0 ? null : <RichText blocks={intro} />}
+
+  {
+    content.tiles.length === 0 ? null : (
+      <CardGrid tiles={content.tiles} prioritizeFirst ariaLabel="Открытки подборки" />
+    )
+  }
+
+  {
+    content.children.length === 0 ? null : (
+      <section class="page-section">
+        <h2>Разделы подборки</h2>
+        <ul class="link-row">
+          {
+            content.children.map((child) => (
+              <li>
+                <a href={child.path}>{child.name}</a>
+              </li>
+            ))
+          }
+        </ul>
+      </section>
+    )
+  }
+
+  {
+    content.parent === null && content.related.length === 0 ? null : (
+      <nav class="page-section" aria-label="Смежные подборки">
+        <h2>Смотрите также</h2>
+        <ul class="link-row">
+          {
+            content.parent === null ? null : (
+              <li>
+                <a href={content.parent.path}>{content.parent.name}</a>
+              </li>
+            )
+          }
+          {
+            content.related.map((link) => (
+              <li>
+                <a href={link.path}>{link.name}</a>
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
+    )
+  }
+
+  {
+    content.updatedContentAt === null || updatedLabel === null ? null : (
+      <p class="collection__updated">
+        Подборка обновлена{' '}
+        <time datetime={content.updatedContentAt}>{updatedLabel}</time>
+      </p>
+    )
+  }
+
+  <script type="application/ld+json" is:inline set:html={jsonLd} />
+</BaseLayout>
+
+<style>
+  .collection__updated {
+    margin-block-start: 2rem;
+    font-size: 0.875rem;
+    opacity: 0.75;
+  }
+</style>

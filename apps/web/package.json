@@ -11,6 +11,7 @@
     "preview": "astro preview",
     "smoke:data": "pnpm --filter @otkritka/cms exec payload run ../web/scripts/smoke-data.ts",
     "smoke:media": "node ./scripts/smoke-media.mjs",
+    "smoke:pages": "pnpm --filter @otkritka/cms exec payload run ../web/scripts/smoke-pages.ts",
     "smoke:slash": "node ./scripts/smoke-trailing-slash.mjs",
     "start": "node ./dist/server/entry.mjs",
     "sync": "astro sync"

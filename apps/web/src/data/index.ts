@@ -75,14 +75,33 @@ export {
   findCollectionById,
   findCollectionByPath,
   listCollectionCards,
+  listCollectionsByIds,
   listChildCollections,
   listRecentCards,
   listRelatedCollections,
   listSeasonalCollections,
+  listSimilarCards,
   readSiteSettings,
   relationId,
   relationIds,
 } from './content.js';
+
+/**
+ * Содержимое страниц карточки и подборки (Э3-05, Э3-06). Шаблон зовёт ОДНУ
+ * функцию на страницу и рендерит то, что она вернула: так у видимого блока и у
+ * разметки JSON-LD один источник значения — обоснование в шапке `./page-data.ts`.
+ */
+export {
+  type CardAttributeLink,
+  cardAttributeLinks,
+  type CardPageContent,
+  cardPageContent,
+  type CardTile,
+  cardTiles,
+  collectionLinks,
+  type CollectionPageContent,
+  collectionPageContent,
+} from './page-data.js';
 
 export {
   assertPageNumber,
@@ -91,6 +110,12 @@ export {
   PUBLIC_READ_SCOPE,
 } from './read-scope.js';
 
-export { MAX_LIST_ROWS, type RecordId } from './queries.js';
+export {
+  MAX_LIST_ROWS,
+  type RecordId,
+  RELATED_COLLECTIONS_MAX,
+  SIMILAR_CARDS_MAX,
+  SIMILAR_CARDS_TARGET_MIN,
+} from './queries.js';
 
 export { payloadClient } from './payload-client.js';

@@ -15,7 +15,13 @@
  * не задан вовсе — см. комментарий там.
  */
 
-import { buildAbsoluteUrl, canonicalizePath, currentEnv, type SharedEnv } from '@otkritka/shared';
+import {
+  buildAbsoluteUrl,
+  canonicalizePath,
+  currentEnv,
+  looksLikeAbsoluteUrl,
+  type SharedEnv,
+} from '@otkritka/shared';
 
 /**
  * Абсолютный канонический URL для пути страницы или файла.
@@ -29,5 +35,63 @@ import { buildAbsoluteUrl, canonicalizePath, currentEnv, type SharedEnv } from '
  *   пути передали абсолютный адрес.
  */
 export function canonicalUrlFor(pathname: string, env: SharedEnv = currentEnv()): string {
+  // Абсолютный адрес отклоняется ЗДЕСЬ, до нормализации, и это не дублирование
+  // проверки из `buildAbsoluteUrl`: до него такой вход не доходит.
+  // `canonicalizePath` схлопнул бы `https://chuzhoy.test/x` в правдоподобный
+  // относительный путь `/https:/chuzhoy.test/x`, и `buildAbsoluteUrl` получил бы
+  // уже безобидную с виду строку — то есть canonical и `WebPage.url` указывали бы
+  // на несуществующую страницу СВОЕГО хоста, молча. Найдено юнит-тестом Э3-06.
+  assertPathNotAbsolute(pathname);
   return buildAbsoluteUrl(canonicalizePath(pathname), env);
+}
+
+/** @throws Error если вместо пути от корня сайта передан абсолютный адрес. */
+function assertPathNotAbsolute(value: string): void {
+  if (looksLikeAbsoluteUrl(value)) {
+    throw new Error(
+      `Ожидается путь от корня сайта, а не абсолютный адрес: «${value}». Хост попадает в ` +
+        'канонический URL только из SITE_URL через единственный хелпер (CLAUDE.md, «Правила ' +
+        'URL»), поэтому чужой адрес здесь отклоняется, а не превращается в путь.',
+    );
+  }
+}
+
+/**
+ * Канонический путь записи: переопределение из поля `canonical`, а при пустом
+ * поле — собственный адрес страницы (задача Э3-05).
+ *
+ * Зачем функция вообще существует. У обеих контентных коллекций есть поле
+ * `canonical` с описанием «Пусто = self-canonical (норма). Переопределение —
+ * только администратор и только путём от корня». Шаблон, который это поле не
+ * читает, делает решение администратора МОЛЧА недействующим: в админке значение
+ * сохранено, а в разметке его нет. Обратная крайность — собирать canonical из
+ * поля всегда — дала бы пустой canonical у записи без переопределения.
+ *
+ * Абсолютный адрес в поле отклоняется здесь, а не глубже: `canonicalizePath` сам
+ * по себе превратил бы `https://chuzhoy.test/x` в правдоподобный путь
+ * `/https:/chuzhoy.test/x`, то есть в canonical на несуществующую страницу
+ * своего же хоста. Ровно та же проверка и по той же причине стоит у звена крошек
+ * (`../seo/breadcrumbs.ts`). Валидация поля в CMS (`validateSiteRootPath`) это
+ * уже запрещает; здесь — постусловие, потому что цена ошибки в canonical выше
+ * цены двойной проверки.
+ *
+ * @param override значение поля `canonical` записи; пусто — норма.
+ * @param selfPath собственный адрес страницы (для карточки — `buildCardPath`,
+ *   для подборки — сохранённое поле `path`).
+ * @throws Error если в поле `canonical` лежит абсолютный адрес.
+ */
+export function canonicalPathFor(override: string | null | undefined, selfPath: string): string {
+  const declared = override?.trim() ?? '';
+  if (declared === '') {
+    return canonicalizePath(selfPath);
+  }
+  if (looksLikeAbsoluteUrl(declared)) {
+    throw new Error(
+      `В поле canonical записи лежит абсолютный адрес «${declared}». Ожидается путь от корня ` +
+        'сайта: хост попадает в абсолютный URL только из SITE_URL через единственный хелпер ' +
+        '(CLAUDE.md, «Правила URL»), а вписанный руками домен разошёлся бы с ним при первом ' +
+        'переезде — причём молча.',
+    );
+  }
+  return canonicalizePath(declared);
 }

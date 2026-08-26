@@ -88,6 +88,37 @@ export const MAX_LIST_ROWS = 200;
 /** Порядок узлов подборок: по заголовку, затем по идентификатору. */
 const COLLECTION_ORDER: readonly string[] = ['title', 'id'];
 
+/**
+ * Сколько открыток выводит блок «Похожие открытки» (ТЗ §5.4: 6–12 шт.).
+ *
+ * Верхняя граница — предел ЗАПРОСА, поэтому она здесь: лишние строки, которые
+ * шаблон всё равно не покажет, не читаются вовсе.
+ */
+export const SIMILAR_CARDS_MAX = 12;
+
+/**
+ * Нижняя граница того же диапазона — ОРИЕНТИР, а не условие запроса.
+ *
+ * Добить блок до шести открытками из других тем нельзя: заголовок «Похожие
+ * открытки» стал бы неправдой, а разметка и видимое содержимое обязаны
+ * соответствовать друг другу. Поэтому нижняя граница обеспечивается ДАННЫМИ: у
+ * темы минимум 20 опубликованных открыток (решение Ч-06), значит у любой
+ * карточки внутри такой темы похожих не меньше 19. Меньше шести в блоке —
+ * сигнал о неполноте темы, а не о дефекте шаблона; страницу это не ломает.
+ */
+export const SIMILAR_CARDS_TARGET_MIN = 6;
+
+/**
+ * Сколько смежных подборок выводит блок перелинковки (ТЗ §5.3: 3–6 вбок).
+ *
+ * Ограничение стоит на запросе, а не на шаблоне: связь `related` редактор может
+ * заполнить любым числом узлов, и без предела страница выводила бы их все.
+ * Порядок при этом задаёт запрос (по заголовку), а не редактор, — блок
+ * перелинковки не имеет главного элемента, в отличие от связи `collections` у
+ * карточки, где первая подборка основная.
+ */
+export const RELATED_COLLECTIONS_MAX = 6;
+
 /** Карточка по slug. Slug уникален в коллекции, поэтому документ ровно один. */
 export function cardBySlugQuery(slug: string): PublicFindQuery<'cards'> {
   return {
@@ -208,9 +239,23 @@ export function collectionByIdQuery(
   };
 }
 
-/** Смежные подборки для блока перелинковки. */
-export function relatedCollectionsQuery(
+/**
+ * Подборки по набору идентификаторов.
+ *
+ * Потребителей два, и предел у них разный, поэтому он аргумент, а не константа
+ * внутри: блок смежных подборок выводит не больше {@link RELATED_COLLECTIONS_MAX}
+ * узлов (ТЗ §5.3), а связь `collections` карточки читается ЦЕЛИКОМ — из неё
+ * получаются видимые атрибуты-ссылки (повод, адресат), и обрезать их числом
+ * значило бы спрятать часть привязок открытки.
+ *
+ * Порядок ответа — по заголовку. Там, где значим порядок, заданный редактором
+ * (связь `collections` карточки: первая подборка — основная), его восстанавливает
+ * `orderByIds` из `./relations.ts`: сортировать по списку идентификаторов на
+ * стороне БД нечем.
+ */
+export function collectionsByIdsQuery(
   ids: readonly RecordId[],
+  limit?: number,
 ): PublicFindQuery<'collections'> | null {
   if (ids.length === 0) {
     return null;
@@ -218,10 +263,62 @@ export function relatedCollectionsQuery(
   return {
     ...PUBLIC_READ_SCOPE,
     collection: 'collections',
-    limit: ids.length,
+    limit: limit === undefined ? ids.length : Math.min(ids.length, limit),
     pagination: false,
     sort: [...COLLECTION_ORDER],
     where: { id: { in: [...ids] } },
+  };
+}
+
+/** Смежные подборки для блока перелинковки: не больше шести (ТЗ §5.3). */
+export function relatedCollectionsQuery(
+  ids: readonly RecordId[],
+): PublicFindQuery<'collections'> | null {
+  return collectionsByIdsQuery(ids, RELATED_COLLECTIONS_MAX);
+}
+
+export interface SimilarCardsQueryInput {
+  /** Подборки, по которым ищется похожее: связь `collections` самой карточки. */
+  readonly collectionIds: readonly RecordId[];
+  /** Идентификатор самой карточки: на себя блок «Похожие» не ссылается. */
+  readonly excludeCardId: RecordId;
+  readonly limit?: number;
+}
+
+/**
+ * Похожие открытки: карточки из ТЕХ ЖЕ подборок, кроме самой карточки (ТЗ §5.4).
+ *
+ * «По общим подборкам и атрибутам» из ТЗ здесь означает ровно общие подборки:
+ * отдельных полей стиля и настроения у карточки в схеме нет — по решению Ч-04-3
+ * это фильтр без собственных URL, а привязка к поводу и адресату выражена именно
+ * связью `collections`.
+ *
+ * Блок обязателен не для украшения: им обеспечивается достижимость карточек за
+ * первой страницей списка (решение Ч-04-8), поэтому исключение самой карточки
+ * делает запрос, а не шаблон — карточка, отфильтрованная после выборки,
+ * уменьшала бы блок на одну позицию непредсказуемо.
+ *
+ * `null` при пустом наборе подборок: `{ in: [] }` часть адаптеров трактует как
+ * отсутствие условия, то есть в блок «похожих» попал бы весь каталог.
+ */
+export function similarCardsQuery(
+  input: SimilarCardsQueryInput,
+): PublicFindQuery<'cards'> | null {
+  if (input.collectionIds.length === 0) {
+    return null;
+  }
+  return {
+    ...PUBLIC_READ_SCOPE,
+    collection: 'cards',
+    limit: input.limit ?? SIMILAR_CARDS_MAX,
+    pagination: false,
+    sort: [...CARD_ORDER],
+    where: {
+      and: [
+        { collections: { in: [...input.collectionIds] } },
+        { id: { not_equals: input.excludeCardId } },
+      ],
+    },
   };
 }
 

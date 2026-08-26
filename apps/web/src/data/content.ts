@@ -49,12 +49,16 @@ import {
   collectionByIdQuery,
   collectionByPathQuery,
   collectionCardsQuery,
+  collectionsByIdsQuery,
   type PublicFindQuery,
   recentCardsQuery,
   type RecordId,
   relatedCollectionsQuery,
   seasonalCollectionsQuery,
+  similarCardsQuery,
+  type SimilarCardsQueryInput,
 } from './queries.js';
+import { orderByIds } from './relations.js';
 import { assertPublicallyReadable, PUBLIC_READ_SCOPE } from './read-scope.js';
 
 /** Страница списка: документы плюс всё, что нужно ссылкам пагинации. */
@@ -165,6 +169,37 @@ export async function listRelatedCollections(
 ): Promise<readonly Collection[]> {
   const { docs } = await findMany(relatedCollectionsQuery(ids));
   return (docs as Collection[]).map((node) => assertPublicallyReadable(node, 'смежную подборку'));
+}
+
+/**
+ * Подборки карточки в порядке, заданном редактором (первая — основная).
+ *
+ * Из них шаблон карточки делает видимые атрибуты-ссылки (повод, адресат —
+ * ТЗ §5.4). Неопубликованные узлы не приходят, поэтому ссылки на страницу без
+ * 200 не появляется; порядок восстанавливает `orderByIds` — обоснование в
+ * `./relations.ts`.
+ */
+export async function listCollectionsByIds(
+  ids: readonly RecordId[],
+): Promise<readonly Collection[]> {
+  const { docs } = await findMany(collectionsByIdsQuery(ids));
+  const nodes = (docs as Collection[]).map((node) =>
+    assertPublicallyReadable(node, 'подборку карточки'),
+  );
+  return orderByIds(nodes, ids);
+}
+
+/**
+ * Похожие открытки для блока на карточке (ТЗ §5.4, решение Ч-04-8).
+ *
+ * Пустой набор подборок даёт пустой список, а не выборку каталога: правило
+ * живёт в `similarCardsQuery`.
+ */
+export async function listSimilarCards(
+  input: SimilarCardsQueryInput,
+): Promise<readonly Card[]> {
+  const { docs } = await findMany(similarCardsQuery(input));
+  return (docs as Card[]).map((card) => assertPublicallyReadable(card, 'похожую карточку'));
 }
 
 /** Свежие опубликованные карточки. */

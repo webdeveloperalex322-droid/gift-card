@@ -1,0 +1,401 @@
+/**
+ * Содержимое страниц карточки и подборки из записей CMS (задачи Э3-05, Э3-06).
+ *
+ * Разделение с `../seo/card-page.ts` и `../seo/collection-page.ts` — по
+ * зависимостям, как у крошек и у изображения. Там живут ПРАВИЛА разметки (состав
+ * свойств, абсолютные адреса, отказ на пустом обязательном значении) — чистые
+ * функции без типов CMS. Здесь живёт ЧТЕНИЕ ЗАПИСИ: какие поля становятся
+ * заголовком, описанием, подписью, списком и ссылками. Модуль импортирует
+ * сгенерированные типы Payload, поэтому в composite-проект
+ * `../../tsconfig.node.json` войти не может, и его тест лежит рядом
+ * (`./page-data.test.ts`).
+ *
+ * Запросов здесь нет: записи приходят аргументами, читает их маршрут через
+ * `./content.ts`. Поэтому модуль грузится без конфига Payload, и его тест не
+ * поднимает CMS.
+ *
+ * ## Зачем шаблонам ОДНА функция на страницу, а не набор мелких
+ *
+ * Три требования проверяемы только тогда, когда у видимого блока и у разметки
+ * ОДНО значение, а не два совпадающих:
+ *
+ *   - `ItemList` соответствует видимой сетке: те же элементы, тот же порядок,
+ *     столько же (ТЗ §5.3). Здесь это буквально ОДИН И ТОТ ЖЕ массив: сетка
+ *     получает {@link CardTile}, а `itemListElement` собирается из него же;
+ *   - `ImageObject.contentUrl` указывает на файл, который страница ПОКАЗЫВАЕТ, а
+ *     `width`/`height` совпадают с размерами этого файла. Резервная производная
+ *     выбирается один раз и уходит в три места: `<img src>` (через компонент),
+ *     кнопку «Скачать» и разметку;
+ *   - `WebPage.url` и `CollectionPage.url` совпадают с self-canonical символ в
+ *     символ: канонический путь вычисляется здесь один раз и передаётся и в
+ *     layout, и в сборку разметки.
+ *
+ * ## Где принимается решение «страница не существует»
+ *
+ * В обеих функциях, значением `null`:
+ *
+ *   - карточка без производных изображения. Содержание страницы карточки — это
+ *     открытка; без неё остаются заголовок и подпись, то есть ровно «слабая
+ *     страница», которой запрещено отдавать 200 (ТЗ §5.3). CMS не пускает
+ *     карточку без изображения даже в `review`, поэтому у опубликованной записи
+ *     производные есть, а `null` означает повреждённое зеркало — и честный ответ
+ *     на это 404, а не 200 без картинки;
+ *   - подборка, у которой нет ни открыток, ни дочерних узлов. Пустая сетка под
+ *     заголовком — тот же случай, и именно так возникает soft 404 у списков.
+ *
+ * Решение об HTTP-статусе принимает маршрут: слой данных отвечать 404 не умеет, а
+ * функция обязана проверяться без сервера.
+ */
+
+import type { Card, Collection, SiteSetting } from '@otkritka/cms/types';
+import { buildCardPath } from '@otkritka/cms/seo/paths';
+import { aiDisclosureText, imageLicenseJsonLd, type SharedEnv } from '@otkritka/shared';
+
+import { pickFallbackVariant, variantPath } from '../images/card-image.js';
+import { canonicalPathFor } from '../routing/canonical.js';
+import { type CardPageJsonLd, cardPageJsonLd } from '../seo/card-page.js';
+import {
+  type CollectionPageJsonLd,
+  collectionPageJsonLd,
+  type ListItemFacts,
+} from '../seo/collection-page.js';
+import { recordHeading } from '../seo/headings.js';
+import { type CardImageSource, cardImageAlt, cardImageVariants } from './card-image.js';
+
+/**
+ * Путь карточки собирается ЕДИНСТВЕННОЙ функцией проекта. Взята она напрямую из
+ * `@otkritka/cms/seo/paths`, а не обёрткой `cardPath` из `./content.ts`, по той
+ * же причине, что в `./breadcrumbs.ts`: `./content.ts` на загрузке тянет конфиг
+ * Payload, а этому модулю он не нужен — иначе его юнит-тест поднимал бы CMS ради
+ * чистых преобразований.
+ */
+function cardPathOf(card: Pick<Card, 'slug'>): string {
+  return buildCardPath(card.slug);
+}
+
+/**
+ * Плитка сетки: всё, что нужно и компоненту сетки, и элементу `ItemList`.
+ *
+ * Поля `name` и `path` — это одновременно видимый текст ссылки с её `href` и
+ * `name` с `url` элемента разметки. Именно поэтому тип один: два разных объекта
+ * (один для сетки, другой для разметки) означали бы два значения, которые
+ * обязаны совпадать, но проверяются по отдельности.
+ */
+export interface CardTile extends ListItemFacts {
+  /** Поля записи для компонента изображения: `alt` и зеркало производных. */
+  readonly image: CardImageSource;
+}
+
+/** Заполненное текстовое поле записи либо `null` — «редактор не заполнил». */
+function filled(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? '';
+  return trimmed === '' ? null : trimmed;
+}
+
+/** Плитки для сетки в порядке, в котором их вернул запрос. */
+export function cardTiles(cards: readonly Card[]): readonly CardTile[] {
+  return cards.map((card) => ({
+    image: card,
+    name: recordHeading(card),
+    path: cardPathOf(card),
+  }));
+}
+
+/* ------------------------------------------------------------------ */
+/* Карточка открытки (ТЗ §5.4)                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Видимый атрибут карточки: подборка, в которую она входит, — ссылкой.
+ *
+ * Стиля и настроения среди атрибутов нет намеренно: по решению Ч-04-3 это
+ * фильтр без собственных URL, отдельных полей у карточки в схеме тоже нет, и
+ * ссылки на несуществующую страницу здесь не появится.
+ */
+export interface CardAttributeLink extends ListItemFacts {
+  /** Что это за привязка: повод, адресат, раздел. */
+  readonly kindLabel: string;
+}
+
+/** Названия видов узла таксономии для видимой подписи атрибута. */
+const NODE_KIND_LABELS: Readonly<Record<Collection['nodeKind'], string>> = {
+  group: 'Раздел',
+  occasion: 'Повод',
+  recipient: 'Адресат',
+};
+
+export interface CardPageContent {
+  /** Канонический путь страницы: поле `canonical` записи либо `/otkrytki/<slug>`. */
+  readonly canonicalPath: string;
+  /** Единственный H1 страницы. */
+  readonly heading: string;
+  /** `<title>`. Отдельно от H1: у записи это разные поля (ТЗ §8.1). */
+  readonly title: string;
+  /** `<meta name="description">`. `null` — тега нет вовсе, а не пустой тег. */
+  readonly metaDescription: string | null;
+  /** Директива робота из записи. Догадок здесь нет: значение задаёт человек. */
+  readonly robots: Card['robots'];
+  /** Видимая подпись или текст поздравления. */
+  readonly caption: string | null;
+  /** Видимое описание открытки. */
+  readonly description: string | null;
+  /**
+   * Условия использования, заданные у САМОЙ открытки. Пусто — действуют условия
+   * проекта, и отдельной подписи на странице нет.
+   */
+  readonly usageTerms: string | null;
+  /**
+   * Видимое указание на то, что изображение создано нейросетью (решение Ч-10).
+   * `null` — формулировка в настройках не заполнена, и подписи нет вовсе.
+   */
+  readonly aiDisclosure: string | null;
+  /** Прямой адрес файла для кнопки «Скачать»: самая широкая производная JPEG. */
+  readonly downloadPath: string;
+  /** Размеры того же файла — они же в разметке `ImageObject`. */
+  readonly downloadWidth: number;
+  readonly downloadHeight: number;
+  /** Видимые атрибуты-ссылки в порядке, заданном редактором. */
+  readonly attributes: readonly CardAttributeLink[];
+  /** Похожие открытки: обязательный блок достижимости (решение Ч-04-8). */
+  readonly similar: readonly CardTile[];
+  readonly jsonLd: CardPageJsonLd;
+}
+
+export interface CardPageInput {
+  readonly card: Card;
+  /** Глобал настроек: из него берутся лицензионные поля и указание на ИИ (Ч-10). */
+  readonly settings: SiteSetting;
+  /** Подборки карточки в порядке редактора — только опубликованные. */
+  readonly collections: readonly Collection[];
+  /** Похожие открытки, уже отобранные запросом. */
+  readonly similar: readonly Card[];
+  readonly env?: SharedEnv;
+}
+
+/**
+ * Содержимое страницы карточки либо `null`, если показывать нечего.
+ *
+ * @throws Error если `SITE_URL` не задан, если пусты и H1, и title, если пуст
+ *   `alt` изображения либо если в поле `canonical` записи лежит абсолютный
+ *   адрес. Все четыре случая — незаполненная или повреждённая запись, и
+ *   молчаливая деградация здесь хуже отказа: страница выглядела бы исправной.
+ */
+export function cardPageContent(input: CardPageInput): CardPageContent | null {
+  const variants = cardImageVariants(input.card);
+  if (variants.length === 0) {
+    return null;
+  }
+
+  const heading = recordHeading(input.card);
+  const canonicalPath = canonicalPathFor(input.card.canonical, cardPathOf(input.card));
+  // Резервная производная — та же, что попадает в `<img src>`: её адрес идёт и в
+  // кнопку «Скачать», и в `ImageObject.contentUrl`. Одно значение на три места;
+  // иначе страница показывает один файл, а разметка описывает другой.
+  const fallback = pickFallbackVariant(variants);
+  const description = filled(input.card.description);
+  // `alt` взят резервом описания намеренно: у `ImageObject` свойство
+  // `description` обязательно, а alt — это и есть описание изображения, уже
+  // присутствующее в ответе сервера. Заголовок описанием картинки не является и
+  // сюда не подставляется.
+  const alt = cardImageAlt(input.card);
+  const imageDescription = description ?? (alt.kind === 'decorative' ? '' : alt.text);
+
+  return {
+    aiDisclosure: aiDisclosureText(input.settings.imageLicense),
+    attributes: cardAttributeLinks(input.collections),
+    canonicalPath,
+    caption: filled(input.card.caption),
+    description,
+    downloadHeight: fallback.height,
+    downloadPath: variantPath(fallback),
+    downloadWidth: fallback.width,
+    heading,
+    jsonLd: cardPageJsonLd(
+      {
+        canonicalPath,
+        description: input.card.metaDescription,
+        heading,
+        image: {
+          caption: input.card.caption,
+          description: imageDescription,
+          name: heading,
+          variant: fallback,
+        },
+        // Лицензионная часть — целиком или никак (решение Ч-10). Предикат живёт
+        // в `@otkritka/shared`; своей трактовки «заполнено ли» здесь нет.
+        license: imageLicenseJsonLd(input.settings.imageLicense),
+      },
+      input.env,
+    ),
+    metaDescription: filled(input.card.metaDescription),
+    robots: input.card.robots,
+    similar: cardTiles(input.similar),
+    title: input.card.title,
+    usageTerms: filled(input.card.usageTerms),
+  };
+}
+
+/** Атрибуты-ссылки из подборок карточки. Узел без сохранённого пути выпадает. */
+export function cardAttributeLinks(
+  collections: readonly Collection[],
+): readonly CardAttributeLink[] {
+  const links: CardAttributeLink[] = [];
+  for (const node of collections) {
+    const path = filled(node.path);
+    if (path === null) {
+      continue;
+    }
+    links.push({
+      kindLabel: NODE_KIND_LABELS[node.nodeKind],
+      name: recordHeading(node),
+      path,
+    });
+  }
+  return links;
+}
+
+/* ------------------------------------------------------------------ */
+/* Подборка (ТЗ §5.3)                                                 */
+/* ------------------------------------------------------------------ */
+
+export interface CollectionPageContent {
+  /** Канонический путь: поле `canonical` записи либо сохранённый `path`. */
+  readonly canonicalPath: string;
+  readonly heading: string;
+  readonly title: string;
+  readonly metaDescription: string | null;
+  readonly robots: Collection['robots'];
+  /** Вводный текст: lexical-документ, рендерится сервером как есть. */
+  readonly intro: Collection['intro'];
+  /**
+   * Дата содержательного обновления (ТЗ §5.3). `null` — редактор её не ставил, и
+   * тогда нет ни видимой даты, ни `dateModified` в разметке: подставлять вместо
+   * неё `updatedAt` запрещено — техническая правка обновлением не является.
+   */
+  readonly updatedContentAt: string | null;
+  /** Плитки сетки. РОВНО этот массив обязан отрендерить шаблон. */
+  readonly tiles: readonly CardTile[];
+  /** Ссылки вниз — на дочерние узлы. */
+  readonly children: readonly ListItemFacts[];
+  /** Ссылка вверх — на родителя. `null` у узла верхнего уровня. */
+  readonly parent: ListItemFacts | null;
+  /** Смежные узлы вбок (3–6 по ТЗ §5.3; предел ставит запрос). */
+  readonly related: readonly ListItemFacts[];
+  readonly jsonLd: CollectionPageJsonLd;
+}
+
+export interface CollectionPageInput {
+  readonly node: Collection;
+  readonly cards: readonly Card[];
+  readonly children: readonly Collection[];
+  readonly parent: Collection | null;
+  readonly related: readonly Collection[];
+  readonly env?: SharedEnv;
+}
+
+/**
+ * Содержимое страницы подборки либо `null`, если показывать нечего.
+ *
+ * @throws Error если `SITE_URL` не задан, если у записи нет сохранённого пути,
+ *   если пусты и H1, и title либо если в поле `canonical` лежит абсолютный
+ *   адрес.
+ */
+export function collectionPageContent(input: CollectionPageInput): CollectionPageContent | null {
+  const tiles = cardTiles(input.cards);
+  const children = collectionLinks(input.children);
+  if (tiles.length === 0 && children.length === 0) {
+    return null;
+  }
+
+  const path = filled(input.node.path);
+  if (path === null) {
+    throw new Error(
+      `У подборки #${String(input.node.id)} нет сохранённого пути, поэтому страницу собрать ` +
+        'нельзя: путь — это и адрес страницы, и её self-canonical. Значение считает и хранит ' +
+        'CMS; пустое здесь означает, что запись получена не поиском по пути.',
+    );
+  }
+
+  const heading = recordHeading(input.node);
+  const canonicalPath = canonicalPathFor(input.node.canonical, path);
+  const updatedContentAt = filled(input.node.updatedContentAt);
+  const parent = collectionLinks([input.parent]).at(0) ?? null;
+  // Видимый список страницы: сетка открыток, а у узла без своих открыток — список
+  // дочерних узлов. Из ЭТОГО значения собирается ItemList, и другого источника у
+  // него нет (обоснование — шапка ../seo/collection-page.ts).
+  const items: readonly ListItemFacts[] = tiles.length > 0 ? tiles : children;
+
+  return {
+    canonicalPath,
+    children,
+    heading,
+    intro: input.node.intro,
+    jsonLd: collectionPageJsonLd(
+      {
+        canonicalPath,
+        dateModified: updatedContentAt,
+        description: input.node.metaDescription,
+        heading,
+        items,
+      },
+      input.env,
+    ),
+    metaDescription: filled(input.node.metaDescription),
+    parent,
+    related: withoutPaths(collectionLinks(input.related), [
+      canonicalPath,
+      path,
+      ...(parent === null ? [] : [parent.path]),
+    ]),
+    robots: input.node.robots,
+    tiles,
+    title: input.node.title,
+    updatedContentAt,
+  };
+}
+
+/**
+ * Убирает из списка ссылки на указанные адреса — и повторы внутри самого списка.
+ *
+ * Зачем это нужно, найдено живой проверкой на собранном сервере: связь `related`
+ * заполняет редактор, и он может (законно) указать в ней РОДИТЕЛЯ узла. Тогда в
+ * блоке «Смотрите также» оказывались две одинаковые ссылки на один адрес —
+ * ссылка вверх и она же вбок. Для посетителя это два элемента навигации, между
+ * которыми нечего выбирать, а для краулера — повторная ссылка, ничего не
+ * добавляющая; ровно по этой причине повтор пути запрещён и в крошках
+ * (`../seo/breadcrumbs.ts`). Убирается и собственный адрес страницы: ссылка туда,
+ * где посетитель уже находится.
+ */
+function withoutPaths(
+  links: readonly ListItemFacts[],
+  excluded: readonly string[],
+): readonly ListItemFacts[] {
+  const seen = new Set<string>(excluded);
+  const kept: ListItemFacts[] = [];
+  for (const link of links) {
+    if (seen.has(link.path)) {
+      continue;
+    }
+    seen.add(link.path);
+    kept.push(link);
+  }
+  return kept;
+}
+
+/** Ссылки на узлы: заголовок плюс сохранённый путь. Узел без пути выпадает. */
+export function collectionLinks(
+  nodes: readonly (Collection | null)[],
+): readonly ListItemFacts[] {
+  const links: ListItemFacts[] = [];
+  for (const node of nodes) {
+    if (node === null) {
+      continue;
+    }
+    const path = filled(node.path);
+    if (path === null) {
+      continue;
+    }
+    links.push({ name: recordHeading(node), path });
+  }
+  return links;
+}

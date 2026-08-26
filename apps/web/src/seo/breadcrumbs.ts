@@ -43,6 +43,17 @@ import {
   type SharedEnv,
 } from '@otkritka/shared';
 
+import { type JsonLdDocument, jsonLdScriptText } from './json-ld.js';
+
+/**
+ * Сериализация разметки переехала в `./json-ld.ts` (задача Э3-05): её зовут и
+ * крошки, и карточка, и подборка, а второе экранирование `</script>` в проекте
+ * означало бы, что одна из копий однажды его потеряет. Реэкспорт сохранён, чтобы
+ * прежние импорты — включая компонент `../components/Breadcrumbs.astro` — не
+ * менялись.
+ */
+export { jsonLdScriptText };
+
 /**
  * Звено цепочки до сборки: видимый текст и путь от корня сайта.
  *
@@ -204,8 +215,7 @@ export interface BreadcrumbListItemJsonLd {
   readonly item: string;
 }
 
-export interface BreadcrumbListJsonLd {
-  readonly '@context': 'https://schema.org';
+export interface BreadcrumbListJsonLd extends JsonLdDocument {
   readonly '@type': 'BreadcrumbList';
   readonly itemListElement: readonly BreadcrumbListItemJsonLd[];
 }
@@ -245,18 +255,3 @@ export function breadcrumbListJsonLd(
   };
 }
 
-/**
- * Текст для тела `<script type="application/ld+json">`.
- *
- * Экранируются `<`, `>` и `&`: заголовок записи — это текст, введённый
- * человеком, и последовательность `</script>` внутри строки закрыла бы тег.
- * Экранирование делается в JSON-строке (`<`), поэтому смысл значения не
- * меняется — распарсенный результат тождественно равен исходному объекту, что
- * проверяется тестом.
- */
-export function jsonLdScriptText(value: BreadcrumbListJsonLd): string {
-  return JSON.stringify(value)
-    .replace(/</gu, '\\u003c')
-    .replace(/>/gu, '\\u003e')
-    .replace(/&/gu, '\\u0026');
-}

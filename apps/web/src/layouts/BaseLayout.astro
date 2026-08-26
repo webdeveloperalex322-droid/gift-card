@@ -37,8 +37,21 @@ import { serverEnv } from '../server-env';
 interface Props {
   /** Содержимое `<title>`. Уникально в пределах сайта. */
   title: string;
-  /** Содержимое `<meta name="description">`. Уникально в пределах сайта. */
-  description: string;
+  /**
+   * Содержимое `<meta name="description">`. Уникально в пределах сайта.
+   *
+   * Пусто или `null` — тега НЕ БУДЕТ ВОВСЕ, а не будет пустого тега. Так решено
+   * на Э3-05: `metaDescription` не входит в обязательные поля перед `review`
+   * (`CARD_REVIEW_REQUIREMENTS` в `apps/cms`), поэтому у опубликованной карточки
+   * поле может быть пустым, и выбор здесь между двумя вариантами — пустой
+   * `content=""` и отсутствие тега. Пустое значение хуже: это фиктивное
+   * содержимое, запрещённое тем же правилом, по которому не выводятся
+   * незаполненные лицензионные поля (Ч-10) и блок `Organization` (Ч-17). Для
+   * индексируемой страницы description обязателен (п. 22.1), но обеспечивается
+   * он заполнением записи, а не подстановкой в шаблоне: автосборка описания из
+   * текста страницы — это шаблонный SEO-текст, прямой запрет п. 23.4.
+   */
+  description?: string | null;
   /** Путь страницы от корня — основа абсолютного self-canonical. */
   canonicalPath: string;
   /**
@@ -51,6 +64,11 @@ interface Props {
 const { canonicalPath, description, robots, title } = Astro.props;
 
 const canonicalUrl = canonicalUrlFor(canonicalPath, serverEnv());
+
+// Пустая строка и пробелы — это ПУСТО: поле, в которое редактор случайно поставил
+// пробел, не должно давать тег с невидимым содержимым. Та же трактовка, что у
+// предикатов настроек сайта (`packages/shared/src/site-settings-rules.ts`).
+const descriptionText = description?.trim() ?? '';
 ---
 
 <!doctype html>
@@ -59,7 +77,7 @@ const canonicalUrl = canonicalUrlFor(canonicalPath, serverEnv());
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
-    <meta name="description" content={description} />
+    {descriptionText === '' ? null : <meta name="description" content={descriptionText} />}
     <meta name="robots" content={robots} />
     <link rel="canonical" href={canonicalUrl} />
     <style is:inline>
@@ -107,6 +125,52 @@ const canonicalUrl = canonicalUrlFor(canonicalPath, serverEnv());
       }
       a {
         color: inherit;
+      }
+      /* Сетка превью. ЭТО КОНТРАКТ с набором `sizes` роли `grid-tile`
+         (`src/images/card-image.ts`, IMAGE_LAYOUT_SIZES): пороги там посчитаны
+         ровно для `minmax(15rem, 1fr)` и `gap: 1rem` внутри колонки контента.
+         Правка сетки без правки набора в том же коммите означает, что браузер
+         выбирает ширину файла под сетку, которой нет.
+
+         Сетка живёт в критическом CSS, а не в `<style>` компонента, по той же
+         причине, по которой у компонента изображения нет своего блока стилей:
+         это первый экран страницы подборки, и внешний запрос за CSS сдвигал бы
+         LCP и давал бы сдвиг макета. */
+      .card-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+        gap: 1rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .card-grid__link {
+        display: block;
+        text-decoration: none;
+      }
+      .card-grid__title {
+        display: block;
+        margin-block-start: 0.375rem;
+        font-size: 0.9375rem;
+        text-decoration: underline;
+      }
+      .page-section {
+        margin-block-start: 2rem;
+      }
+      .page-section > h2 {
+        font-size: 1.25rem;
+        margin-block: 0 0.75rem;
+      }
+      /* Ряды ссылок: атрибуты карточки, перелинковка, «поделиться». Списком, а
+         не абзацем: это перечисление ссылок, и вспомогательные технологии
+         обязаны знать их число. */
+      .link-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 1rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
       }
     </style>
   </head>
