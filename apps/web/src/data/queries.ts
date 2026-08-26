@@ -187,6 +187,58 @@ export function collectionCardsQuery(input: CollectionCardsQueryInput): PublicFi
   };
 }
 
+export interface CatalogCardsQueryInput {
+  /** Номер страницы, начиная с 1. `/page/1` не существует (решение Ч-05). */
+  readonly page: number;
+  readonly perPage?: number;
+}
+
+/**
+ * Карточки КАТАЛОГА `/otkrytki`, страница за страницей (задача Э3-08).
+ *
+ * Отличается от {@link collectionCardsQuery} ровно отсутствием фильтра по
+ * подборке: каталог перечисляет всё опубликованное. Порядок тот же и это
+ * обязательно — иначе одна и та же карточка попадала бы на две страницы каталога.
+ *
+ * Почему это не {@link recentCardsQuery} с параметром: у того пагинации нет
+ * вовсе (`pagination: false`, предел строк), он отвечает на другой вопрос —
+ * «свежие для блока», где число известно заранее. Один запрос на две роли
+ * означал бы, что блок главной однажды поедет по страницам, а каталог перестанет
+ * знать общее число открыток.
+ */
+export function catalogCardsQuery(input: CatalogCardsQueryInput): PublicFindQuery<'cards'> {
+  return {
+    ...PUBLIC_READ_SCOPE,
+    collection: 'cards',
+    limit: input.perPage ?? DEFAULT_CARDS_PER_PAGE,
+    page: assertPageNumber(input.page),
+    sort: [...CARD_ORDER],
+  };
+}
+
+/**
+ * Узлы верхнего уровня таксономии — содержание каталога `/podborki` (Э3-08).
+ *
+ * «Верхний уровень» — это отсутствие родителя, а не вид узла: группирующие узлы
+ * (`prazdniki`, `adresaty`) и адресаты без праздника лежат на первом уровне
+ * одинаково, а завязка на `nodeKind` означала бы, что каталог теряет раздел при
+ * первом же новом виде узла.
+ *
+ * Предел — {@link MAX_LIST_ROWS}: это не пагинация, а граница SSR-запроса.
+ * Каталог `/podborki` пагинации не имеет намеренно — узлов верхнего уровня
+ * единицы, и страница со списком разделов постранично не разбивается.
+ */
+export function rootCollectionsQuery(): PublicFindQuery<'collections'> {
+  return {
+    ...PUBLIC_READ_SCOPE,
+    collection: 'collections',
+    limit: MAX_LIST_ROWS,
+    pagination: false,
+    sort: [...COLLECTION_ORDER],
+    where: { parent: { exists: false } },
+  };
+}
+
 /**
  * Дочерние узлы подборки.
  *

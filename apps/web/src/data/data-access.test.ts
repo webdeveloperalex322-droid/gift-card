@@ -40,16 +40,19 @@ import { describe, expect, it } from 'vitest';
 
 import {
   cardBySlugQuery,
+  catalogCardsQuery,
   childCollectionsQuery,
   collectionByIdQuery,
   collectionByPathQuery,
   collectionCardsQuery,
   collectionsByIdsQuery,
+  MAX_LIST_ROWS,
   type PublicCollectionSlug,
   type PublicFindQuery,
   recentCardsQuery,
   relatedCollectionsQuery,
   RELATED_COLLECTIONS_MAX,
+  rootCollectionsQuery,
   seasonalCollectionsQuery,
   SIMILAR_CARDS_MAX,
   SIMILAR_CARDS_TARGET_MIN,
@@ -188,6 +191,35 @@ describe('запросы к коллекциям', () => {
     expect(query.sort).toEqual(['-publishedAt', '-id']);
   });
 
+  it('каталог открыток: та же пагинация и тот же порядок, но без фильтра по подборке', () => {
+    // Каталог `/otkrytki` (задача Э3-08) перечисляет всё опубликованное. Порядок
+    // обязан совпадать с порядком списка подборки: иначе одна карточка попадала
+    // бы на две страницы каталога, а другая ни на одну.
+    const query = catalogCardsQuery({ page: 2 });
+
+    expect(query.collection).toBe('cards');
+    expect(query.page).toBe(2);
+    expect(query.limit).toBe(DEFAULT_CARDS_PER_PAGE);
+    expect(query.where).toBeUndefined();
+    expect(query.sort).toEqual(['-publishedAt', '-id']);
+    expect(catalogCardsQuery({ page: 1, perPage: 6 }).limit).toBe(6);
+    // Номер страницы проверяется тем же предикатом, что у списка подборки:
+    // /page/1 не существует, а /page/0 обязан отвечать 404 в маршруте.
+    expect(() => catalogCardsQuery({ page: 0 })).toThrow();
+  });
+
+  it('каталог подборок: узлы верхнего уровня — те, у которых нет родителя', () => {
+    // «Верхний уровень» — отсутствие родителя, а не вид узла: завязка на
+    // nodeKind означала бы, что каталог теряет раздел при новом виде узла.
+    const query = rootCollectionsQuery();
+
+    expect(query.collection).toBe('collections');
+    expect(query.where).toEqual({ parent: { exists: false } });
+    expect(query.limit).toBe(MAX_LIST_ROWS);
+    expect(query.pagination).toBe(false);
+    expect(query.sort).toEqual(['title', 'id']);
+  });
+
   it('дети, родитель и смежные подборки читаются по идентификаторам', () => {
     expect(required(childCollectionsQuery(7)).where).toEqual({ parent: { in: [7] } });
     expect(required(collectionByIdQuery(7)).where).toEqual({ id: { in: [7] } });
@@ -283,6 +315,8 @@ describe('запросы к коллекциям', () => {
       required(collectionsByIdsQuery([1])),
       required(similarCardsQuery({ collectionIds: [1], excludeCardId: 2 })),
       recentCardsQuery(4),
+      catalogCardsQuery({ page: 2 }),
+      rootCollectionsQuery(),
       seasonalCollectionsQuery(new Date()),
     ];
     for (const query of queries) {

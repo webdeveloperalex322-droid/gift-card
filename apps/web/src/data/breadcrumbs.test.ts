@@ -219,6 +219,26 @@ describe('крошки страницы подборки', () => {
       collectionBreadcrumbs({ ...RECIPIENT, path: null }, readerOf(GROUP, OCCASION)),
     ).rejects.toThrow(/пути/iu);
   });
+
+  it('на странице пагинации сама подборка становится ссылкой, текущая крошка — номер', async () => {
+    // Задача Э3-07. Ссылка ведёт на БАЗОВЫЙ URL списка: /page/1 не существует, и
+    // появиться в крошках он не может — адрес звена считает paginationPathFor.
+    const trail = await collectionBreadcrumbs(OCCASION, readerOf(GROUP, OCCASION), 2);
+
+    expect(trail.map((item) => [item.path, item.linked])).toEqual([
+      ['/', true],
+      ['/podborki/prazdniki', true],
+      ['/podborki/prazdniki/8-marta', true],
+      ['/podborki/prazdniki/8-marta/page/2', false],
+    ]);
+    expect(trail.at(-1)?.label).toBe('Страница 2');
+  });
+
+  it('крошки первой страницы номера не содержат: она живёт по базовому URL', async () => {
+    const trail = await collectionBreadcrumbs(OCCASION, readerOf(GROUP, OCCASION), 1);
+
+    expect(JSON.stringify(trail)).not.toContain('/page/');
+  });
 });
 
 describe('крошки страницы карточки', () => {

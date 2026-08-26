@@ -45,6 +45,7 @@ import { buildCardPath } from '@otkritka/cms/seo/paths';
 import { payloadClient } from './payload-client.js';
 import {
   cardBySlugQuery,
+  catalogCardsQuery,
   childCollectionsQuery,
   collectionByIdQuery,
   collectionByPathQuery,
@@ -54,6 +55,7 @@ import {
   recentCardsQuery,
   type RecordId,
   relatedCollectionsQuery,
+  rootCollectionsQuery,
   seasonalCollectionsQuery,
   similarCardsQuery,
   type SimilarCardsQueryInput,
@@ -136,6 +138,41 @@ export async function listCollectionCards(input: {
     pageCount: totalPages,
     totalCards: totalDocs,
   };
+}
+
+/**
+ * Страница карточек КАТАЛОГА `/otkrytki` (задача Э3-08).
+ *
+ * Та же форма результата, что у списка подборки, и это не совпадение: страницы
+ * пагинации у обоих списков считаются одним правилом (`../routing/pagination.ts`),
+ * а два разных типа результата означали бы два расчёта числа страниц.
+ */
+export async function listCatalogCards(input: {
+  readonly page: number;
+  readonly perPage?: number;
+}): Promise<CardsPage> {
+  const query = catalogCardsQuery(
+    input.perPage === undefined ? { page: input.page } : { page: input.page, perPage: input.perPage },
+  );
+  const { docs, totalDocs, totalPages } = await findMany(query);
+  return {
+    cards: (docs as Card[]).map((card) => assertPublicallyReadable(card, 'карточку каталога')),
+    page: input.page,
+    pageCount: totalPages,
+    totalCards: totalDocs,
+  };
+}
+
+/**
+ * Узлы верхнего уровня таксономии — содержание каталога `/podborki` (Э3-08).
+ *
+ * Неопубликованные не приходят, поэтому каталог не выводит ссылку на страницу без
+ * 200. Пустой результат означает, что каталогу нечего показывать, и маршрут
+ * отвечает 404: пустая страница не отдаёт 200 как посадочная (ТЗ §5.3).
+ */
+export async function listRootCollections(): Promise<readonly Collection[]> {
+  const { docs } = await findMany(rootCollectionsQuery());
+  return (docs as Collection[]).map((node) => assertPublicallyReadable(node, 'узел каталога'));
 }
 
 /** Дочерние узлы подборки. Неопубликованные не приходят — ссылок на них не будет. */

@@ -48,19 +48,35 @@
  * опубликовал, спорил бы с ним молча. Место этой проверки — переход в `published`
  * в CMS; вынесено в отчёт задачи как предложение человеку.
  *
+ * ## Пагинация (задача Э3-07)
+ *
+ * Список карточек разбит на страницы сегментом пути: `/podborki/<путь>/page/N`
+ * (решение Ч-05). Первая страница живёт по БАЗОВОМУ URL, `/page/1` не существует
+ * и в ссылках не появляется — адрес звена считает `paginationPathFor`, а он на
+ * номере 1 отдаёт базовый путь.
+ *
+ * Хвост `page/N` отделяется от пути записи ДО запроса: неоднозначности не
+ * возникает, потому что сегмент `page` запрещён в slug на любой позиции (реестр
+ * зарезервированных маршрутов). Порядок шагов значим и объяснён в шапке
+ * `../../data/catalog.ts`:
+ *
+ *   - форма номера проверяется первой, без запроса к базе: `/page/0`,
+ *     `/page/01`, `/page/-1`, `/page/dva` — 404;
+ *   - `/page/1` — одиночный 301 на базовый URL, но только если базовый URL
+ *     отвечает 200: иначе получился бы переход на 404;
+ *   - номер больше числа страниц — 404, а не 200 с пустой сеткой.
+ *
  * ## Чего на странице ещё нет и кто это делает
  *
- *   - **пагинация** (`/page/N`) — задача Э3-07. Сейчас выводится ПЕРВАЯ страница
- *     списка по базовому URL; `/page/1` не существует и в ссылках не появляется.
- *     Пока пагинации нет, открытки за первой страницей достижимы блоком «Похожие
- *     открытки» на карточках (решение Ч-04-8), а не отсутствующими ссылками;
- *   - **рекламные места** (Ч-11) — Э3-12. Ряд под H1 (над сеткой) и ряд после
- *     пагинации встают в плоскую разметку без переделки;
- *   - **каталог `/podborki`** — Э3-08. Этот маршрут по нему отвечает 404: рест-
- *     параметр совпадает и с пустым значением, а страницы каталога ещё нет.
+ * Рекламные места (два ряда по три блока, Ч-11) — задача Э3-12: ряд под H1 (над
+ * сеткой) и ряд после пагинации встают в плоскую разметку без переделки.
+ *
+ * Каталог `/podborki` живёт в соседнем маршруте (`./index.astro`, задача Э3-08),
+ * поэтому пустой рест-параметр сюда больше не приходит.
  */
 import CardGrid from '../../components/CardGrid.astro';
 import Breadcrumbs from '../../components/Breadcrumbs.astro';
+import Pagination from '../../components/Pagination.astro';
 import RichText from '../../components/RichText.astro';
 import {
   collectionBreadcrumbTrail,
@@ -74,6 +90,7 @@ import {
   relationIds,
 } from '../../data';
 import BaseLayout from '../../layouts/BaseLayout.astro';
+import { decidePageParam, splitPaginatedPath } from '../../routing/pagination';
 import { jsonLdScriptText } from '../../seo/json-ld';
 import { richTextBlocks } from '../../seo/rich-text';
 import { serverEnv } from '../../server-env';
@@ -82,28 +99,69 @@ import { COLLECTION_PATH_PREFIX } from '@otkritka/cms/seo/paths';
 export const prerender = false;
 
 const rest = Astro.params.path ?? '';
-// Пустой рест-параметр — это адрес каталога `/podborki` (задача Э3-08). Пока
-// каталога нет, честный ответ 404, а не список всех подборок: страница, которой
-// не существует, не должна появляться как побочный эффект маршрута ветви.
-const node = rest === '' ? null : await findCollectionByPath(`${COLLECTION_PATH_PREFIX}/${rest}`);
+// Хвост `page/N` отделяется от пути записи ДО запроса. Пустой рест-параметр сюда
+// не приходит — `/podborki` обслуживает `./index.astro` (каталог, задача Э3-08),
+// но проверка остаётся: без неё пустое значение дало бы запрос по пути
+// контейнера, у которого записи быть не может.
+const split = rest === '' ? null : splitPaginatedPath(`${COLLECTION_PATH_PREFIX}/${rest}`);
+if (split === null || split.basePath === COLLECTION_PATH_PREFIX) {
+  return new Response(null, { status: 404 });
+}
+
+// Форма номера проверяется ПЕРВОЙ, до обращения к базе: `/page/0`, `/page/01` и
+// `/page/dva` адресами не являются, и знать про них данные не нужно.
+const paging =
+  split.pageParam === null
+    ? ({ action: 'page', page: 1 } as const)
+    : decidePageParam(split.pageParam);
+if (paging.action === 'not-found') {
+  return new Response(null, { status: 404 });
+}
+
+const node = await findCollectionByPath(split.basePath);
 if (node === null) {
   return new Response(null, { status: 404 });
 }
 
+// `/page/1` обслуживается запросом ПЕРВОЙ страницы: 301 отдаётся только тогда,
+// когда базовый URL действительно отвечает 200, — иначе переход вёл бы на 404.
+const page = paging.action === 'redirect-to-base' ? 1 : paging.page;
+
 const env = serverEnv();
 const [cardsPage, children, parent, related] = await Promise.all([
-  // Первая страница списка живёт по базовому URL (решение Ч-05).
-  listCollectionCards({ collectionId: node.id, page: 1 }),
+  listCollectionCards({ collectionId: node.id, page }),
   listChildCollections(node.id),
   findCollectionById(relationId(node.parent)),
   listRelatedCollections(relationIds(node.related)),
 ]);
+
+// Номер вне диапазона — 404, а не 200 с пустой сеткой. Проверка стоит до сборки
+// содержимого: страницы 3 у списка из двух страниц не существует.
+if (page > 1 && page > cardsPage.pageCount) {
+  return new Response(null, { status: 404 });
+}
+
+if (paging.action === 'redirect-to-base') {
+  if (cardsPage.pageCount === 0 && children.length === 0) {
+    // Базовый URL сам отвечает 404 (ни открыток, ни детей) — редиректа нет.
+    return new Response(null, { status: 404 });
+  }
+  // Ровно 301 и пустое тело: шаблон 3xx самого Astro кладёт в
+  // `<meta http-equiv="refresh">` адрес-ИСТОЧНИК, то есть отправляет клиента
+  // назад (разбор — в шапке `../../routing/path-policy.ts`).
+  return new Response(null, {
+    status: 301,
+    headers: { 'Content-Length': '0', Location: split.basePath },
+  });
+}
 
 const content = collectionPageContent({
   cards: cardsPage.cards,
   children,
   env,
   node,
+  page,
+  pageCount: cardsPage.pageCount,
   parent,
   related,
 });
@@ -111,7 +169,7 @@ if (content === null) {
   return new Response(null, { status: 404 });
 }
 
-const trail = await collectionBreadcrumbTrail(node);
+const trail = await collectionBreadcrumbTrail(node, page);
 const intro = richTextBlocks(content.intro);
 const jsonLd = jsonLdScriptText(content.jsonLd);
 // Дата содержательного обновления показывается ровно тогда, когда она есть в
@@ -141,6 +199,8 @@ const updatedLabel =
       <CardGrid tiles={content.tiles} prioritizeFirst ariaLabel="Открытки подборки" />
     )
   }
+
+  {content.pagination === null ? null : <Pagination model={content.pagination} ariaLabel="Страницы подборки" />}
 
   {
     content.children.length === 0 ? null : (

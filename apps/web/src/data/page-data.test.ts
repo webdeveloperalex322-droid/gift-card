@@ -29,6 +29,8 @@ import {
   cardAttributeLinks,
   cardPageContent,
   cardTiles,
+  catalogSectionItems,
+  catalogSections,
   collectionLinks,
   collectionPageContent,
 } from './page-data.js';
@@ -300,6 +302,8 @@ function collectionContent(
     readonly children?: readonly Collection[];
     readonly parent?: Collection | null;
     readonly related?: readonly Collection[];
+    readonly page?: number;
+    readonly pageCount?: number;
   } = {},
 ): NonNullable<ReturnType<typeof collectionPageContent>> {
   const content = collectionPageContent({
@@ -307,6 +311,8 @@ function collectionContent(
     children: overrides.children ?? [],
     env: ENV,
     node: overrides.node ?? collection(),
+    page: overrides.page ?? 1,
+    pageCount: overrides.pageCount ?? 1,
     parent: overrides.parent ?? null,
     related: overrides.related ?? [],
   });
@@ -362,6 +368,8 @@ describe('страница подборки: ItemList = видимая сетк�
         children: [],
         env: ENV,
         node: collection(),
+        page: 1,
+        pageCount: 0,
         parent: null,
         related: [],
       }),
@@ -433,5 +441,153 @@ describe('страница подборки: перелинковка и дат�
 
   it('подборка без сохранённого пути — отказ, а не страница по выдуманному адресу', () => {
     expect(() => collectionContent({ node: collection({ path: null }) })).toThrow(/пути/);
+  });
+});
+
+describe('страница подборки: пагинация сегментом пути (задача Э3-07)', () => {
+  const NODE = collection({
+    id: 51,
+    metaDescription: 'Открытки к 8 Марта: маме, бабушке, коллеге.',
+    path: '/podborki/prazdniki/8-marta',
+    robots: 'index,follow',
+    title: 'Открытки на 8 Марта',
+  });
+
+  it('первая страница живёт по базовому URL и сохраняет директиву записи', () => {
+    const content = collectionContent({ node: NODE, page: 1, pageCount: 3 });
+
+    expect(content.canonicalPath).toBe('/podborki/prazdniki/8-marta');
+    expect(content.robots).toBe('index,follow');
+    expect(content.title).toBe('Открытки на 8 Марта');
+    expect(content.metaDescription).toBe('Открытки к 8 Марта: маме, бабушке, коллеге.');
+    expect(content.pagination?.previousPath).toBeNull();
+    expect(content.pagination?.nextPath).toBe('/podborki/prazdniki/8-marta/page/2');
+  });
+
+  it('на базовом URL нет ни одной ссылки на /page/1', () => {
+    const content = collectionContent({ node: NODE, page: 1, pageCount: 4 });
+
+    expect(JSON.stringify(content.pagination)).not.toContain('/page/1');
+  });
+
+  it('страница 2: self-canonical на САМУ СЕБЯ, а не на первую страницу', () => {
+    const content = collectionContent({ node: NODE, page: 2, pageCount: 3 });
+
+    expect(content.canonicalPath).toBe('/podborki/prazdniki/8-marta/page/2');
+    expect(content.jsonLd.url).toBe(`${ENV.SITE_URL}/podborki/prazdniki/8-marta/page/2`);
+  });
+
+  it('страница 2 отдаёт noindex,follow даже у записи, открытой человеком в индекс', () => {
+    // Решение Ч-01b: ссылки обходятся, страницы пагинации в индекс не идут.
+    expect(collectionContent({ node: NODE, page: 2, pageCount: 3 }).robots).toBe('noindex,follow');
+  });
+
+  it('на страницах 2+ title и H1 не повторяют первую страницу, а описания нет вовсе', () => {
+    const content = collectionContent({ node: NODE, page: 3, pageCount: 3 });
+
+    expect(content.title).toBe('Открытки на 8 Марта — страница 3');
+    expect(content.heading).toBe('Открытки на 8 Марта — страница 3');
+    expect(content.metaDescription).toBeNull();
+    expect('description' in content.jsonLd).toBe(false);
+  });
+
+  it('вводный текст принадлежит посадочной странице и на страницах 2+ не повторяется', () => {
+    expect(collectionContent({ node: NODE, page: 2, pageCount: 3 }).intro).toBeNull();
+  });
+
+  it('«предыдущая» со второй страницы ведёт на базовый URL списка', () => {
+    const content = collectionContent({ node: NODE, page: 2, pageCount: 3 });
+
+    expect(content.pagination?.previousPath).toBe('/podborki/prazdniki/8-marta');
+  });
+
+  it('одна страница — блока пагинации нет вовсе', () => {
+    expect(collectionContent({ node: NODE, page: 1, pageCount: 1 }).pagination).toBeNull();
+  });
+
+  it('у группирующего узла без открыток блока пагинации нет', () => {
+    const content = collectionContent({
+      cards: [],
+      children: [collection({ id: 52, path: '/podborki/prazdniki/8-marta', title: '8 Марта' })],
+      node: collection({
+        id: 53,
+        nodeKind: 'group',
+        path: '/podborki/prazdniki',
+        title: 'Праздники',
+      }),
+      page: 1,
+      pageCount: 0,
+    });
+
+    expect(content.pagination).toBeNull();
+  });
+
+  it('ItemList страницы 2 описывает открытки ИМЕННО этой страницы', () => {
+    const content = collectionContent({
+      cards: [card({ id: 61, slug: 'dvadcat-pyataya', title: 'Двадцать пятая' })],
+      node: NODE,
+      page: 2,
+      pageCount: 2,
+    });
+
+    expect(content.jsonLd.mainEntity.itemListElement.map((element) => element.url)).toEqual([
+      `${ENV.SITE_URL}/otkrytki/dvadcat-pyataya`,
+    ]);
+  });
+});
+
+describe('каталог подборок: разделы верхнего уровня и их дети (задача Э3-08)', () => {
+  const PRAZDNIKI = collection({
+    id: 71,
+    nodeKind: 'group',
+    path: '/podborki/prazdniki',
+    title: 'Праздники',
+  });
+  const ADRESATY = collection({
+    id: 72,
+    nodeKind: 'group',
+    path: '/podborki/adresaty',
+    title: 'Адресаты',
+  });
+  const MARTA = collection({ id: 73, path: '/podborki/prazdniki/8-marta', title: '8 Марта' });
+
+  it('раздел собирается из узла и его прямых детей, порядок сохраняется', () => {
+    const sections = catalogSections([
+      { children: [MARTA], node: PRAZDNIKI },
+      { children: [], node: ADRESATY },
+    ]);
+
+    expect(sections.map((section) => section.node.path)).toEqual([
+      '/podborki/prazdniki',
+      '/podborki/adresaty',
+    ]);
+    expect(sections[0]?.children.map((child) => child.name)).toEqual(['8 Марта']);
+  });
+
+  it('узел без сохранённого пути выпадает вместе со своими детьми', () => {
+    // Ссылки на узел без пути нет, а его дети в плоском виде превратили бы карту
+    // разделов в перечень без структуры.
+    const sections = catalogSections([
+      { children: [MARTA], node: collection({ id: 74, path: null, title: 'Без пути' }) },
+    ]);
+
+    expect(sections).toEqual([]);
+  });
+
+  it('ItemList каталога — те же ссылки в том же порядке, что видны на странице', () => {
+    const sections = catalogSections([
+      { children: [MARTA], node: PRAZDNIKI },
+      { children: [], node: ADRESATY },
+    ]);
+
+    expect(catalogSectionItems(sections).map((item) => item.path)).toEqual([
+      '/podborki/prazdniki',
+      '/podborki/prazdniki/8-marta',
+      '/podborki/adresaty',
+    ]);
+  });
+
+  it('пустой каталог даёт пустой список: маршрут ответит 404, а не 200 с пустой страницей', () => {
+    expect(catalogSectionItems(catalogSections([]))).toEqual([]);
   });
 });

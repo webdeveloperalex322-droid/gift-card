@@ -1,0 +1,70 @@
+---
+/**
+ * Страница каталога открыток — общая разметка `/otkrytki` и `/otkrytki/page/N`
+ * (задачи Э3-07, Э3-08).
+ *
+ * Компонент существует ровно потому, что каталог отдают ДВА маршрута, а страница
+ * у них одна. Разложить разметку по двум шаблонам значило бы, что первая страница
+ * и страницы пагинации однажды разойдутся в составе блоков — например, на второй
+ * странице потеряются крошки или второй раз появится `fetchpriority="high"`.
+ * Решение (что показывать и какой ответ дать) принимает `../data/catalog.ts`, здесь
+ * только вывод.
+ *
+ * Инварианты, закодированные здесь (`CLAUDE.md`, разделы «Рендеринг» и
+ * «Изображения»):
+ *   - **ровно один `<h1>`** — заголовок страницы из `catalogPageView`, уже с
+ *     номером страницы на страницах 2+;
+ *   - **первое крупное изображение одно** — первая плитка сетки
+ *     (`prioritizeFirst`); выше сетки на странице ничего крупнее нет;
+ *   - **ноль клиентского JS**, навигация только `<a href>`;
+ *   - **self-canonical и директива робота** приходят готовыми: у страницы
+ *     пагинации canonical указывает на неё саму, а директива — `noindex,follow`
+ *     (решение Ч-01b).
+ */
+import CardGrid from './CardGrid.astro';
+import Breadcrumbs from './Breadcrumbs.astro';
+import Pagination from './Pagination.astro';
+import type { CardCatalogBody } from '../data';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { CATALOGS } from '../seo/catalog-pages';
+import { jsonLdScriptText } from '../seo/json-ld';
+
+interface Props {
+  /** Готовое содержимое страницы из `../data/catalog.ts`. */
+  body: CardCatalogBody;
+}
+
+const { body } = Astro.props;
+const facts = CATALOGS.cards;
+const jsonLd = jsonLdScriptText(body.jsonLd);
+---
+
+<BaseLayout
+  title={body.view.title}
+  description={body.view.metaDescription}
+  canonicalPath={body.view.canonicalPath}
+  robots={body.view.robots}
+>
+  <Breadcrumbs trail={body.trail} />
+
+  <h1>{body.view.heading}</h1>
+
+  {
+    /* Вводный абзац — только на первой странице: тот же текст на каждой странице
+       списка означал бы одно содержание по нескольким адресам. */
+    body.page === 1 ? <p class="catalog__lead">{facts.lead}</p> : null
+  }
+
+  <CardGrid tiles={body.tiles} prioritizeFirst ariaLabel={facts.listLabel} />
+
+  {body.pagination === null ? null : <Pagination model={body.pagination} />}
+
+  <script type="application/ld+json" is:inline set:html={jsonLd} />
+</BaseLayout>
+
+<style>
+  .catalog__lead {
+    max-width: 45rem;
+    margin-block: 0 1.25rem;
+  }
+</style>

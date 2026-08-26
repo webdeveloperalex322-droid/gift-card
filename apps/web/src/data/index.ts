@@ -48,9 +48,18 @@ import { findCollectionById } from './content.js';
  */
 const READ_COLLECTION: CollectionReader = findCollectionById;
 
-/** Крошки страницы подборки. Шаблоны Э3-06 и Э3-08 зовут эту функцию. */
-export function collectionBreadcrumbTrail(node: CollectionCrumbNode): Promise<BreadcrumbTrail> {
-  return collectionBreadcrumbs(node, READ_COLLECTION);
+/**
+ * Крошки страницы подборки. Шаблон Э3-06 зовёт эту функцию.
+ *
+ * `page` — номер страницы списка (Э3-07). На страницах 2+ цепочка получает
+ * последнее звено «Страница N», а сама подборка становится ссылкой на БАЗОВЫЙ
+ * URL списка.
+ */
+export function collectionBreadcrumbTrail(
+  node: CollectionCrumbNode,
+  page = 1,
+): Promise<BreadcrumbTrail> {
+  return collectionBreadcrumbs(node, READ_COLLECTION, page);
 }
 
 /** Крошки страницы карточки: цепочка её основной подборки (ТЗ §5.4). Шаблон Э3-05. */
@@ -74,11 +83,13 @@ export {
   findCardBySlug,
   findCollectionById,
   findCollectionByPath,
+  listCatalogCards,
   listCollectionCards,
   listCollectionsByIds,
   listChildCollections,
   listRecentCards,
   listRelatedCollections,
+  listRootCollections,
   listSeasonalCollections,
   listSimilarCards,
   readSiteSettings,
@@ -91,6 +102,18 @@ export {
  * функцию на страницу и рендерит то, что она вернула: так у видимого блока и у
  * разметки JSON-LD один источник значения — обоснование в шапке `./page-data.ts`.
  */
+/**
+ * Сборка страниц каталогов `/otkrytki` и `/podborki` (Э3-07, Э3-08). Маршрут
+ * зовёт одну функцию и превращает её решение в ответ: 200, одиночный 301 или 404.
+ */
+export {
+  type CardCatalogBody,
+  cardCatalogPage,
+  type CatalogPageResult,
+  type CollectionCatalogBody,
+  collectionCatalogPage,
+} from './catalog.js';
+
 export {
   type CardAttributeLink,
   cardAttributeLinks,
@@ -98,6 +121,9 @@ export {
   cardPageContent,
   type CardTile,
   cardTiles,
+  type CatalogSection,
+  catalogSectionItems,
+  catalogSections,
   collectionLinks,
   type CollectionPageContent,
   collectionPageContent,

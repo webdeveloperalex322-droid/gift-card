@@ -53,6 +53,13 @@ import { aiDisclosureText, imageLicenseJsonLd, type SharedEnv } from '@otkritka/
 
 import { pickFallbackVariant, variantPath } from '../images/card-image.js';
 import { canonicalPathFor } from '../routing/canonical.js';
+import {
+  type PaginationModel,
+  paginationModel,
+  paginationPathFor,
+  paginationTitle,
+  robotsForPage,
+} from '../routing/pagination.js';
 import { type CardPageJsonLd, cardPageJsonLd } from '../seo/card-page.js';
 import {
   type CollectionPageJsonLd,
@@ -265,7 +272,23 @@ export interface CollectionPageContent {
   readonly title: string;
   readonly metaDescription: string | null;
   readonly robots: Collection['robots'];
-  /** Вводный текст: lexical-документ, рендерится сервером как есть. */
+  /**
+   * Номер показанной страницы списка, начиная с 1. Первая страница живёт по
+   * базовому URL (решение Ч-05).
+   */
+  readonly page: number;
+  /**
+   * Блок ссылок пагинации либо `null` — страниц не больше одной, и ссылаться
+   * некуда. Модель считает `../routing/pagination.ts`; `/page/1` в ней не
+   * появляется по построению.
+   */
+  readonly pagination: PaginationModel | null;
+  /**
+   * Вводный текст: lexical-документ, рендерится сервером как есть. На страницах
+   * пагинации — `null`: вводный текст принадлежит посадочной странице списка, и
+   * повторять его на каждой странице значило бы выдать один и тот же текст по
+   * нескольким адресам.
+   */
   readonly intro: Collection['intro'];
   /**
    * Дата содержательного обновления (ТЗ §5.3). `null` — редактор её не ставил, и
@@ -286,10 +309,27 @@ export interface CollectionPageContent {
 
 export interface CollectionPageInput {
   readonly node: Collection;
+  /** Карточки ЭТОЙ страницы списка — уже выбранная страница, а не весь список. */
   readonly cards: readonly Card[];
   readonly children: readonly Collection[];
   readonly parent: Collection | null;
   readonly related: readonly Collection[];
+  /**
+   * Номер показанной страницы, начиная с 1.
+   *
+   * Обязательный параметр без значения по умолчанию: дефолт `1` означал бы, что
+   * маршрут, забывший передать номер, молча отдаёт первую страницу по адресу
+   * второй — то есть дубль с чужим canonical. Забывчивость обязана быть ошибкой
+   * типов.
+   */
+  readonly page: number;
+  /**
+   * Всего страниц у списка (`CardsPage.pageCount`).
+   *
+   * Тоже обязательный: без него шаблон не выведет ссылок пагинации, и открытки
+   * за первой страницей станут недостижимыми — а это уже страницы-сироты.
+   */
+  readonly pageCount: number;
   readonly env?: SharedEnv;
 }
 
@@ -316,8 +356,27 @@ export function collectionPageContent(input: CollectionPageInput): CollectionPag
     );
   }
 
-  const heading = recordHeading(input.node);
-  const canonicalPath = canonicalPathFor(input.node.canonical, path);
+  const page = input.page;
+  const isFirstPage = page === 1;
+  // Self-canonical страницы пагинации указывает на САМУ СЕБЯ, и строится он от
+  // сохранённого пути записи, а не от поля `canonical`. Причина: `/page/N` — это
+  // адрес страницы списка, а поле `canonical` описывает посадочную страницу.
+  // Дописать номер к чужому переопределению значило бы придумать адрес, которого
+  // нет ни у этой записи, ни у той, на которую переопределение указывает. При
+  // этом страницы 2+ всё равно закрыты от индексации, поэтому переопределение
+  // человека на первой странице своей силы не теряет.
+  const canonicalPath = isFirstPage
+    ? canonicalPathFor(input.node.canonical, path)
+    : paginationPathFor(path, page);
+  // Заголовок и title получают номер страницы: два одинаковых title на двух
+  // адресах — это дубль (п. 22.1). Правило одно на подборку и на каталог и живёт
+  // в ../routing/pagination.ts.
+  const heading = paginationTitle(recordHeading(input.node), page);
+  const title = paginationTitle(input.node.title, page);
+  // Описание — только на первой странице: повторить его на всех означало бы
+  // одинаковый description на разных адресах, а дописать номер — сочинить
+  // шаблонный текст (запрет п. 23.4). Пусто → тега нет вовсе.
+  const metaDescription = isFirstPage ? filled(input.node.metaDescription) : null;
   const updatedContentAt = filled(input.node.updatedContentAt);
   const parent = collectionLinks([input.parent]).at(0) ?? null;
   // Видимый список страницы: сетка открыток, а у узла без своих открыток — список
@@ -329,29 +388,90 @@ export function collectionPageContent(input: CollectionPageInput): CollectionPag
     canonicalPath,
     children,
     heading,
-    intro: input.node.intro,
+    intro: isFirstPage ? input.node.intro : null,
     jsonLd: collectionPageJsonLd(
       {
         canonicalPath,
         dateModified: updatedContentAt,
-        description: input.node.metaDescription,
+        description: metaDescription,
         heading,
         items,
       },
       input.env,
     ),
-    metaDescription: filled(input.node.metaDescription),
+    metaDescription,
+    page,
+    pagination: paginationModel({ basePath: path, page, pageCount: input.pageCount }),
     parent,
     related: withoutPaths(collectionLinks(input.related), [
       canonicalPath,
       path,
       ...(parent === null ? [] : [parent.path]),
     ]),
-    robots: input.node.robots,
+    // Директива робота: на первой странице — значение ЗАПИСИ (решение человека),
+    // на страницах 2+ — noindex,follow (решение Ч-01b). Страница пагинации не
+    // бывает открытее базовой — правило в `robotsForPage`.
+    robots: robotsForPage(input.node.robots, page),
     tiles,
-    title: input.node.title,
+    title,
     updatedContentAt,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Каталоги разделов /otkrytki и /podborki (задача Э3-08)             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Раздел каталога `/podborki`: узел верхнего уровня и его прямые дети.
+ *
+ * Двух уровней достаточно и больше не нужно: глубже лежат пары «праздник ×
+ * адресат», и они достижимы со страницы своего праздничного узла. Отсюда и
+ * глубина от главной: главная → `/podborki` → узел верхнего уровня → пара →
+ * карточка, то есть ровно четыре перехода (следствие Ч-04-5).
+ */
+export interface CatalogSection {
+  readonly node: ListItemFacts;
+  readonly children: readonly ListItemFacts[];
+}
+
+/**
+ * Разделы каталога подборок из записей CMS.
+ *
+ * Узел без сохранённого пути выпадает вместе со своими детьми: ссылки на него нет
+ * (правило `collectionLinks`), а дети без родителя в плоском виде превратили бы
+ * карту разделов в перечень без структуры.
+ */
+export function catalogSections(
+  input: readonly { readonly node: Collection; readonly children: readonly Collection[] }[],
+): readonly CatalogSection[] {
+  const sections: CatalogSection[] = [];
+  for (const entry of input) {
+    const node = collectionLinks([entry.node]).at(0);
+    if (node === undefined) {
+      continue;
+    }
+    sections.push({ children: collectionLinks(entry.children), node });
+  }
+  return sections;
+}
+
+/**
+ * Видимый список каталога подборок ОДНИМ массивом — в порядке показа.
+ *
+ * Из него собирается `ItemList`, и другого источника у него нет: разметка обязана
+ * соответствовать видимому содержимому, а видимое содержимое здесь — вложенный
+ * список, то есть узлы верхнего уровня и их дети в порядке вывода.
+ */
+export function catalogSectionItems(
+  sections: readonly CatalogSection[],
+): readonly ListItemFacts[] {
+  const items: ListItemFacts[] = [];
+  for (const section of sections) {
+    items.push(section.node);
+    items.push(...section.children);
+  }
+  return items;
 }
 
 /**

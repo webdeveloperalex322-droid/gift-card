@@ -41,6 +41,7 @@
 import type { Card, Collection } from '@otkritka/cms/types';
 import { buildCardPath } from '@otkritka/cms/seo/paths';
 
+import { paginationCrumbLabel, paginationPathFor } from '../routing/pagination.js';
 import {
   type BreadcrumbLink,
   type BreadcrumbNode,
@@ -169,6 +170,7 @@ export async function loadAncestors(
 export async function collectionBreadcrumbs(
   node: CollectionCrumbNode,
   readCollection: CollectionReader,
+  page = 1,
 ): Promise<BreadcrumbTrail> {
   const current = collectionCrumb(node);
   if (current === null) {
@@ -179,7 +181,23 @@ export async function collectionBreadcrumbs(
         'не поиском по пути.',
     );
   }
-  return buildBreadcrumbTrail({ ancestors: await loadAncestors(node, readCollection), current });
+
+  const ancestors = await loadAncestors(node, readCollection);
+  if (page === 1) {
+    return buildBreadcrumbTrail({ ancestors, current });
+  }
+
+  // На странице пагинации сам список становится ССЫЛКОЙ, а текущим звеном —
+  // номер страницы. Так у второй страницы есть путь назад к списку, и ведёт он на
+  // БАЗОВЫЙ URL: `/page/1` не существует, и появиться в крошках он не может —
+  // адрес звена считает `paginationPathFor`, а он на номере 1 отдаёт базовый путь.
+  return buildBreadcrumbTrail({
+    ancestors: [...ancestors, current],
+    current: {
+      label: paginationCrumbLabel(page),
+      path: paginationPathFor(current.path, page),
+    },
+  });
 }
 
 /**

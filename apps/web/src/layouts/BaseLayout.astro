@@ -31,6 +31,7 @@
  * «Производительность»). Комментарий живёт здесь, а не рядом с тегом: HTML-
  * комментарий уехал бы в каждый ответ сервера.
  */
+import SiteNav from '../components/SiteNav.astro';
 import { canonicalUrlFor } from '../routing/canonical';
 import { serverEnv } from '../server-env';
 
@@ -107,6 +108,27 @@ const descriptionText = description?.trim() ?? '';
         display: flex;
         flex-direction: column;
       }
+      .layout__header {
+        width: 100%;
+        max-width: var(--content-max);
+        margin-inline: auto;
+        padding: 0.75rem 1rem 0;
+      }
+      /* Меню — в критическом CSS по той же причине, что сетка превью: это первый
+         экран каждой страницы, и внешний запрос за CSS сдвигал бы макет. */
+      .site-nav__list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 1.25rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        font-size: 0.9375rem;
+      }
+      .site-nav__link[aria-current='page'] {
+        font-weight: 700;
+        text-decoration: none;
+      }
       .layout__main {
         flex: 1 0 auto;
         width: 100%;
@@ -175,6 +197,12 @@ const descriptionText = description?.trim() ?? '';
     </style>
   </head>
   <body>
+    <!-- Меню печатается сервером на КАЖДОЙ странице: «страница входит в
+         навигацию» — условие п. 5.1 ТЗ, и выполнять его по одному шаблону из
+         пяти нельзя. Состав пунктов — src/seo/catalog-pages.ts. -->
+    <header class="layout__header">
+      <SiteNav currentPath={canonicalPath} />
+    </header>
     <main class="layout__main">
       <slot />
     </main>

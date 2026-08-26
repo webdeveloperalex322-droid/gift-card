@@ -1,0 +1,49 @@
+---
+/**
+ * Страницы пагинации каталога открыток — `/otkrytki/page/N` (задача Э3-07).
+ *
+ * Три ответа, и все три — решения `../../../data/catalog.ts`:
+ *
+ *   - **200** на каноническом номере в диапазоне. Self-canonical указывает на
+ *     САМУ СТРАНИЦУ, директива робота — `noindex,follow` (решение Ч-01b), в
+ *     sitemap страница не входит (учтёт Э4-04);
+ *   - **одиночный 301** на `/otkrytki/page/1` → `/otkrytki`. Адреса не
+ *     существует (решение Ч-05), но он предсказуемо появляется во внешних
+ *     ссылках; 301 убирает дубль и ведёт ПРЯМО на базовый URL, поэтому цепочки
+ *     не возникает. Решение задачи Э3-07, подлежит подтверждению человеком;
+ *   - **404** на номере вне диапазона: `0`, `01`, `-1`, `dva`, номер больше
+ *     числа страниц. Не 200 с пустой сеткой (пустая страница не отдаёт 200) и не
+ *     редирект на базовый URL (иначе бесконечное множество адресов вело бы 301 в
+ *     один). Решение задачи Э3-07, подлежит подтверждению человеком.
+ *
+ * Про `/otkrytki/page` без номера: этот маршрут его не ловит (сегментов меньше),
+ * запрос уходит в `../[slug].astro` и получает 404 — карточки со slug `page` не
+ * существует, сегмент `page` запрещён в slug реестром зарезервированных
+ * маршрутов.
+ */
+import CardCatalogPage from '../../../components/CardCatalogPage.astro';
+import { cardCatalogPage } from '../../../data';
+import { serverEnv } from '../../../server-env';
+
+export const prerender = false;
+
+const raw = Astro.params.page ?? '';
+const result = await cardCatalogPage(raw, serverEnv());
+
+if (result.kind === 'redirect') {
+  // Ответ собирается вручную, а не через `Astro.redirect`: статус обязан быть
+  // ровно 301, а тело — пустым. Тело важно отдельно: шаблон 3xx самого Astro
+  // кладёт в `<meta http-equiv="refresh">` адрес-ИСТОЧНИК, то есть отправляет
+  // клиента назад (разбор — в шапке `../../../routing/path-policy.ts`).
+  return new Response(null, {
+    status: 301,
+    headers: { 'Content-Length': '0', Location: result.location },
+  });
+}
+
+if (result.kind !== 'page') {
+  return new Response(null, { status: 404 });
+}
+---
+
+<CardCatalogPage body={result} />

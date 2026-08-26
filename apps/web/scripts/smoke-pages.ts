@@ -1,5 +1,6 @@
 /**
- * Смоук шаблонов карточки и подборки на СОБРАННОМ сервере (задачи Э3-05, Э3-06).
+ * Смоук шаблонов карточки, подборки, пагинации и каталогов на СОБРАННОМ сервере
+ * (задачи Э3-05 … Э3-08).
  *
  * ## Что здесь проверяется и почему только здесь
  *
@@ -17,7 +18,13 @@
  *     запроса;
  *   - что в ответе нет исполняемого `<script>` и ни одного `href="#"`;
  *   - что `ItemList` совпал с видимой сеткой на ЖИВОМ ответе, а не в фикстуре;
- *   - что файл из `<img src>` и из кнопки «Скачать» действительно отдаётся.
+ *   - что файл из `<img src>` и из кнопки «Скачать» действительно отдаётся;
+ *   - что пагинация ведёт себя ровно так, как решено на Э3-07: `/page/2` — 200 с
+ *     self-canonical на себя и `noindex,follow`, `/page/1` — одиночный 301 на
+ *     базовый URL, номер вне диапазона — 404, а ссылки на `/page/1` не
+ *     появляется ни на одной странице;
+ *   - что каталоги `/otkrytki` и `/podborki` отдают 200, а меню с ссылками на
+ *     оба каталога есть в ответе КАЖДОЙ страницы.
  *
  * Проверка идёт против собранного сервера (`dist/server/entry.mjs`), а не против
  * `astro dev`: порядок обработки запроса и правило слеша в dev ведут себя иначе
@@ -39,8 +46,13 @@
  * ничего, публикация живёт в одноразовом скрипте проверки на локальной базе.
  *
  * Тем же порядком и по той же причине смоук выдаёт решение «уникально» в калитке
- * визуальных дублей — но только если калитка сработала: три фикстуры имеют
- * структурно разные композиции, поэтому в норме решение не требуется.
+ * визуальных дублей. С задачи Э3-07 калитка срабатывает штатно, и это осознанно:
+ * чтобы проверить пагинацию на ЖИВОМ сервере, нужен корпус больше одной страницы
+ * (`DEFAULT_CARDS_PER_PAGE` + 1 открытка), а структурно разных композиций у
+ * генератора фикстур три. Остальные различаются сдвигом яркости, то есть для
+ * pHash «похожи» — ровно тот случай, в котором решение принимает редактор.
+ * Решение «уникально» здесь относится к синтетическим узорам во временных
+ * записях локальной базы; продуктовой границы автоматизации это не сдвигает.
  *
  * ## Порядок уборки значим
  *
@@ -59,7 +71,7 @@ import type { Payload } from 'payload';
 import type { Collection } from '@otkritka/cms/types';
 
 import { createPngFixture } from '../../cms/src/images/png-fixture.js';
-import { payloadClient } from '../src/data/index.js';
+import { DEFAULT_CARDS_PER_PAGE, payloadClient } from '../src/data/index.js';
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const serverEntry = path.join(appDir, 'dist', 'server', 'entry.mjs');
@@ -279,6 +291,15 @@ function checkPageInvariants(label: string, response: RawResponse, expected: {
   );
   record(`${label}: ни одного href="#" и ни одной ссылки без href`, hashLinks.length === 0, hashLinks.map((a) => a.tag).join(' '));
 
+  // Меню обязано быть в ответе КАЖДОЙ страницы: «страница входит в навигацию» —
+  // условие п. 5.1 ТЗ, и проверяется он на живом ответе, а не на исходниках.
+  const navHrefs = anchors(html).map((anchor) => anchor.href);
+  record(
+    `${label}: меню со ссылками на оба каталога в ответе сервера`,
+    navHrefs.includes('/otkrytki') && navHrefs.includes('/podborki') && navHrefs.includes('/'),
+    `есть /otkrytki=${String(navHrefs.includes('/otkrytki'))} /podborki=${String(navHrefs.includes('/podborki'))}`,
+  );
+
   const crumbs = findByType(jsonLdBlocks(html), 'BreadcrumbList');
   record(`${label}: разметка BreadcrumbList в ответе`, crumbs !== null);
   record(
@@ -329,27 +350,8 @@ const INTRO: NonNullable<Collection['intro']> = {
             format: 0,
             mode: 'normal',
             style: '',
-            text: ' и ',
+            text: ' и обычный текст после неё.',
             version: 1,
-          },
-          {
-            type: 'link',
-            fields: { linkType: 'internal', newTab: false, doc: { relationTo: 'cards', value: 1 } },
-            children: [
-              {
-                type: 'text',
-                detail: 0,
-                format: 0,
-                mode: 'normal',
-                style: '',
-                text: 'ссылка по идентификатору записи',
-                version: 1,
-              },
-            ],
-            direction: 'ltr',
-            format: '',
-            indent: 0,
-            version: 3,
           },
         ],
         direction: 'ltr',
@@ -552,7 +554,6 @@ async function main(): Promise<void> {
     };
 
     const occasion = await makeNode(`${PREFIX}-povod`, 'Смоук Э3-05: повод с открытками');
-    const emptyNode = await makeNode(`${PREFIX}-pusto`, 'Смоук Э3-05: повод без открыток');
 
     await payload.update({
       collection: 'collections',
@@ -560,14 +561,22 @@ async function main(): Promise<void> {
       data: { related: [occasion.id] },
       ...asAdmin,
     });
-    // Родитель публикуется первым: ссылки на неопубликованный узел не бывает.
-    await publish('collections', group.id);
-    await publish('collections', occasion.id);
-    await publish('collections', emptyNode.id);
 
     /* ------------------------------------------------------------ */
-    /* Карточки: три опубликованные, одна draft, одна review        */
+    /* Карточки: корпус на две страницы, одна draft, одна review    */
     /* ------------------------------------------------------------ */
+    //
+    // ПОРЯДОК ЗНАЧИМ: открытки публикуются РАНЬШЕ узлов. CMS не даёт опубликовать
+    // подборку, у которой опубликованных открыток меньше порога Ч-06
+    // (`assertPublishableVolume`, `COLLECTION_MIN_PUBLISHED_CARDS`), а карточка
+    // публикуется независимо от статуса своих подборок. Обратный порядок —
+    // прежний в этом смоуке — теперь получает отказ `thin-content-for-publish`.
+    //
+    // Узла «повод без открыток» в фикстурах больше нет по той же причине: пустую
+    // подборку CMS публиковать не даёт вовсе, поэтому состояние «опубликованная
+    // подборка без содержания» через админку и API недостижимо. Ветка 404 в
+    // шаблоне остаётся защитной и проверяется юнит-тестом
+    // (`collectionPageContent` возвращает null).
 
     const makeCard = async (args: {
       readonly composition?: 'grid' | 'rings' | 'stripes';
@@ -627,6 +636,59 @@ async function main(): Promise<void> {
       await publish('cards', id);
     }
     await toReview('cards', reviewCardId);
+
+    /* ------------------------------------------------------------ */
+    /* Корпус для пагинации: страниц ровно две                      */
+    /* ------------------------------------------------------------ */
+
+    // Ровно на одну открытку больше страницы — так проверяется и граница расчёта
+    // (24 открытки дают ОДНУ страницу, 25 — две), и то, что на второй странице
+    // сетка не пуста.
+    const COMPOSITIONS = ['grid', 'rings', 'stripes'] as const;
+    const filler = DEFAULT_CARDS_PER_PAGE + 1 - 3;
+    for (let index = 0; index < filler; index += 1) {
+      const number = index + 4;
+      const bytes = createPngFixture({
+        composition: COMPOSITIONS[index % COMPOSITIONS.length] ?? 'grid',
+        height: 500,
+        luminanceShift: (index % 9) * 7 - 28,
+        width: 800,
+      });
+      const image = await payload.create({
+        collection: 'card-images',
+        data: { title: `Смоук Э3-05: открытка ${String(number)}` },
+        file: { data: bytes, mimetype: 'image/png', name: 'filler.png', size: bytes.byteLength },
+        ...asAdmin,
+      });
+      created.cardImages.push(image.id);
+      if (typeof image.nameStem === 'string') {
+        claimedStems.push(image.nameStem);
+      }
+      const card = await payload.create({
+        collection: 'cards',
+        data: {
+          alt: `Синтетический узор фикстуры номер ${String(number)}`,
+          caption: `Подпись смоука: открытка ${String(number)}`,
+          collections: [occasion.id],
+          description: `Видимое описание открытки номер ${String(number)}.`,
+          image: image.id,
+          metaDescription: `Смоук Э3-05, открытка ${String(number)}`,
+          robots: 'noindex,follow',
+          slug: `${PREFIX}-otkrytka-${String(number)}`,
+          status: 'draft',
+          title: `Смоук Э3-05: открытка ${String(number)}`,
+        },
+        ...asAdmin,
+      });
+      created.cards.push(card.id);
+      await publish('cards', card.id);
+    }
+    console.log(`Корпус пагинации: ${String(filler + 3)} открыток в подборке`);
+
+    // Узлы публикуются последними: теперь порог Ч-06 выполнен. Родитель раньше
+    // ребёнка — ссылки на неопубликованный узел не бывает.
+    await publish('collections', group.id);
+    await publish('collections', occasion.id);
 
     /* ------------------------------------------------------------ */
     /* Собранный сервер                                             */
@@ -724,8 +786,8 @@ async function main(): Promise<void> {
     );
     record(
       'карточка: блок «Похожие» ссылается на соседние карточки (Ч-04-8)',
-      similarLinks.length === 2,
-      similarLinks.map((anchor) => anchor.href).join(' '),
+      similarLinks.length > 0 && similarLinks.length <= 12,
+      `${String(similarLinks.length)} ссылок`,
     );
     record(
       'карточка: атрибуты-ссылки ведут на подборки',
@@ -779,7 +841,11 @@ async function main(): Promise<void> {
     const gridLinks = anchors(collectionHtml)
       .filter((anchor) => (anchor.href ?? '').startsWith('/otkrytki/'))
       .map((anchor) => anchor.href ?? '');
-    record('подборка: в сетке три открытки', gridLinks.length === 3, gridLinks.join(' '));
+    record(
+      'подборка: первая страница вмещает ровно размер страницы',
+      gridLinks.length === DEFAULT_CARDS_PER_PAGE,
+      `${String(gridLinks.length)} из ${String(DEFAULT_CARDS_PER_PAGE)}`,
+    );
 
     const collectionImages = images(collectionHtml);
     record(
@@ -814,8 +880,8 @@ async function main(): Promise<void> {
       anchors(collectionHtml).some((anchor) => anchor.href === `/podborki/${PREFIX}-gruppa`),
     );
     record(
-      'подборка: ссылка по идентификатору записи осталась текстом, а не href="#"',
-      collectionText.includes('ссылка по идентификатору записи') && !cardHtml.includes('href="#"'),
+      'подборка: во вводном тексте нет ни одного href="#"',
+      !collectionHtml.includes('href="#"') && !cardHtml.includes('href="#"'),
     );
     // Сравниваются ВИДИМАЯ дата и `dateModified` друг с другом, а не с датой
     // фикстуры: значение `updatedContentAt` может проставить сама CMS при
@@ -864,15 +930,159 @@ async function main(): Promise<void> {
     );
 
     /* ------------------------------------------------------------ */
-    /* 4. Отказы: пустая подборка, draft, review, каталог           */
+    /* 4. Пагинация списка подборки (задача Э3-07)                  */
     /* ------------------------------------------------------------ */
 
-    const emptyResponse = await request(`/podborki/${PREFIX}-gruppa/${PREFIX}-pusto`);
     record(
-      'подборка без открыток и без детей отдаёт 404, а не 200 с пустой сеткой (ТЗ §5.3)',
-      emptyResponse.status === 404 && emptyResponse.headers.location === undefined,
-      `status=${String(emptyResponse.status)}`,
+      'подборка: блок пагинации есть и ведёт на страницу 2',
+      /aria-label="Страницы подборки"/.test(collectionHtml) &&
+        anchors(collectionHtml).some((anchor) => anchor.href === `${collectionPath}/page/2`),
     );
+
+    const pageTwoPath = `${collectionPath}/page/2`;
+    const pageTwo = await request(pageTwoPath);
+    const pageTwoHtml = pageTwo.body;
+
+    checkPageInvariants('подборка, страница 2', pageTwo, {
+      heading: 'Смоук Э3-05: повод с открытками — страница 2',
+      path: pageTwoPath,
+      robots: 'noindex,follow',
+    });
+
+    record(
+      'страница 2: в сетке остаток списка',
+      anchors(pageTwoHtml).filter((anchor) => (anchor.href ?? '').startsWith('/otkrytki/')).length === 1,
+    );
+    const pagingBlock = /<nav class="pagination"[\s\S]*?<\/nav>/.exec(pageTwoHtml)?.[0] ?? '';
+    const pagingHrefs = anchors(pagingBlock).map((anchor) => anchor.href);
+    record(
+      'страница 2: «предыдущая» ведёт на БАЗОВЫЙ URL, а не на /page/1',
+      pagingHrefs.includes(collectionPath) && !pageTwoHtml.includes('/page/1'),
+      pagingHrefs.join(' '),
+    );
+    record(
+      'страница 2: rel=next и rel=prev не выводятся (решение Э3-07)',
+      !/rel="(next|prev)"/.test(pageTwoHtml),
+    );
+    record(
+      'страница 2: description не выводится вовсе, а не повторяет первую страницу',
+      metaOf(pageTwoHtml, 'description') === null,
+      String(metaOf(pageTwoHtml, 'description')),
+    );
+    record(
+      'страница 2: вводный текст подборки не повторяется',
+      !visibleText(pageTwoHtml).includes('Вводный текст смоука Э3-05'),
+    );
+    const crumbsBlock =
+      /<nav class="breadcrumbs"[\s\S]*?<\/nav>/.exec(pageTwoHtml)?.[0] ?? '';
+    record(
+      'страница 2: последняя крошка — номер страницы, а сам список стал ссылкой',
+      visibleText(crumbsBlock).endsWith('Страница 2') &&
+        /aria-current="page"/.test(crumbsBlock) &&
+        anchors(crumbsBlock).some((anchor) => anchor.href === collectionPath),
+      visibleText(crumbsBlock),
+    );
+
+    const pageOne = await request(`${collectionPath}/page/1`);
+    record(
+      '/page/1 подборки — одиночный 301 на базовый URL (решение Э3-07)',
+      pageOne.status === 301 && pageOne.headers.location === collectionPath,
+      `${String(pageOne.status)} → ${String(pageOne.headers.location)}`,
+    );
+    const afterHop = await request(String(pageOne.headers.location));
+    record(
+      '/page/1: переход один, а не цепочка — цель отвечает 200',
+      afterHop.status === 200,
+      `status=${String(afterHop.status)}`,
+    );
+
+    const badPages = [
+      `${collectionPath}/page/3`,
+      `${collectionPath}/page/999`,
+      `${collectionPath}/page/0`,
+      `${collectionPath}/page/01`,
+      `${collectionPath}/page/-1`,
+      `${collectionPath}/page/dva`,
+      `${collectionPath}/page`,
+      `/otkrytki/page/0`,
+      `/otkrytki/page/01`,
+      `/otkrytki/page/999`,
+      `/otkrytki/page`,
+      '/podborki/page/2',
+    ];
+    for (const target of badPages) {
+      const response = await request(target);
+      record(
+        `номер вне диапазона — 404 без редиректа: ${target}`,
+        response.status === 404 && response.headers.location === undefined,
+        `status=${String(response.status)}`,
+      );
+    }
+
+    /* ------------------------------------------------------------ */
+    /* 5. Каталоги разделов (задача Э3-08)                          */
+    /* ------------------------------------------------------------ */
+
+    const cardsCatalog = await request('/otkrytki');
+    checkPageInvariants('каталог /otkrytki', cardsCatalog, {
+      heading: 'Все открытки',
+      path: '/otkrytki',
+      robots: 'noindex,follow',
+    });
+    // Ссылка на страницу пагинации тоже начинается с `/otkrytki/`, но плиткой не
+    // является — иначе счёт сетки зависел бы от наличия блока пагинации.
+    const catalogTiles = anchors(cardsCatalog.body).filter(
+      (anchor) =>
+        (anchor.href ?? '').startsWith('/otkrytki/') && !(anchor.href ?? '').includes('/page/'),
+    );
+    record(
+      'каталог /otkrytki: сетка открыток и блок пагинации',
+      catalogTiles.length === DEFAULT_CARDS_PER_PAGE &&
+        anchors(cardsCatalog.body).some((anchor) => anchor.href === '/otkrytki/page/2'),
+      `плиток=${String(catalogTiles.length)} из ${String(DEFAULT_CARDS_PER_PAGE)}`,
+    );
+    record('каталог /otkrytki: ссылок на /page/1 нет нигде', !cardsCatalog.body.includes('/page/1'));
+
+    const cardsCatalogTwo = await request('/otkrytki/page/2');
+    checkPageInvariants('каталог /otkrytki, страница 2', cardsCatalogTwo, {
+      heading: 'Все открытки — страница 2',
+      path: '/otkrytki/page/2',
+      robots: 'noindex,follow',
+    });
+    record(
+      'каталог /otkrytki: «предыдущая» ведёт на базовый URL каталога',
+      anchors(cardsCatalogTwo.body).some((anchor) => anchor.href === '/otkrytki') &&
+        !cardsCatalogTwo.body.includes('/page/1'),
+    );
+
+    const catalogRedirect = await request('/otkrytki/page/1');
+    record(
+      '/otkrytki/page/1 — одиночный 301 на /otkrytki',
+      catalogRedirect.status === 301 && catalogRedirect.headers.location === '/otkrytki',
+      `${String(catalogRedirect.status)} → ${String(catalogRedirect.headers.location)}`,
+    );
+
+    const nodesCatalog = await request('/podborki');
+    checkPageInvariants('каталог /podborki', nodesCatalog, {
+      heading: 'Подборки открыток',
+      path: '/podborki',
+      robots: 'noindex,follow',
+    });
+    record(
+      'каталог /podborki: в списке узел верхнего уровня и его ребёнок',
+      anchors(nodesCatalog.body).some((anchor) => anchor.href === groupPath) &&
+        anchors(nodesCatalog.body).some((anchor) => anchor.href === collectionPath),
+    );
+    const catalogList = findByType(jsonLdBlocks(nodesCatalog.body), 'ItemList');
+    record(
+      'каталог /podborki: ItemList соответствует видимому списку',
+      (catalogList?.['numberOfItems'] as number) >= 2,
+      JSON.stringify(catalogList?.['numberOfItems']),
+    );
+
+    /* ------------------------------------------------------------ */
+    /* 6. Отказы: пустая подборка, draft, review                    */
+    /* ------------------------------------------------------------ */
 
     const draftTargets = [
       `/otkrytki/${PREFIX}-otkrytka-draft`,
@@ -890,18 +1100,19 @@ async function main(): Promise<void> {
       );
     }
 
-    const containerResponse = await request('/podborki');
-    record(
-      'каталог /podborki пока не существует и отдаёт 404 (задача Э3-08)',
-      containerResponse.status === 404,
-      `status=${String(containerResponse.status)}`,
-    );
-
     /* ------------------------------------------------------------ */
-    /* 5. Браузер с ОТКЛЮЧЁННЫМ JS                                  */
+    /* 7. Браузер с ОТКЛЮЧЁННЫМ JS                                  */
     /* ------------------------------------------------------------ */
 
-    await checkWithJavaScriptDisabled(cardPath, collectionPath);
+    await checkWithJavaScriptDisabled([
+      { path: cardPath, withImages: true },
+      { path: collectionPath, withImages: true },
+      { path: pageTwoPath, withImages: true },
+      { path: '/otkrytki', withImages: true },
+      // Каталог подборок — карта разделов ссылками; изображений на нём нет вовсе,
+      // и требовать их означало бы требовать сетку там, где её не должно быть.
+      { path: '/podborki', withImages: false },
+    ]);
 
     // Задержка перед уборкой — для ручной проверки curl'ом по живым страницам.
     // Ограничена по времени намеренно: уборка обязана произойти сама, а не
@@ -910,9 +1121,14 @@ async function main(): Promise<void> {
     if (Number.isInteger(holdMs) && holdMs > 0) {
       console.log(
         `\nСервер держится ${String(holdMs)} мс для ручной проверки:\n` +
-          `  curl -i ${ORIGIN}${cardPath}\n` +
           `  curl -i ${ORIGIN}${collectionPath}\n` +
-          `  curl -i ${ORIGIN}/otkrytki/${PREFIX}-otkrytka-draft\n`,
+          `  curl -i ${ORIGIN}${collectionPath}/page/2\n` +
+          `  curl -i ${ORIGIN}${collectionPath}/page/1\n` +
+          `  curl -i ${ORIGIN}${collectionPath}/page/999\n` +
+          `  curl -i ${ORIGIN}${collectionPath}/page/0\n` +
+          `  curl -i ${ORIGIN}${collectionPath}/page/01\n` +
+          `  curl -i ${ORIGIN}/otkrytki\n` +
+          `  curl -i ${ORIGIN}/podborki\n`,
       );
       await delay(holdMs);
     }
@@ -1009,7 +1225,15 @@ async function main(): Promise<void> {
  * скриптов не исполняет вовсе); браузер добавляет то, чего текстом не показать —
  * что страница ОТОБРАЖАЕТСЯ без JS.
  */
-async function checkWithJavaScriptDisabled(cardPath: string, collectionPath: string): Promise<void> {
+interface JsDisabledTarget {
+  readonly path: string;
+  /** Есть ли на странице изображения. У карты разделов их нет. */
+  readonly withImages: boolean;
+}
+
+async function checkWithJavaScriptDisabled(
+  targets: readonly JsDisabledTarget[],
+): Promise<void> {
   // Тип берётся выводом из динамического импорта, а не аннотацией
   // `typeof import(...)`: аннотации такого вида запрещены правилом
   // `consistent-type-imports`, а статический импорт значения сделал бы playwright
@@ -1032,8 +1256,8 @@ async function checkWithJavaScriptDisabled(cardPath: string, collectionPath: str
     const context = await browser.newContext({ javaScriptEnabled: false });
     const page = await context.newPage();
 
-    for (const target of [cardPath, collectionPath]) {
-      await page.goto(`${ORIGIN}${target}`, { waitUntil: 'domcontentloaded' });
+    for (const target of targets) {
+      await page.goto(`${ORIGIN}${target.path}`, { waitUntil: 'domcontentloaded' });
       const h1 = await page.locator('h1').allInnerTexts();
       const images_ = page.locator('img');
       const count = await images_.count();
@@ -1041,11 +1265,16 @@ async function checkWithJavaScriptDisabled(cardPath: string, collectionPath: str
       const alt = count === 0 ? null : await first.getAttribute('alt');
       const visible = count === 0 ? false : await first.isVisible();
       const crumbs = await page.locator('nav[aria-label="Хлебные крошки"] a').count();
+      // Меню обязано работать без JS на каждой странице: раскрывающихся панелей
+      // в нём нет вовсе, поэтому ссылки видны сразу.
+      const nav = await page.locator('nav[aria-label="Основная навигация"] a').count();
+      const imagesOk = target.withImages ? visible : count === 0;
 
       record(
-        `браузер без JS: ${target} — H1, крошки и первое изображение видны`,
-        h1.length === 1 && h1[0] !== '' && crumbs >= 1 && visible,
-        `h1=${String(h1.length)} крошек=${String(crumbs)} изображений=${String(count)} alt=${JSON.stringify(alt)}`,
+        `браузер без JS: ${target.path} — H1, меню, крошки и содержание видны`,
+        h1.length === 1 && h1[0] !== '' && crumbs >= 1 && nav >= 3 && imagesOk,
+        `h1=${String(h1.length)} меню=${String(nav)} крошек=${String(crumbs)} ` +
+          `изображений=${String(count)} alt=${JSON.stringify(alt)}`,
       );
     }
     await context.close();

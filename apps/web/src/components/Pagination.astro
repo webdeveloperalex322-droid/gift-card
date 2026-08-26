@@ -1,0 +1,108 @@
+---
+/**
+ * Блок ссылок пагинации (задача Э3-07).
+ *
+ * Компонент — ТОЛЬКО представление: он не считает ни число страниц, ни адреса.
+ * Модель приходит готовой из `../routing/pagination.ts` (чистая функция,
+ * покрытая `tests/unit/web-pagination.test.ts`), поэтому свойство «`/page/1` не
+ * появляется нигде» проверяется без поднятого сервера: адрес первой страницы в
+ * модели — базовый URL списка.
+ *
+ * Инварианты, закодированные здесь (`CLAUDE.md`, раздел «Рендеринг»; решения
+ * Ч-05 и Ч-01b):
+ *   - ссылки — обычные `<a href>` на ПОСТОЯННЫЕ адреса. Ни обработчиков, ни
+ *     `client:*`, ни `<script>`: бесконечная лента запрещена, и подгружать
+ *     страницы нечем по построению;
+ *   - `rel="next"`/`rel="prev"` НЕ выводятся. Google их не использует, а ошибка
+ *     в них дороже отсутствия (решение задачи Э3-07);
+ *   - текущая страница — `<span aria-current="page">`, а не ссылка на себя;
+ *   - разрыв в списке номеров помечен видимым многоточием и скрыт от
+ *     вспомогательных технологий (`aria-hidden`): это оформление, а не элемент
+ *     навигации.
+ *
+ * Директива робота страниц 2+ (`noindex,follow`) живёт не здесь, а в данных
+ * страницы: она обязана быть в `<meta>`, а не в блоке ссылок.
+ */
+import type { PaginationModel } from '../routing/pagination';
+
+interface Props {
+  /** Готовая модель. `null` в шаблон не передаётся — блока тогда нет вовсе. */
+  model: PaginationModel;
+  /** Подпись блока: на странице больше одного навигационного блока. */
+  ariaLabel?: string;
+}
+
+const { ariaLabel = 'Страницы списка', model } = Astro.props;
+---
+
+<nav class="pagination" aria-label={ariaLabel}>
+  <ul class="pagination__list">
+    {
+      model.previousPath === null ? null : (
+        <li>
+          <a class="pagination__step" href={model.previousPath}>Предыдущая</a>
+        </li>
+      )
+    }
+    {
+      model.entries.map((entry) =>
+        entry.kind === 'gap' ? (
+          <li class="pagination__gap" aria-hidden="true">…</li>
+        ) : entry.current ? (
+          <li>
+            <span class="pagination__current" aria-current="page">{entry.page}</span>
+          </li>
+        ) : (
+          <li>
+            <a class="pagination__page" href={entry.path}>{entry.page}</a>
+          </li>
+        ),
+      )
+    }
+    {
+      model.nextPath === null ? null : (
+        <li>
+          <a class="pagination__step" href={model.nextPath}>Следующая</a>
+        </li>
+      )
+    }
+  </ul>
+</nav>
+
+<style>
+  .pagination {
+    margin-block-start: 1.5rem;
+  }
+
+  .pagination__list {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .pagination__page,
+  .pagination__step,
+  .pagination__current {
+    display: inline-block;
+    min-width: 2.25rem;
+    padding: 0.375rem 0.625rem;
+    border: 1px solid currentColor;
+    border-radius: 0.25rem;
+    text-align: center;
+    text-decoration: none;
+  }
+
+  .pagination__current {
+    font-weight: 700;
+    opacity: 0.6;
+  }
+
+  .pagination__gap {
+    padding-inline: 0.25rem;
+    opacity: 0.6;
+  }
+</style>
