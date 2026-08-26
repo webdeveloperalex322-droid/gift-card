@@ -13,14 +13,54 @@
  * распарсился») и не создаёт впечатления, что тут есть полноценный парсер.
  */
 
-/** Значение атрибута из строки открывающего тега. Регистр имени не важен. */
-function attributeValue(tag: string, name: string): string | null {
-  const quoted = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, 'i').exec(tag);
-  if (quoted !== null) {
-    return quoted[2] ?? quoted[3] ?? null;
+/**
+ * Атрибуты открывающего тега: имя в нижнем регистре → значение.
+ *
+ * Разбор идёт по атрибутам целиком, а не поиском одного имени регулярным
+ * выражением, ровно по двум причинам — и обе уже давали неверный ответ:
+ *
+ *  1. **пустое значение Astro печатает БЕСКАВЫЧНО.** `alt=""` в шаблоне
+ *     превращается в `<img … alt>`: `addAttribute` в
+ *     `astro/dist/runtime/server/render/util.js` содержит
+ *     `if (value === "") return markHTMLString(\` ${key}\`)` (замерено на
+ *     astro 7.2.4). Поиск по `name\s*=` такой атрибут не находил вовсе, то есть
+ *     ДЕКОРАТИВНОЕ изображение с законным пустым `alt` выглядело как
+ *     изображение, у которого `alt` забыли. Приёмка обязана различать три
+ *     состояния: атрибута нет (`null`), атрибут есть и пуст (`''`), атрибут
+ *     есть со значением;
+ *  2. **`\b` перед именем ловит чужой атрибут.** Перед `alt` в `data-alt`
+ *     стоит дефис — небуквенный символ, поэтому граница слова совпадала, и
+ *     `data-src`/`data-alt`/`aria-label` отвечали за `src`/`alt`/`label`.
+ *     Атрибут, разобранный целиком, такой подмены не допускает.
+ *
+ * Повтор имени в теге: берётся ПЕРВОЕ вхождение — так же поступает браузер.
+ */
+function attributesOf(tag: string): ReadonlyMap<string, string> {
+  const attributes = new Map<string, string>();
+  // Отброшены имя тега (`<img`) и закрывающая часть (`>` либо `/>`): дальше в
+  // строке остаются только атрибуты.
+  const body = tag.replace(/^<[^\s/>]*/, '').replace(/\/?>$/, '');
+  const pattern = /([^\s"'/>=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+
+  for (const match of body.matchAll(pattern)) {
+    const name = (match[1] ?? '').toLowerCase();
+    if (name === '' || attributes.has(name)) {
+      continue;
+    }
+    attributes.set(name, match[2] ?? match[3] ?? match[4] ?? '');
   }
-  const bare = new RegExp(`\\b${name}\\s*=\\s*([^\\s"'>]+)`, 'i').exec(tag);
-  return bare === null ? null : (bare[1] ?? null);
+  return attributes;
+}
+
+/**
+ * Значение атрибута из строки открывающего тега. Регистр имени не важен.
+ *
+ * `null` — атрибута НЕТ; пустая строка — атрибут есть и пуст. Различие
+ * существенно: `<img alt>` — это описанное решение «изображение декоративное», а
+ * `<img>` без `alt` — незаполненное поле записи.
+ */
+export function attributeValue(tag: string, name: string): string | null {
+  return attributesOf(tag).get(name.toLowerCase()) ?? null;
 }
 
 /** Все открывающие теги указанного имени, как строки вида `<link ... >`. */
@@ -88,13 +128,35 @@ export function anchorTags(html: string): AnchorTag[] {
   return openingTags(html, 'a').map((tag) => ({ tag, href: attributeValue(tag, 'href') }));
 }
 
+/** Все `<a>` в ответе: `href` и видимый текст ссылки. */
+export function anchorLinks(html: string): AnchorLink[] {
+  return [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)].map((match) => ({
+    href: attributeValue(`<a${match[1] ?? ''}>`, 'href'),
+    text: stripTags(match[2] ?? ''),
+  }));
+}
+
+export interface AnchorLink {
+  readonly href: string | null;
+  /** Текст ссылки без вложенных тегов: то, что читает посетитель. */
+  readonly text: string;
+}
+
 export interface ImageTag {
   readonly tag: string;
   readonly src: string | null;
   readonly width: string | null;
   readonly height: string | null;
+  /**
+   * `null` — атрибута `alt` НЕТ (нарушение: описание не заполнено); пустая
+   * строка — `alt` есть и пуст, то есть заявлено «изображение декоративное».
+   * Различие держится разбором атрибутов: пустое значение Astro печатает
+   * бескавычно (`<img … alt>`), см. {@link attributesOf}.
+   */
   readonly alt: string | null;
   readonly loading: string | null;
+  /** Значение `fetchpriority` — у первого крупного изображения `high`. */
+  readonly fetchpriority: string | null;
 }
 
 /** Все `<img>` в ответе с атрибутами, обязательными по разделу «Изображения». */
@@ -106,7 +168,59 @@ export function imageTags(html: string): ImageTag[] {
     height: attributeValue(tag, 'height'),
     alt: attributeValue(tag, 'alt'),
     loading: attributeValue(tag, 'loading'),
+    fetchpriority: attributeValue(tag, 'fetchpriority')?.trim().toLowerCase() ?? null,
   }));
+}
+
+/**
+ * Тела всех `<script type="application/ld+json">`, разобранные как JSON.
+ *
+ * Разбор именно здесь, а не в spec'е: неразобравшийся блок — это НАРУШЕНИЕ (в
+ * теле оказался незаэкранированный `</script>` или незакрытая строка), и оно
+ * обязано называться отдельной ошибкой, а не падать исключением посреди
+ * утверждения. Поэтому неудача разбора возвращается значением.
+ */
+export function jsonLdBlocks(html: string): readonly JsonLdBlock[] {
+  return [
+    ...html.matchAll(
+      /<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
+    ),
+  ].map((match) => {
+    const text = match[1] ?? '';
+    try {
+      return { text, value: JSON.parse(text) as unknown, error: null };
+    } catch (error) {
+      return { text, value: null, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+}
+
+export interface JsonLdBlock {
+  /** Тело блока как есть — для сообщения об ошибке. */
+  readonly text: string;
+  /** Разобранное значение либо `null`, если разбор не удался. */
+  readonly value: unknown;
+  /** Причина неудачи разбора либо `null`. */
+  readonly error: string | null;
+}
+
+/**
+ * Все узлы разметки с указанным `@type` — в глубину, включая вложенные.
+ *
+ * В глубину намеренно: `ItemList` живёт свойством `mainEntity` внутри
+ * `CollectionPage`, а `ImageObject` — отдельным узлом `@graph`. Плоский обход
+ * верхнего уровня находил бы один и не находил другой.
+ */
+export function jsonLdNodes(value: unknown, type: string): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => jsonLdNodes(item, type));
+  }
+  if (typeof value !== 'object' || value === null) {
+    return [];
+  }
+  const node = value as Record<string, unknown>;
+  const nested = Object.values(node).flatMap((item) => jsonLdNodes(item, type));
+  return node['@type'] === type ? [node, ...nested] : nested;
 }
 
 /** Значение атрибута `lang` у `<html>`. */
