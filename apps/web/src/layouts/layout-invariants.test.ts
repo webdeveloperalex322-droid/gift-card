@@ -27,13 +27,14 @@
  * `apps/web/src`, то есть проверяет само приложение, и переезд каталога должен
  * ломать его вместе с приложением, а не тихо оставлять пустую выборку.
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
 import { SITE_NAV } from '../seo/catalog-pages.js';
+import { INFO_PAGE_NAV } from '../seo/info-pages.js';
 
 const WEB_SRC = fileURLToPath(new URL('../', import.meta.url));
 
@@ -69,20 +70,56 @@ function markupOf(source: string): string {
   return fenced?.[1] ?? source;
 }
 
+/**
+ * Рендерит ли шаблон `BaseLayout` — сам или через компонент, который импортирует.
+ *
+ * Обход по ИМПОРТАМ, а не по списку известных имён компонентов: список пришлось
+ * бы дописывать при каждом новом общем компоненте страницы, и проверка падала бы
+ * на верном коде. Глубина ограничена: цепочка «маршрут → компонент страницы →
+ * layout» — это два шага, а бесконечный обход на циклическом импорте зацикливался
+ * бы.
+ */
+function rendersBaseLayout(file: string, depth = 2, seen = new Set<string>()): boolean {
+  if (seen.has(file)) {
+    return false;
+  }
+  seen.add(file);
+
+  const source = readFileSync(file, 'utf8');
+  if (/<BaseLayout\b/.test(source)) {
+    return true;
+  }
+  if (depth === 0) {
+    return false;
+  }
+
+  // Импорты компонентов `.astro` — относительными путями из frontmatter.
+  const imports = [...source.matchAll(/^import\s+\w+\s+from\s+'([^']+\.astro)';$/gmu)];
+  return imports.some((match) => {
+    const relative = match[1];
+    if (relative === undefined) {
+      return false;
+    }
+    const target = resolve(dirname(file), relative);
+    return existsSync(target) && rendersBaseLayout(target, depth - 1, seen);
+  });
+}
+
 describe('инварианты всех шаблонов страниц', () => {
   it('шаблоны страниц вообще найдены: пустая выборка проверкой не является', () => {
     expect(PAGE_TEMPLATES.length).toBeGreaterThanOrEqual(5);
   });
 
   it.each(PAGE_TEMPLATES)('%s рендерит BaseLayout, то есть получает навигацию', (file) => {
-    const source = readFileSync(file, 'utf8');
-
     // Либо шаблон сам рендерит BaseLayout, либо он делает это через компонент
-    // страницы (каталог открыток отдают два маршрута, и разметка у них общая).
-    const rendersLayout = /<BaseLayout\b/.test(source);
-    const delegates = /<CardCatalogPage\b/.test(source);
-
-    expect(rendersLayout || delegates).toBe(true);
+    // страницы: разметка, общая для нескольких маршрутов, живёт в компоненте
+    // (каталог открыток отдают два маршрута; три служебные страницы — три).
+    //
+    // Делегат ищется ПО ИМПОРТАМ, а не по списку известных имён. Список
+    // приходилось бы дописывать при каждом новом общем компоненте, и до этой
+    // правки он был именно списком из одного имени — то есть проверка падала на
+    // верном коде и учила себя чинить подгонкой.
+    expect(rendersBaseLayout(file)).toBe(true);
   });
 
   it.each(PAGE_TEMPLATES)('%s не подключает клиентский JS директивой client:*', (file) => {
@@ -104,5 +141,45 @@ describe('инварианты всех шаблонов страниц', () => 
     expect(markupOf(nav)).not.toMatch(/<button\b/);
     expect(paths).toContain('/otkrytki');
     expect(paths).toContain('/podborki');
+  });
+
+  it('BaseLayout печатает подвал, а подвал ведёт на все три служебные страницы', () => {
+    // Служебные страницы (Э3-11) попадают в постоянную навигацию через подвал, а
+    // не через верхнее меню. Требование то же — «страница входит в навигацию»
+    // (условие п. 5.1), — и держится оно так же: подвал печатает layout, значит он
+    // есть на каждой странице, включая 404.
+    const layout = readFileSync(join(WEB_SRC, 'layouts', 'BaseLayout.astro'), 'utf8');
+    const footer = readFileSync(join(WEB_SRC, 'components', 'SiteFooter.astro'), 'utf8');
+
+    expect(layout).toMatch(/<SiteFooter\b/);
+    expect(footer).toMatch(/<a\b[^>]*href=\{link\.path\}/);
+    expect(markupOf(footer)).not.toContain('href="#"');
+    expect(markupOf(footer)).not.toMatch(/<button\b/);
+    expect(INFO_PAGE_NAV.map((link) => link.path)).toEqual([
+      '/o-proekte',
+      '/usloviya',
+      '/kontakty',
+    ]);
+  });
+
+  it('страница 404 ПРЕРЕНДЕРЕНА — иначе у сайта две разные страницы 404', () => {
+    // Условие «страница 404 у сайта одна» (задача Э3-11): пререндер кладёт
+    // `dist/client/404.html`, и этот файл читают ОБА пути — наш статический слой
+    // (`src/server/front-door.ts`) и приложение Astro (адаптер `@astrojs/node`
+    // подставляет `prerenderedErrorPageFetch`, читающий `404.html` из корня
+    // клиента). С `prerender = false` файла в сборке нет, и тело 404 начинает
+    // приходить из двух мест.
+    //
+    // Проверка текстовая и в этом её смысл: `prerender = false` — одна строка,
+    // которую легко дописать «чтобы взять данные из БД», а следствие видно только
+    // сравнением двух ответов на живом сервере.
+    const notFound = readFileSync(join(WEB_SRC, 'pages', '404.astro'), 'utf8');
+
+    expect(notFound).not.toMatch(/export\s+const\s+prerender\s*=\s*false/u);
+    // И ни одного обращения к слою данных: пререндер выполняется на сборке, где
+    // базы может не быть вовсе.
+    expect(notFound).not.toMatch(/from\s+'\.\.\/data'/u);
+    // Canonical у страницы 404 не бывает: она отвечает по любому адресу.
+    expect(notFound).toMatch(/canonicalPath=\{null\}/u);
   });
 });

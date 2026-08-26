@@ -33,6 +33,7 @@ import { readFile } from 'node:fs/promises';
 
 import type { MiddlewareHandler } from 'astro';
 
+import { maintenanceMode } from './server/maintenance.js';
 import { adminRoutePrefix, decideRequestTarget } from './routing/path-policy.js';
 import { decideMediaRequest, resolveMediaRoot } from './server/media-files.js';
 import { serverEnv, workspaceRoot } from './server-env.js';
@@ -77,6 +78,28 @@ async function respondWithDerivative(pathname: string): Promise<Response | null>
 }
 
 export const onRequest: MiddlewareHandler = async (context, next) => {
+  // Режим обслуживания — ПЕРВЫМ, раньше даже пропуска заранее отрендеренных
+  // маршрутов: 503 обязан приходить на любой адрес, а статическая страница —
+  // такой же адрес, как остальные (правило и обоснование — в шапке
+  // `./server/maintenance.ts`).
+  //
+  // Единственное исключение по построению: во время СБОРКИ пререндер обращается к
+  // страницам через этот же middleware. Включённый в момент сборки режим
+  // обслуживания положил бы 503 в артефакт, поэтому окно обслуживания и сборка —
+  // взаимоисключающие операции; на собранном сервере до этой ветки запрос обычно
+  // не доходит вовсе, его перехватывает входной обработчик.
+  const maintenance = maintenanceMode(serverEnv());
+  if (maintenance.action === 'unavailable') {
+    return new Response(maintenance.body, {
+      status: maintenance.status,
+      headers: {
+        'Cache-Control': 'no-store',
+        'Content-Type': 'text/html; charset=utf-8',
+        'Retry-After': String(maintenance.retryAfterSeconds),
+      },
+    });
+  }
+
   // Заранее отрендеренные маршруты проходят без проверки, и это НЕ послабление.
   // Во время сборки Astro запрашивает такую страницу по имени её ФАЙЛА:
   // при `build.format: 'file'` это `/zzprobe.html`, при `directory` — путь с
@@ -120,9 +143,10 @@ export const onRequest: MiddlewareHandler = async (context, next) => {
     // ответ своей страницей ошибки только когда статус реroutable и тело равно
     // null (`astro/dist/core/routing/handler.js`, проверка
     // `REROUTABLE_STATUS_CODES.includes(response.status) && response.body === null`).
-    // Так 404 остаётся настоящим 404 и получает страницу 404 приложения — пока
-    // это страница Astro по умолчанию (`<html lang="en">`, без навигации), своя
-    // с навигацией появится на Э3-11.
+    // Так 404 остаётся настоящим 404 и получает страницу 404 приложения — с
+    // задачи Э3-11 это НАША страница `src/pages/404.astro`: она пререндеренная,
+    // поэтому и обработчик Astro (через `prerenderedErrorPageFetch` адаптера), и
+    // наш статический слой читают один и тот же `dist/client/404.html`.
     //
     // `not-served` (маршруты админки Payload) отвечает тем же 404 намеренно:
     // отдельный статус или отдельное тело подсказывали бы, что по этому адресу

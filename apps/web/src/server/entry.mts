@@ -35,6 +35,7 @@ import { adminRoutePrefix } from '../routing/path-policy.js';
 import { serverEnv, workspaceRoot } from '../server-env.js';
 import { loadBuiltAstroApp } from './astro-app.js';
 import { createFrontDoor } from './front-door.js';
+import { maintenanceMode } from './maintenance.js';
 import { resolveMediaRoot } from './media-files.js';
 
 /**
@@ -59,6 +60,15 @@ export const handler = createFrontDoor({
   logError: (message: string) => {
     console.error(`[apps/web] ${message}`);
   },
+  /**
+   * Режим обслуживания. Как и корень производных, читается ЛЕНИВО — на запросе, а
+   * не при сборке обработчика: `serverEnv()` подмешивает корневой `.env`, и
+   * порядок «сначала окружение, потом решение» обязан сохраниться (обоснование —
+   * шапка `FrontDoorOptions.maintenance`). Непонятное значение выключателя даёт
+   * отказ, который превращается в 500 с внятной причиной в логе, — это лучше
+   * сайта, который считается закрытым и отвечает 200.
+   */
+  maintenance: () => maintenanceMode(serverEnv()),
   /**
    * Корень производных вычисляется ЛЕНИВО — при первом запросе к `/media/...`, а
    * не при старте. Причина в шапке `FrontDoorOptions.mediaRoot`: без корня сайт

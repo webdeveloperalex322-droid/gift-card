@@ -71,9 +71,12 @@ function assertPathNotAbsolute(value: string): void {
  * по себе превратил бы `https://chuzhoy.test/x` в правдоподобный путь
  * `/https:/chuzhoy.test/x`, то есть в canonical на несуществующую страницу
  * своего же хоста. Ровно та же проверка и по той же причине стоит у звена крошек
- * (`../seo/breadcrumbs.ts`). Валидация поля в CMS (`validateSiteRootPath`) это
- * уже запрещает; здесь — постусловие, потому что цена ошибки в canonical выше
- * цены двойной проверки.
+ * (`../seo/breadcrumbs.ts`). Валидация поля в CMS
+ * (`validateCanonicalOverride` в `apps/cms/src/collections/seo-fields.ts` — именно
+ * она стоит на поле `canonical` обеих контентных коллекций; `validateSiteRootPath`
+ * из `@otkritka/shared` валидирует пути в глобале настроек и к этому полю
+ * отношения не имеет) это уже запрещает; здесь — постусловие, потому что цена
+ * ошибки в canonical выше цены двойной проверки.
  *
  * @param override значение поля `canonical` записи; пусто — норма.
  * @param selfPath собственный адрес страницы (для карточки — `buildCardPath`,

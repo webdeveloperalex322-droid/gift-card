@@ -10,9 +10,16 @@
  * этого результата и ничего не решают сами, а экранирование текста выполняет
  * шаблонизатор (`set:html` в этом пути не участвует).
  */
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
-import { richTextBlocks } from '../../apps/web/src/seo/rich-text.js';
+import {
+  DECLINED_TEXT_FORMAT_BITS,
+  richTextBlocks,
+  TEXT_FORMAT_BITS,
+} from '../../apps/web/src/seo/rich-text.js';
 
 /** Текстовый узел lexical: формат — битовая маска. */
 function text(value: string, format = 0): Record<string, unknown> {
@@ -96,6 +103,83 @@ describe('блоки вводного текста', () => {
     expect(blocks[0]).toMatchObject({ kind: 'list', ordered: false });
     expect(blocks[1]).toMatchObject({ kind: 'list', ordered: true });
     expect(blocks[0]?.kind === 'list' ? blocks[0].items.length : 0).toBe(2);
+  });
+
+  it('вложенный список внутри элемента не склеивает слова', () => {
+    // Находка ревизии Э3-05/Э3-06 (MINOR 1): абзац и вложенный список внутри
+    // `listitem` расплющивались в один `<li>`, фрагменты печатались вплотную, и
+    // «Раз» + «Вложенный» давали «РазВложенный». Для переноса строки склейка
+    // специально исключена пробелом — на границе дочернего блока она обязана
+    // быть исключена так же.
+    const blocks = richTextBlocks(
+      doc({
+        type: 'list',
+        listType: 'bullet',
+        tag: 'ul',
+        version: 1,
+        children: [
+          {
+            type: 'listitem',
+            version: 1,
+            children: [
+              text('Раз'),
+              {
+                type: 'list',
+                listType: 'bullet',
+                tag: 'ul',
+                version: 1,
+                children: [
+                  { type: 'listitem', children: [text('Вложенный')], version: 1 },
+                  { type: 'listitem', children: [text('И ещё')], version: 1 },
+                ],
+              },
+            ],
+          },
+          { type: 'listitem', version: 1, children: [paragraph(text('Два')), paragraph(text('Три'))] },
+        ],
+      }),
+    );
+
+    const items = blocks[0]?.kind === 'list' ? blocks[0].items : [];
+    const flat = items.map((runs) => runs.map((run) => run.text).join(''));
+
+    expect(flat).toHaveLength(2);
+    expect(flat[0]).toBe('Раз Вложенный И ещё');
+    expect(flat[1]).toBe('Два Три');
+  });
+
+  it('узел, чьё содержимое лежит не в children, ВАЛИТ разбор с указанием типа', () => {
+    // Находка ревизии Э3-05/Э3-06 (MAJOR): такой узел давал ноль фрагментов, и
+    // проверка «есть ли содержание» отбрасывала блок БЕЗ СЛЕДА — текст пропадал
+    // с опубликованной страницы молча. Со стороны CMS набор фич редактора сужен
+    // так, что эти узлы невыразимы, но разбор обязан отказывать сам: тихая
+    // потеря текста дороже 500.
+    const invisible: Record<string, unknown>[] = [
+      { type: 'upload', relationTo: 'card-images', value: 5, version: 1 },
+      { type: 'relationship', relationTo: 'cards', value: 7, version: 1 },
+      { type: 'block', fields: { blockType: 'callout', text: 'Текст внутри блока' }, version: 1 },
+      { type: 'inlineBlock', fields: { blockType: 'badge' }, version: 1 },
+    ];
+
+    for (const node of invisible) {
+      expect(() => richTextBlocks(doc(node))).toThrow(String(node['type']));
+    }
+  });
+
+  it('узел без типа тоже отказ, а не молчаливая потеря', () => {
+    expect(() => richTextBlocks(doc({ version: 1 }))).toThrow(/type/);
+  });
+
+  it('пустой абзац и горизонтальная линия отказа НЕ вызывают', () => {
+    // Разница с проверкой выше принципиальная: пустой абзац — это пустая строка,
+    // которую редактор оставил намеренно, а горизонтальная линия — оформление,
+    // которое разбор не печатает по решению задачи Э3-06. Оба узла известны
+    // разбору, и терять в них нечего.
+    expect(richTextBlocks(doc(paragraph()))).toEqual([]);
+    expect(richTextBlocks(doc({ type: 'horizontalrule', version: 1 }))).toEqual([]);
+    expect(
+      richTextBlocks(doc(paragraph(text('Абзац.')), { type: 'horizontalrule', version: 1 })),
+    ).toHaveLength(1);
   });
 
   it('цитата и неизвестный тип узла не теряют текста', () => {
@@ -187,5 +271,65 @@ describe('ссылки внутри вводного текста', () => {
 
     expect(run?.href).toBe('/podborki/adresaty/mame');
     expect(run?.tags).toEqual(['strong']);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Битовые маски формата: сверка с апстримом                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Значения масок в `apps/web/src/seo/rich-text.ts` СКОПИРОВАНЫ числами из
+ * `NodeFormat` пакета `@payloadcms/richtext-lexical` — импортировать оттуда в
+ * продуктовый путь нельзя (обоснование в шапке модуля: пакет тянет peer-зависимости
+ * на react, react-dom и next, а Astro-приложение без React получило бы их в дерево
+ * ради разбора одного поля). Расхождение с апстримом проявилось бы ПОТЕРЕЙ
+ * ВЫДЕЛЕНИЯ без единого падения — находка ревизии Э3-05/Э3-06 (MINOR 2).
+ *
+ * Тест — законное место для такого импорта: `@payloadcms/richtext-lexical` уже
+ * зависимость `apps/cms`, и в дерево зависимостей публичного сервера он от этого
+ * не попадает. Разрешается пакет ОТ `apps/cms`, потому что в корне
+ * монорепозитория его нет: pnpm не поднимает зависимости приложения наверх.
+ */
+const requireFromCms = createRequire(
+  new URL('../../apps/cms/package.json', import.meta.url),
+);
+const lexical = (await import(
+  pathToFileURL(requireFromCms.resolve('@payloadcms/richtext-lexical')).href
+)) as {
+  readonly NodeFormat: Readonly<Record<string, number>>;
+  readonly TEXT_TYPE_TO_FORMAT: Readonly<Record<string, number>>;
+};
+
+describe('битовые маски формата совпадают с @payloadcms/richtext-lexical', () => {
+  it('каждая маска разбора равна значению NodeFormat из пакета', () => {
+    for (const [name, bit] of Object.entries({
+      ...TEXT_FORMAT_BITS,
+      ...DECLINED_TEXT_FORMAT_BITS,
+    })) {
+      expect(lexical.NodeFormat[name], `маска ${name}`).toBe(bit);
+    }
+  });
+
+  it('ни один формат текста апстрима не остался без решения', () => {
+    // Проверка ловит НОВЫЙ бит формата в апстриме: пока он не назван ни среди
+    // печатаемых, ни среди сознательно не печатаемых, разбор молча терял бы это
+    // выделение. Источник набора — `TEXT_TYPE_TO_FORMAT` пакета: это ровно
+    // форматы текстового узла, без режимов и выравниваний из того же объекта.
+    const known = new Set<number>([
+      ...Object.values(TEXT_FORMAT_BITS),
+      ...Object.values(DECLINED_TEXT_FORMAT_BITS),
+    ]);
+    const unaccounted = Object.entries(lexical.TEXT_TYPE_TO_FORMAT).filter(
+      ([, bit]) => !known.has(bit),
+    );
+
+    expect(unaccounted).toEqual([]);
+  });
+
+  it('печатаемые и непечатаемые форматы не пересекаются', () => {
+    for (const name of Object.keys(DECLINED_TEXT_FORMAT_BITS)) {
+      expect(name in TEXT_FORMAT_BITS).toBe(false);
+    }
   });
 });

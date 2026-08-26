@@ -4,6 +4,11 @@
  *
  * Порядок ровно такой и в таком порядке значим:
  *
+ *   0. режим обслуживания (`maintenanceMode`) — раньше ВСЕГО, включая политику
+ *      пути. Обоснование порядка — в шапке `./maintenance.ts`: сервис, объявивший
+ *      себя недоступным, не выдаёт заодно утверждений о канонической форме
+ *      адресов, а полуоткрытый сайт (страницы 503, картинки 200) хуже честной
+ *      недоступности;
  *   1. решение по СЫРОЙ цели (`decideRequestTarget`) — до статики и до
  *      маршрутизации Astro;
  *   2. производные изображений из корня `/media` — только файлы, только
@@ -33,6 +38,7 @@ import path from 'node:path';
 
 import { decideRequestTarget } from '../routing/path-policy.js';
 import type { AstroNodeHandler } from './astro-app.js';
+import type { MaintenanceDecision } from './maintenance.js';
 import { decideMediaRequest, type MediaDecision } from './media-files.js';
 import { tryServeStaticFile } from './static-files.js';
 
@@ -43,13 +49,17 @@ const PRERENDERED_NOT_FOUND_FILE = '404.html';
  * Ответ 404 на случай, когда заранее отрендеренной страницы 404 в сборке нет.
  *
  * Требование п. 23 ТЗ — «страница 404 отдаёт настоящий 404 и содержит
- * навигацию». Эта заглушка настоящий 404 отдаёт и одну ссылку содержит, но
- * полноценной страницей 404 не является: свою страницу с навигацией и
- * оформлением делает задача Э3-11. Условие, которое Э3-11 обязана выполнить,
- * чтобы этот резерв перестал использоваться: `src/pages/404.astro` должна быть
- * ПРЕРЕНДЕРЕННОЙ (без `prerender = false`) — тогда `dist/client/404.html`
- * появляется в сборке и отдаётся и нами, и приложением Astro, то есть страница
- * 404 у сайта одна, а не две разные.
+ * навигацию». С задачи Э3-11 полноценная страница есть: `src/pages/404.astro`,
+ * ПРЕРЕНДЕРЕННАЯ (без `prerender = false`), поэтому в сборке появляется
+ * `dist/client/404.html`. Этот файл читают ОБА пути — наш (`loadNotFoundBody`
+ * ниже) и приложение Astro (адаптер `@astrojs/node` подставляет
+ * `prerenderedErrorPageFetch`, читающий `404.html` из корня клиента), — то есть
+ * страница 404 у сайта одна, а не две разные.
+ *
+ * Резерв поэтому достижим ровно в одном состоянии: артефакт собран без страницы
+ * 404 (например, каталог `dist/client` подменён). Он отдаёт настоящий 404 и одну
+ * ссылку, но полноценной страницей не является — и не должен: его задача не
+ * подменять страницу, а не дать серверу ответить пустотой.
  */
 const FALLBACK_NOT_FOUND_HTML = [
   '<!doctype html>',
@@ -91,6 +101,25 @@ export interface FrontDoorOptions {
   readonly mediaRoot: () => string;
   /** Куда писать диагностику. Отдельным параметром, чтобы тест не читал stderr. */
   readonly logError: (message: string) => void;
+  /**
+   * Решение по режиму обслуживания. Спрашивается на каждый запрос.
+   *
+   * Функция, а не готовое значение, по двум причинам, и ни одна из них не в том,
+   * что переменную окружения можно поменять на живом процессе (нельзя — она
+   * читается из `process.env` того же процесса):
+   *
+   *   1. значение не должно застыть на ИМПОРТЕ модуля. Порядок «сначала
+   *      подмешать корневой `.env`, потом собрать обработчик» держится тем, что
+   *      окружение читается позже — ровно как у `mediaRoot` рядом;
+   *   2. правило одно на два входа (наш сервер и middleware Astro), и проверяется
+   *      оно юнит-тестом на подставленном решении, а не поднятым сервером с
+   *      подкрученным `process.env`.
+   *
+   * Параметр обязательный и без значения по умолчанию: сервер, собранный без этой
+   * проверки, молча отвечал бы 200 в режиме обслуживания — то есть выключатель
+   * существовал бы и не работал.
+   */
+  readonly maintenance: () => MaintenanceDecision;
 }
 
 /** Тело страницы 404 читается с диска один раз за время жизни процесса. */
@@ -200,11 +229,39 @@ async function serveMedia(
   }
 }
 
+/**
+ * Ответ 503 режима обслуживания.
+ *
+ * `Retry-After` обязателен: без него 503 для краулера означает неопределённость,
+ * а с ним — «приходите через N секунд». Тело приходит из
+ * `./maintenance.ts` и от базы не зависит вовсе.
+ */
+function respondUnavailable(
+  res: ServerResponse,
+  decision: Extract<MaintenanceDecision, { readonly action: 'unavailable' }>,
+): void {
+  res.writeHead(decision.status, {
+    'Cache-Control': 'no-store',
+    'Content-Length': String(Buffer.byteLength(decision.body)),
+    'Content-Type': 'text/html; charset=utf-8',
+    'Retry-After': String(decision.retryAfterSeconds),
+  });
+  res.end(decision.body);
+}
+
 async function route(
   req: IncomingMessage,
   res: ServerResponse,
   options: FrontDoorOptions,
 ): Promise<void> {
+  // Шаг 0: режим обслуживания. Раньше политики пути, раньше `/media`, раньше
+  // статики — обоснование в шапке `./maintenance.ts`.
+  const maintenance = options.maintenance();
+  if (maintenance.action === 'unavailable') {
+    respondUnavailable(res, maintenance);
+    return;
+  }
+
   const target = req.url;
   if (target === undefined || target === '') {
     respondText(res, 400, BAD_REQUEST_TEXT);

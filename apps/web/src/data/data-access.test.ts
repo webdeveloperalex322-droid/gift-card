@@ -56,7 +56,8 @@ import {
   seasonalCollectionsQuery,
   SIMILAR_CARDS_MAX,
   SIMILAR_CARDS_TARGET_MIN,
-  similarCardsQuery,
+  similarCardsQueries,
+  similarCardsWindow,
 } from './queries.js';
 import { orderByIds } from './relations.js';
 import {
@@ -251,16 +252,43 @@ describe('запросы к коллекциям', () => {
     });
   });
 
-  it('похожие открытки: те же подборки, кроме самой карточки (ТЗ §5.4)', () => {
+  it('похожие открытки: окно соседей той же темы, кроме самой карточки (ТЗ §5.4)', () => {
     // Исключение самой карточки делает ЗАПРОС, а не шаблон: отфильтрованная
     // после выборки карточка уменьшала бы блок на одну позицию непредсказуемо.
-    const query = required(similarCardsQuery({ collectionIds: [7, 9], excludeCardId: 3 }));
+    const queries = similarCardsQueries({
+      collectionIds: [7, 9],
+      excludeCardId: 3,
+      publishedAt: '2026-03-01T10:00:00.000Z',
+    });
+    const older = required(queries.older);
+    const newer = required(queries.newer);
 
-    expect(query.collection).toBe('cards');
-    expect(query.limit).toBe(SIMILAR_CARDS_MAX);
-    expect(query.sort).toEqual(['-publishedAt', '-id']);
-    expect(query.where).toEqual({
-      and: [{ collections: { in: [7, 9] } }, { id: { not_equals: 3 } }],
+    expect(older.collection).toBe('cards');
+    expect(older.limit).toBe(SIMILAR_CARDS_MAX);
+    // Половина «старше» читается порядком показа, половина «новее» — обратным:
+    // предел обязан отрезать дальних соседей, а не ближних.
+    expect(older.sort).toEqual(['-publishedAt', '-id']);
+    expect(newer.sort).toEqual(['publishedAt', 'id']);
+
+    const theme = { and: [{ collections: { in: [7, 9] } }, { id: { not_equals: 3 } }] };
+    // Сравнение с карточкой СОСТАВНОЕ: у пачки, опубликованной одной операцией
+    // (пакетная публикация — решение Ч-07), `publishedAt` совпадает, и сравнение
+    // по одной дате разрезало бы пачку целиком в одну сторону.
+    expect(older.where).toEqual({
+      and: [
+        theme,
+        {
+          or: [
+            { publishedAt: { less_than: '2026-03-01T10:00:00.000Z' } },
+            {
+              and: [
+                { publishedAt: { equals: '2026-03-01T10:00:00.000Z' } },
+                { id: { less_than: 3 } },
+              ],
+            },
+          ],
+        },
+      ],
     });
   });
 
@@ -271,7 +299,31 @@ describe('запросы к коллекциям', () => {
   });
 
   it('карточка без подборок не превращает «похожие» в весь каталог', () => {
-    expect(similarCardsQuery({ collectionIds: [], excludeCardId: 3 })).toBeNull();
+    const queries = similarCardsQueries({
+      collectionIds: [],
+      excludeCardId: 3,
+      publishedAt: '2026-03-01T10:00:00.000Z',
+    });
+
+    expect(queries.newer).toBeNull();
+    expect(queries.older).toBeNull();
+  });
+
+  it('карточка без publishedAt: окна нет, но страница не падает', () => {
+    // У опубликованной записи поле ставит хук первой публикации, поэтому пустое
+    // значение означает повреждённую запись. Осознанная деградация до прежнего
+    // поведения (свежие по теме) лучше 500 на странице, которую человек
+    // опубликовал; достижимость при этом держит пагинация списка.
+    const queries = similarCardsQueries({
+      collectionIds: [7],
+      excludeCardId: 3,
+      publishedAt: null,
+    });
+
+    expect(queries.newer).toBeNull();
+    expect(required(queries.older).where).toEqual({
+      and: [{ collections: { in: [7] } }, { id: { not_equals: 3 } }],
+    });
   });
 
   it('смежные подборки ограничены шестью, а подборки карточки читаются целиком', () => {
@@ -313,7 +365,14 @@ describe('запросы к коллекциям', () => {
       required(collectionByIdQuery(1)),
       required(relatedCollectionsQuery([1])),
       required(collectionsByIdsQuery([1])),
-      required(similarCardsQuery({ collectionIds: [1], excludeCardId: 2 })),
+      required(
+        similarCardsQueries({ collectionIds: [1], excludeCardId: 2, publishedAt: '2026-01-01' })
+          .newer,
+      ),
+      required(
+        similarCardsQueries({ collectionIds: [1], excludeCardId: 2, publishedAt: '2026-01-01' })
+          .older,
+      ),
       recentCardsQuery(4),
       catalogCardsQuery({ page: 2 }),
       rootCollectionsQuery(),
@@ -324,5 +383,230 @@ describe('запросы к коллекциям', () => {
       expect(query.depth).toBe(0);
       expect('user' in query).toBe(false);
     }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Достижимость через блок «Похожие открытки» (решение Ч-04-8)         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Мини-СУБД: применяет запрос к набору карточек в памяти.
+ *
+ * Зачем она нужна, а не просто проверка формы `where`. Проверяемое здесь
+ * свойство — «ЛЮБАЯ карточка темы попадает хотя бы в один блок „Похожие“» — это
+ * свойство ВЫБОРКИ, а не текста условия: оно складывается из предиката, порядка
+ * сортировки, предела и склейки половин. Проверка формы `where` (она есть выше)
+ * доказывает, что мы отправили то, что хотели; здесь доказывается, что
+ * отправленное даёт нужный результат. Живой базой это же утверждение проверялось
+ * бы 74 запросами на каждый прогон — то есть почти никогда.
+ *
+ * Поддержан ровно тот набор операторов, который порождают наши запросы.
+ * Неизвестный оператор — отказ, а не «не совпало»: молчаливое false здесь
+ * означало бы тест, который проверяет не тот запрос, что уходит в Payload.
+ */
+interface FakeCard {
+  readonly id: number;
+  readonly publishedAt: string;
+  readonly collections: readonly number[];
+}
+
+function compareOperator(
+  card: FakeCard,
+  field: string,
+  operator: string,
+  operand: unknown,
+): boolean {
+  if (field === 'collections') {
+    if (operator !== 'in') {
+      throw new Error(`Оператор «${operator}» по связи мини-СУБД теста не поддерживает.`);
+    }
+    return (operand as readonly number[]).some((id) => card.collections.includes(id));
+  }
+
+  const value: number | string = field === 'id' ? card.id : card.publishedAt;
+  switch (operator) {
+    case 'equals':
+      return value === operand;
+    case 'not_equals':
+      return value !== operand;
+    case 'greater_than':
+      return value > (operand as number | string);
+    case 'less_than':
+      return value < (operand as number | string);
+    default:
+      throw new Error(
+        `Оператор «${operator}» мини-СУБД теста не поддержан. Запрос изменился — проверка ` +
+          'обязана либо научиться его исполнять, либо перестать притворяться, что проверила.',
+      );
+  }
+}
+
+function matchesWhere(card: FakeCard, where: unknown): boolean {
+  const record = where as Record<string, unknown>;
+  const and = record['and'];
+  if (Array.isArray(and)) {
+    return and.every((nested) => matchesWhere(card, nested));
+  }
+  const or = record['or'];
+  if (Array.isArray(or)) {
+    return or.some((nested) => matchesWhere(card, nested));
+  }
+  return Object.entries(record).every(([field, condition]) =>
+    Object.entries(condition as Record<string, unknown>).every(([operator, operand]) =>
+      compareOperator(card, field, operator, operand),
+    ),
+  );
+}
+
+/** Сортировка по ключам Payload (`-поле` — по убыванию). Порядок полный. */
+function sortByKeys(cards: readonly FakeCard[], keys: readonly string[]): readonly FakeCard[] {
+  return [...cards].sort((left, right) => {
+    for (const key of keys) {
+      const descending = key.startsWith('-');
+      const field = descending ? key.slice(1) : key;
+      const a: number | string = field === 'id' ? left.id : left.publishedAt;
+      const b: number | string = field === 'id' ? right.id : right.publishedAt;
+      if (a !== b) {
+        return (a < b ? -1 : 1) * (descending ? -1 : 1);
+      }
+    }
+    return 0;
+  });
+}
+
+function runQuery(
+  cards: readonly FakeCard[],
+  query: PublicFindQuery<'cards'> | null,
+): readonly FakeCard[] {
+  if (query === null) {
+    return [];
+  }
+  const matched = cards.filter((card) => matchesWhere(card, query.where));
+  const sorted = sortByKeys(matched, query.sort ?? []);
+  return query.limit === undefined ? sorted : sorted.slice(0, query.limit);
+}
+
+/**
+ * Тема из 37 открыток — заметно больше предела блока (12), иначе свойство
+ * выполнялось бы тривиально. Дата публикации повторяется тройками: так в наборе
+ * есть пачки, опубликованные одной операцией (решение Ч-07), и составное
+ * сравнение по `(publishedAt, id)` действительно работает, а не проверяется на
+ * идеально различных датах.
+ */
+const THEME_ID = 7;
+const THEME: readonly FakeCard[] = Array.from({ length: 37 }, (_, index) => ({
+  collections: [THEME_ID],
+  id: index + 1,
+  publishedAt: `2026-03-${String(1 + Math.floor(index / 3)).padStart(2, '0')}T10:00:00.000Z`,
+}));
+
+function blockIn(theme: readonly FakeCard[], card: FakeCard): readonly FakeCard[] {
+  const queries = similarCardsQueries({
+    collectionIds: [THEME_ID],
+    excludeCardId: card.id,
+    publishedAt: card.publishedAt,
+  });
+  return similarCardsWindow({
+    newer: runQuery(theme, queries.newer),
+    older: runQuery(theme, queries.older),
+  });
+}
+
+function similarBlockFor(card: FakeCard): readonly FakeCard[] {
+  return blockIn(THEME, card);
+}
+
+describe('блок «Похожие открытки» как средство достижимости (Ч-04-8)', () => {
+  it('ЛЮБАЯ карточка темы попадает хотя бы в один блок «Похожие»', () => {
+    // Это и есть требование Ч-04-8, на которое ссылается шапка шаблона карточки.
+    // Прежняя выборка («свежие 12 минус сама») давала всем карточкам темы ОДИН
+    // список, и карточка с тринадцатой по счёту не входила ни в один блок — то
+    // есть за первой страницей списка была недостижима ссылками.
+    const covered = new Set<number>();
+    for (const card of THEME) {
+      for (const similar of similarBlockFor(card)) {
+        covered.add(similar.id);
+      }
+    }
+
+    expect([...covered].sort((a, b) => a - b)).toEqual(THEME.map((card) => card.id));
+  });
+
+  it('блок зависит от карточки, а не одинаков у всей темы', () => {
+    const blocks = THEME.map((card) =>
+      similarBlockFor(card)
+        .map((similar) => similar.id)
+        .join(','),
+    );
+
+    expect(new Set(blocks).size).toBe(THEME.length);
+  });
+
+  it('на себя блок не ссылается и предел не превышает', () => {
+    for (const card of THEME) {
+      const block = similarBlockFor(card);
+      expect(block.map((similar) => similar.id)).not.toContain(card.id);
+      expect(block).toHaveLength(SIMILAR_CARDS_MAX);
+    }
+  });
+
+  it('блок — непрерывный отрезок общего порядка вокруг карточки', () => {
+    // Из непрерывности и следует взаимность «быть соседом», а из неё —
+    // достижимость. Свойство проверяется отдельно от неё: покрытие может
+    // сложиться и на рваной выборке, а непрерывность — это причина.
+    const order = sortByKeys(THEME, ['-publishedAt', '-id']).map((card) => card.id);
+
+    for (const card of THEME) {
+      const shown = similarBlockFor(card).map((similar) => similar.id);
+      const positions = [...shown, card.id].map((id) => order.indexOf(id)).sort((a, b) => a - b);
+      const last = positions.at(-1) ?? 0;
+      const first = positions.at(0) ?? 0;
+
+      expect(last - first).toBe(positions.length - 1);
+    }
+  });
+
+  it('у самой свежей и у самой старой открытки темы блок полный', () => {
+    // Половина окна у них пуста, и предел обязан целиком уйти второй половине:
+    // иначе крайние карточки темы получали бы вдвое меньше ссылок, а вместе с
+    // ними — вдвое меньше входящих ссылок их соседи.
+    const order = sortByKeys(THEME, ['-publishedAt', '-id']);
+    const freshest = order[0];
+    const oldest = order.at(-1);
+    if (freshest === undefined || oldest === undefined) {
+      throw new Error('Набор темы пуст — проверять нечего.');
+    }
+
+    expect(similarBlockFor(freshest)).toHaveLength(SIMILAR_CARDS_MAX);
+    expect(similarBlockFor(oldest)).toHaveLength(SIMILAR_CARDS_MAX);
+    // У самой свежей соседей «новее» нет вовсе — весь блок приходит из «старше».
+    const queries = similarCardsQueries({
+      collectionIds: [THEME_ID],
+      excludeCardId: freshest.id,
+      publishedAt: freshest.publishedAt,
+    });
+    expect(runQuery(THEME, queries.newer)).toEqual([]);
+  });
+
+  it('тема из двух открыток: каждая видит другую', () => {
+    // Нижняя граница, при которой требование ещё выполнимо. Ниже (одна открытка
+    // в теме) блок пуст, и достижимость держится только списком — это состояние
+    // неполной темы, а не дефект (порог 20 открыток — решение Ч-06).
+    const pair = THEME.slice(0, 2);
+    const left = pair[0];
+    const right = pair[1];
+    if (left === undefined || right === undefined) {
+      throw new Error('Паре нужны две карточки.');
+    }
+
+    expect(blockIn(pair, left).map((card) => card.id)).toEqual([right.id]);
+    expect(blockIn(pair, right).map((card) => card.id)).toEqual([left.id]);
+  });
+
+  it('предел 1 отклоняется: он ломает взаимность «быть соседом»', () => {
+    expect(() => similarCardsWindow({ limit: 1, newer: [{ id: 1 }], older: [{ id: 2 }] })).toThrow(
+      /Ч-04-8/,
+    );
   });
 });

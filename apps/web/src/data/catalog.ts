@@ -111,7 +111,17 @@ export async function cardCatalogPage(
   // базовый URL 200, — иначе 301 повёл бы на 404.
   const requested = decision.action === 'redirect-to-base' ? 1 : decision.page;
   const cardsPage = await listCatalogCards({ page: requested });
-  if (cardsPage.pageCount === 0 || requested > cardsPage.pageCount) {
+  // Пустая страница — 404 по ЧИСЛУ ВЫДАННЫХ СТРОК, а не только по числу страниц.
+  // Замерено на живом сервере: у пустой коллекции Payload отдаёт `totalPages: 1`
+  // при `totalDocs: 0`, поэтому проверка одного `pageCount` пропускала пустой
+  // каталог дальше, и страница падала 500 на сборке `ItemList` (он справедливо
+  // отказывается описывать список без элементов). 500 вместо 404 — это ещё и
+  // неверный сигнал поисковику: «зайдите позже» вместо «здесь ничего нет».
+  if (
+    cardsPage.pageCount === 0 ||
+    requested > cardsPage.pageCount ||
+    cardsPage.cards.length === 0
+  ) {
     return { kind: 'not-found' };
   }
 

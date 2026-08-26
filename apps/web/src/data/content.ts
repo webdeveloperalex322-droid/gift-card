@@ -57,8 +57,9 @@ import {
   relatedCollectionsQuery,
   rootCollectionsQuery,
   seasonalCollectionsQuery,
-  similarCardsQuery,
+  similarCardsQueries,
   type SimilarCardsQueryInput,
+  similarCardsWindow,
 } from './queries.js';
 import { orderByIds } from './relations.js';
 import { assertPublicallyReadable, PUBLIC_READ_SCOPE } from './read-scope.js';
@@ -166,16 +167,26 @@ export async function listCatalogCards(input: {
 /**
  * Узлы верхнего уровня таксономии — содержание каталога `/podborki` (Э3-08).
  *
- * Неопубликованные не приходят, поэтому каталог не выводит ссылку на страницу без
- * 200. Пустой результат означает, что каталогу нечего показывать, и маршрут
- * отвечает 404: пустая страница не отдаёт 200 как посадочная (ТЗ §5.3).
+ * Неопубликованные не приходят, поэтому ссылки на черновик каталог не выводит.
+ * Ссылки на 200 это само по себе не гарантирует: опубликованный узел без открыток
+ * и без детей отдаёт 404, и закрыто это отказом CMS в публикации пустого узла
+ * (`assertNotEmptyForPublish`), а не выборкой.
+ *
+ * Пустой результат означает, что каталогу нечего показывать, и маршрут отвечает
+ * 404: пустая страница не отдаёт 200 как посадочная (ТЗ §5.3).
  */
 export async function listRootCollections(): Promise<readonly Collection[]> {
   const { docs } = await findMany(rootCollectionsQuery());
   return (docs as Collection[]).map((node) => assertPublicallyReadable(node, 'узел каталога'));
 }
 
-/** Дочерние узлы подборки. Неопубликованные не приходят — ссылок на них не будет. */
+/**
+ * Дочерние узлы подборки. Неопубликованные не приходят — ссылок на них не будет.
+ *
+ * Оговорка та же, что у {@link listRootCollections}: опубликованность не равна
+ * ответу 200, и «опубликованный пустой узел» закрыт отказом CMS на публикации, а
+ * не этой выборкой.
+ */
 export async function listChildCollections(
   parentId: RecordId | null,
 ): Promise<readonly Collection[]> {
@@ -212,9 +223,9 @@ export async function listRelatedCollections(
  * Подборки карточки в порядке, заданном редактором (первая — основная).
  *
  * Из них шаблон карточки делает видимые атрибуты-ссылки (повод, адресат —
- * ТЗ §5.4). Неопубликованные узлы не приходят, поэтому ссылки на страницу без
- * 200 не появляется; порядок восстанавливает `orderByIds` — обоснование в
- * `./relations.ts`.
+ * ТЗ §5.4). Неопубликованные узлы не приходят, поэтому ссылки на черновик не
+ * появляется (про «опубликовано ≠ 200» — оговорка у {@link listRootCollections});
+ * порядок восстанавливает `orderByIds` — обоснование в `./relations.ts`.
  */
 export async function listCollectionsByIds(
   ids: readonly RecordId[],
@@ -229,14 +240,27 @@ export async function listCollectionsByIds(
 /**
  * Похожие открытки для блока на карточке (ТЗ §5.4, решение Ч-04-8).
  *
- * Пустой набор подборок даёт пустой список, а не выборку каталога: правило
- * живёт в `similarCardsQuery`.
+ * ДВА запроса, а не один: блок — окно соседей карточки в общем порядке, и его
+ * половины читаются с разных сторон. Обоснование окна и распределения предела
+ * между половинами — в шапках `similarCardsQueries` и `similarCardsWindow`;
+ * здесь только выполнение и склейка.
+ *
+ * Пустой набор подборок даёт пустой список, а не выборку каталога: правило живёт
+ * в `similarCardsQueries`.
  */
 export async function listSimilarCards(
   input: SimilarCardsQueryInput,
 ): Promise<readonly Card[]> {
-  const { docs } = await findMany(similarCardsQuery(input));
-  return (docs as Card[]).map((card) => assertPublicallyReadable(card, 'похожую карточку'));
+  const queries = similarCardsQueries(input);
+  const [newer, older] = await Promise.all([findMany(queries.newer), findMany(queries.older)]);
+  const readable = (docs: readonly unknown[]): readonly Card[] =>
+    (docs as Card[]).map((card) => assertPublicallyReadable(card, 'похожую карточку'));
+
+  return similarCardsWindow({
+    newer: readable(newer.docs),
+    older: readable(older.docs),
+    ...(input.limit === undefined ? {} : { limit: input.limit }),
+  });
 }
 
 /** Свежие опубликованные карточки. */

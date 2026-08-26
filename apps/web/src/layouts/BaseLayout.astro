@@ -31,6 +31,7 @@
  * «Производительность»). Комментарий живёт здесь, а не рядом с тегом: HTML-
  * комментарий уехал бы в каждый ответ сервера.
  */
+import SiteFooter from '../components/SiteFooter.astro';
 import SiteNav from '../components/SiteNav.astro';
 import { canonicalUrlFor } from '../routing/canonical';
 import { serverEnv } from '../server-env';
@@ -53,8 +54,22 @@ interface Props {
    * текста страницы — это шаблонный SEO-текст, прямой запрет п. 23.4.
    */
   description?: string | null;
-  /** Путь страницы от корня — основа абсолютного self-canonical. */
-  canonicalPath: string;
+  /**
+   * Путь страницы от корня — основа абсолютного self-canonical.
+   *
+   * `null` — тега `<link rel="canonical">` НЕ БУДЕТ ВОВСЕ, и это допустимо ровно
+   * для страниц, у которых канонического адреса не существует: страница 404
+   * (задача Э3-11) отвечает по любому несуществующему адресу и своего не имеет.
+   * Self-canonical на ней указывал бы на адрес, которого нет, а canonical на
+   * главную заявлял бы, что содержимое главной живёт по этому адресу. Обычная
+   * страница обязана передавать строку — забывчивость остаётся ошибкой типов.
+   *
+   * Побочное следствие, ради которого это сделано именно так: `404.astro`
+   * пререндерена, и вычисление абсолютного canonical потребовало бы `SITE_URL` на
+   * СБОРКЕ, то есть запекло бы хост в артефакт — прямой запрет раздела «Правила
+   * URL».
+   */
+  canonicalPath: string | null;
   /**
    * Директива для поисковых роботов. `index,follow` допустим только по решению
    * человека и только при выполнении условий п. 5.1 ТЗ.
@@ -64,7 +79,9 @@ interface Props {
 
 const { canonicalPath, description, robots, title } = Astro.props;
 
-const canonicalUrl = canonicalUrlFor(canonicalPath, serverEnv());
+// `serverEnv()` зовётся ТОЛЬКО когда canonical нужен: страница 404 пререндерена,
+// и чтение SITE_URL на сборке запекло бы хост в артефакт.
+const canonicalUrl = canonicalPath === null ? null : canonicalUrlFor(canonicalPath, serverEnv());
 
 // Пустая строка и пробелы — это ПУСТО: поле, в которое редактор случайно поставил
 // пробел, не должно давать тег с невидимым содержимым. Та же трактовка, что у
@@ -80,7 +97,7 @@ const descriptionText = description?.trim() ?? '';
     <title>{title}</title>
     {descriptionText === '' ? null : <meta name="description" content={descriptionText} />}
     <meta name="robots" content={robots} />
-    <link rel="canonical" href={canonicalUrl} />
+    {canonicalUrl === null ? null : <link rel="canonical" href={canonicalUrl} />}
     <style is:inline>
       :root {
         color-scheme: light dark;
@@ -135,6 +152,16 @@ const descriptionText = description?.trim() ?? '';
         max-width: var(--content-max);
         margin-inline: auto;
         padding: 1rem;
+      }
+      /* Подвал — в критическом CSS по той же причине, что меню: он есть на
+         каждой странице, и внешний запрос за его стилями двигал бы макет. */
+      .site-footer {
+        width: 100%;
+        max-width: var(--content-max);
+        margin-inline: auto;
+        padding: 1rem;
+        font-size: 0.875rem;
+        opacity: 0.85;
       }
       h1 {
         font-size: 1.75rem;
@@ -206,5 +233,9 @@ const descriptionText = description?.trim() ?? '';
     <main class="layout__main">
       <slot />
     </main>
+    <!-- Подвал со ссылками на служебные страницы — тоже на каждой странице, по
+         той же причине, что и меню: условие «входит в навигацию» из п. 5.1.
+         Состав — src/seo/info-pages.ts. -->
+    <SiteFooter currentPath={canonicalPath} />
   </body>
 </html>

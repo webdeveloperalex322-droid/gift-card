@@ -42,9 +42,21 @@
  *     атрибуте;
  *   - **переносит строку пробелом.** Отдельного `<br>` нет: внутри вводного
  *     текста посадочной перенос — оформление, а склейка слов без пробела была бы
- *     потерей содержания;
- *   - **не выводит горизонтальную линию и вложения.** Первое — оформление,
- *     второе (`upload`) требует чтения связанной записи, то есть слоя данных.
+ *     потерей содержания. Тем же пробелом разделяются вложенные блоки внутри
+ *     элемента списка (второй абзац, вложенный список): форма результата плоская,
+ *     но слова через границу блока склеиваться не должны;
+ *   - **не выводит горизонтальную линию.** Это оформление без содержания.
+ *
+ * ## Чего разбор НЕ делает молча — отказывает
+ *
+ * Узел, у которого нет ни текста, ни детей, а содержимое лежит в `fields`,
+ * `value` или `relationTo` (`upload`, `relationship`, `block`, `inlineBlock`),
+ * даёт ОТКАЗ с указанием типа узла — см. {@link PRINTABLE_NODE_TYPES} и
+ * `assertPrintable`. Прежде такой узел давал ноль фрагментов и отбрасывался без
+ * следа: текст исчезал с опубликованной страницы, и узнать об этом было
+ * неоткуда. Со стороны CMS набор возможностей редактора сужен так, что эти узлы
+ * в поле не сохранить; проверка здесь — вторая половина той же защиты, потому что
+ * у поля есть история и документы, сохранённые прежним редактором.
  *
  * Модуль ЧИСТЫЙ: входит в composite-проект `../../tsconfig.node.json` и
  * проверяется юнит-тестом `tests/unit/web-rich-text.test.ts`.
@@ -53,21 +65,42 @@
 import { looksLikeAbsoluteUrl } from '@otkritka/shared';
 
 /**
- * Битовая маска форматирования текстового узла lexical.
+ * Битовые маски форматирования текстового узла lexical — те, что разбор ПЕЧАТАЕТ.
  *
  * Значения скопированы из `NodeFormat` пакета `@payloadcms/richtext-lexical`
  * (`dist/lexical/utils/nodeFormat.js`), который сам копирует их из lexical.
  * Импортировать оттуда нельзя — см. шапку модуля; поэтому здесь ровно те же
- * числа с указанием источника. Расхождение возможно только при смене формата
- * самого lexical, и тогда оно проявится потерей выделения, а не потерей текста.
+ * числа с указанием источника.
+ *
+ * Копия числами держится не комментарием, а ТЕСТОМ: `tests/unit/web-rich-text.test.ts`
+ * импортирует `NodeFormat` из самого пакета (в тесте это законно — пакет уже
+ * зависимость `apps/cms`) и сверяет каждое значение. Без этой сверки расхождение
+ * с апстримом проявилось бы потерей выделения без единого падения — находка
+ * ревизии Э3-05/Э3-06. Имена ключей поэтому совпадают с именами `NodeFormat`
+ * посимвольно: сверка идёт по ключу.
  */
-const FORMAT_BOLD = 1;
-const FORMAT_ITALIC = 1 << 1;
-const FORMAT_STRIKETHROUGH = 1 << 2;
-const FORMAT_UNDERLINE = 1 << 3;
-const FORMAT_CODE = 1 << 4;
-const FORMAT_SUBSCRIPT = 1 << 5;
-const FORMAT_SUPERSCRIPT = 1 << 6;
+export const TEXT_FORMAT_BITS = Object.freeze({
+  IS_BOLD: 1,
+  IS_CODE: 1 << 4,
+  IS_ITALIC: 1 << 1,
+  IS_STRIKETHROUGH: 1 << 2,
+  IS_SUBSCRIPT: 1 << 5,
+  IS_SUPERSCRIPT: 1 << 6,
+  IS_UNDERLINE: 1 << 3,
+});
+
+/**
+ * Форматы текста, которые разбор НЕ печатает — сознательно, а не по забывчивости.
+ *
+ * `IS_HIGHLIGHT` (подсветка маркером) — оформление без смысловой нагрузки: у него
+ * нет естественного элемента в разметке страницы (`<mark>` означает «выделено
+ * для читателя в связи с его запросом», а не «редактор покрасил»), и вводный
+ * текст посадочной от его потери не меняется. Список существует, чтобы тест мог
+ * отличить «решили не печатать» от «нового бита в апстриме никто не заметил».
+ */
+export const DECLINED_TEXT_FORMAT_BITS = Object.freeze({
+  IS_HIGHLIGHT: 1 << 7,
+});
 
 /**
  * Теги выделения в ПОРЯДКЕ ВЛОЖЕНИЯ — снаружи внутрь.
@@ -76,13 +109,13 @@ const FORMAT_SUPERSCRIPT = 1 << 6;
  * разметка: `<strong><em>слово</em></strong>`, а не то одно, то другое.
  */
 const MARK_TAGS: readonly { readonly bit: number; readonly tag: string }[] = Object.freeze([
-  { bit: FORMAT_BOLD, tag: 'strong' },
-  { bit: FORMAT_ITALIC, tag: 'em' },
-  { bit: FORMAT_UNDERLINE, tag: 'u' },
-  { bit: FORMAT_STRIKETHROUGH, tag: 's' },
-  { bit: FORMAT_SUBSCRIPT, tag: 'sub' },
-  { bit: FORMAT_SUPERSCRIPT, tag: 'sup' },
-  { bit: FORMAT_CODE, tag: 'code' },
+  { bit: TEXT_FORMAT_BITS.IS_BOLD, tag: 'strong' },
+  { bit: TEXT_FORMAT_BITS.IS_ITALIC, tag: 'em' },
+  { bit: TEXT_FORMAT_BITS.IS_UNDERLINE, tag: 'u' },
+  { bit: TEXT_FORMAT_BITS.IS_STRIKETHROUGH, tag: 's' },
+  { bit: TEXT_FORMAT_BITS.IS_SUBSCRIPT, tag: 'sub' },
+  { bit: TEXT_FORMAT_BITS.IS_SUPERSCRIPT, tag: 'sup' },
+  { bit: TEXT_FORMAT_BITS.IS_CODE, tag: 'code' },
 ]);
 
 /** Фрагмент текста с выделением и, возможно, ссылкой. */
@@ -116,6 +149,51 @@ interface LexicalNode {
   readonly fields?: unknown;
 }
 
+/**
+ * Типы узлов, которые разбор УМЕЕТ обработать: напечатать либо сознательно
+ * пропустить.
+ *
+ * Список нужен ради отказа, а не ради разбора: узел ВНЕ списка, у которого нет
+ * детей, — это узел, чьё содержимое лежит в других полях (`fields`, `value`,
+ * `relationTo`). Такому узлу разбор не может ни напечатать содержимое, ни
+ * раскрыть детей, и молчаливый пропуск означал бы исчезновение текста с
+ * опубликованной страницы (находка ревизии Э3-05/Э3-06, MAJOR). Проверка живёт в
+ * {@link assertPrintable}.
+ *
+ * `horizontalrule` в списке есть: его пропуск — решение задачи Э3-06 (оформление
+ * без содержания), а не потеря.
+ */
+const PRINTABLE_NODE_TYPES: ReadonlySet<string> = new Set([
+  'autolink',
+  'heading',
+  'horizontalrule',
+  'linebreak',
+  'link',
+  'list',
+  'listitem',
+  'paragraph',
+  'quote',
+  'root',
+  'tab',
+  'text',
+]);
+
+/**
+ * Типы узлов, которые внутри потока текста начинают НОВЫЙ блок.
+ *
+ * Внутри элемента списка такой узел (вложенный список, второй абзац) даёт
+ * границу, на которой фрагменты нельзя печатать вплотную: «Раз» и «Вложенный»
+ * склеивались в «РазВложенный» (находка ревизии Э3-05/Э3-06, MINOR 1) — при том,
+ * что для переноса строки склейка специально исключена пробелом.
+ */
+const BLOCK_LEVEL_NODE_TYPES: ReadonlySet<string> = new Set([
+  'heading',
+  'list',
+  'listitem',
+  'paragraph',
+  'quote',
+]);
+
 function asNode(value: unknown): LexicalNode | null {
   // Приведения здесь нет и не нужно: у `LexicalNode` все поля необязательны и
   // имеют тип `unknown`, поэтому любой объект ему соответствует. Читать поля всё
@@ -129,6 +207,43 @@ function childrenOf(node: LexicalNode): readonly unknown[] {
 
 function nodeType(node: LexicalNode): string {
   return typeof node.type === 'string' ? node.type : '';
+}
+
+/**
+ * Отказ на узле, содержимое которого разбор не увидит.
+ *
+ * ПОЧЕМУ ОТКАЗ, А НЕ ПРОПУСК. Узел неизвестного типа С ДЕТЬМИ раскрывается — его
+ * текст попадает в поток, и терять нечего (так и было задумано). Узел
+ * неизвестного типа БЕЗ детей хранит содержимое в `fields`/`value`: `upload`,
+ * `relationship`, `block`, `inlineBlock`. Для него у разбора нет ни печати, ни
+ * раскрытия, поэтому исход только один из двух — либо текст исчезает со страницы
+ * молча, либо страница честно падает. Молчаливая потеря дороже: она обнаружится
+ * не падением, а вопросом «куда пропал абзац» через неделю после публикации.
+ *
+ * Со стороны CMS набор фич редактора сужен так, что такие узлы в поле не
+ * сохранить (`apps/cms`, `publicRichTextEditor`). Проверка здесь — вторая
+ * половина той же защиты: у поля есть история, а значит и документы, сохранённые
+ * прежним, более широким редактором.
+ *
+ * @throws Error с указанием типа узла.
+ */
+function assertPrintable(node: LexicalNode): void {
+  const type = nodeType(node);
+  if (PRINTABLE_NODE_TYPES.has(type)) {
+    return;
+  }
+  if (childrenOf(node).length > 0) {
+    // Дети есть — текст не потеряется, узел раскроется. Ровно это проверяет тест
+    // «неизвестный тип узла не теряет текста».
+    return;
+  }
+  throw new Error(
+    `Вводный текст содержит узел ${type === '' ? 'без поля type' : `типа «${type}»`}, у которого ` +
+      'нет ни текста, ни детей: его содержимое лежит в других полях (fields, value, ' +
+      'relationTo), и разбор его не напечатает. Пропустить такой узел молча нельзя — текст ' +
+      'исчез бы с опубликованной страницы без следа. Либо уберите узел из поля, либо научите ' +
+      'разбор его печатать (apps/web/src/seo/rich-text.ts).',
+  );
 }
 
 function tagsFor(format: unknown): readonly string[] {
@@ -180,11 +295,27 @@ interface RunContext {
 const PLAIN: RunContext = { external: false, href: null };
 
 /**
+ * Разделитель на границе: пробел, и только если его там ещё нет.
+ *
+ * Ведущего пробела не появляется (пустой поток — выход), двойного тоже: у
+ * вложенного списка граница возникает дважды — на самом списке и на его первом
+ * элементе, — и без этой проверки между словами оказалось бы два пробела.
+ */
+function separate(context: RunContext, out: TextRun[]): void {
+  const last = out.at(-1);
+  if (last === undefined || last.text.endsWith(' ')) {
+    return;
+  }
+  out.push({ ...context, tags: [], text: ' ' });
+}
+
+/**
  * Собирает фрагменты текста из поддерева, наследуя выделение и ссылку.
  *
  * Узел неизвестного типа не пропускается, а раскрывается: его дети попадают в
  * тот же поток. Молча выбросить содержимое нельзя — потерянный абзац виден не
- * ошибкой, а отсутствием текста на странице.
+ * ошибкой, а отсутствием текста на странице; узел, у которого и раскрывать
+ * нечего, даёт отказ ({@link assertPrintable}).
  */
 function collectRuns(nodes: readonly unknown[], context: RunContext, out: TextRun[]): void {
   for (const raw of nodes) {
@@ -192,6 +323,7 @@ function collectRuns(nodes: readonly unknown[], context: RunContext, out: TextRu
     if (node === null) {
       continue;
     }
+    assertPrintable(node);
     const type = nodeType(node);
 
     if (type === 'text') {
@@ -229,6 +361,15 @@ function collectRuns(nodes: readonly unknown[], context: RunContext, out: TextRu
       continue;
     }
 
+    if (BLOCK_LEVEL_NODE_TYPES.has(type)) {
+      // Вложенный блок внутри потока текста (второй абзац или вложенный список
+      // в элементе списка). Отдельным блоком его здесь не сделать — форма
+      // результата плоская, — но и склеивать слова через границу нельзя.
+      separate(context, out);
+      collectRuns(childrenOf(node), context, out);
+      continue;
+    }
+
     collectRuns(childrenOf(node), context, out);
   }
 }
@@ -258,6 +399,9 @@ function listItems(node: LexicalNode): readonly (readonly TextRun[])[] {
     if (item === null) {
       continue;
     }
+    // По той же причине, что и на верхнем уровне: `runsOf` смотрит на ДЕТЕЙ, а
+    // сам элемент списка через проверку не проходит.
+    assertPrintable(item);
     const runs = runsOf(item);
     if (hasContent(runs)) {
       items.push(runs);
@@ -291,6 +435,11 @@ export function richTextBlocks(document: unknown): readonly RichTextBlock[] {
     if (node === null) {
       continue;
     }
+    // Проверка нужна ЗДЕСЬ отдельно от `collectRuns`: тот получает уже ДЕТЕЙ
+    // узла, поэтому сам корневой узел через его проверку не проходит. Именно на
+    // верхнем уровне и живут `upload`, `relationship`, `block` — узлы, чьё
+    // содержимое лежит вне `children`.
+    assertPrintable(node);
     const type = nodeType(node);
 
     if (type === 'list') {

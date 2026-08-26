@@ -87,6 +87,34 @@ const ORIGIN = `http://${HOST}:${String(PORT)}`;
 
 const PREFIX = 'smoke-e3-05';
 
+/**
+ * Основа имени файла у временных изображений смоука.
+ *
+ * Отличается от {@link PREFIX} не случайно: имя файла собирает пайплайн из
+ * ЗАГОЛОВКА изображения («Смоук Э3-05: …») транслитерацией, поэтому «смоук»
+ * становится `smouk`. Значение записано строкой, а не вычислено, ровно потому,
+ * что вычислять его пришлось бы той же транслитерацией, которую смоук и
+ * проверяет.
+ */
+const IMAGE_STEM_PREFIX = 'smouk-e3-05';
+
+/**
+ * Фильтры ВРЕМЕННЫХ записей смоука — единственный источник ответа на вопрос
+ * «что здесь наше».
+ *
+ * Раньше уборка отбирала записи по префиксу, а итоговый счётчик считал ВСЮ
+ * коллекцию (находка ревизии Э3-05/Э3-06, MINOR 3). Из-за этого на локальной
+ * базе с любым содержимым смоук всегда выходил с кодом 1 и подталкивал вычистить
+ * настоящие записи — то есть проверка требовала уничтожить данные, чтобы стать
+ * зелёной. Теперь и уборка, и счётчик берут фильтр отсюда: разойтись им негде.
+ */
+const LEFTOVER_FILTERS = {
+  cards: { slug: { like: PREFIX } },
+  claims: { stem: { like: IMAGE_STEM_PREFIX } },
+  collections: { slug: { like: PREFIX } },
+  images: { nameStem: { like: IMAGE_STEM_PREFIX } },
+} as const;
+
 interface Check {
   readonly detail: string;
   readonly name: string;
@@ -386,7 +414,7 @@ async function sweepLeftovers(payload: Payload): Promise<void> {
     collection: 'cards',
     depth: 0,
     limit: 100,
-    where: { slug: { like: PREFIX } },
+    where: LEFTOVER_FILTERS.cards,
   });
   for (const card of cards.docs) {
     await payload.delete({ collection: 'cards', id: card.id }).catch(() => undefined);
@@ -398,7 +426,7 @@ async function sweepLeftovers(payload: Payload): Promise<void> {
     depth: 0,
     limit: 100,
     sort: ['-path'],
-    where: { slug: { like: PREFIX } },
+    where: LEFTOVER_FILTERS.collections,
   });
   for (const node of collections.docs) {
     await payload.delete({ collection: 'collections', id: node.id }).catch(() => undefined);
@@ -409,7 +437,7 @@ async function sweepLeftovers(payload: Payload): Promise<void> {
     collection: 'card-images',
     depth: 0,
     limit: 100,
-    where: { nameStem: { like: 'smouk-e3-05' } },
+    where: LEFTOVER_FILTERS.images,
   });
   for (const image of images.docs) {
     await payload.delete({ collection: 'card-images', id: image.id }).catch(() => undefined);
@@ -420,7 +448,7 @@ async function sweepLeftovers(payload: Payload): Promise<void> {
     collection: 'image-name-claims',
     depth: 0,
     limit: 100,
-    where: { stem: { like: 'smouk-e3-05' } },
+    where: LEFTOVER_FILTERS.claims,
   });
   for (const claim of claims.docs) {
     await payload.delete({ collection: 'image-name-claims', id: claim.id }).catch(() => undefined);
@@ -788,6 +816,48 @@ async function main(): Promise<void> {
       'карточка: блок «Похожие» ссылается на соседние карточки (Ч-04-8)',
       similarLinks.length > 0 && similarLinks.length <= 12,
       `${String(similarLinks.length)} ссылок`,
+    );
+
+    /* ------------------------------------------------------------ */
+    /* Блок «Похожие» — ОКНО СОСЕДЕЙ, а не одна выборка на тему     */
+    /* ------------------------------------------------------------ */
+
+    // На живой базе проверяется то, чего не показывает юнит-тест: что запрос
+    // окна действительно исполняется PostgreSQL так, как задумано (составное
+    // сравнение по `(publishedAt, id)`, разный порядок у половин). Свойство
+    // «любая карточка темы попадает хотя бы в один блок» доказано юнитом на 37
+    // карточках (`../src/data/data-access.test.ts`); здесь достаточно показать,
+    // что блок ЗАВИСИТ от карточки — до правки он был одинаков у всей темы, и
+    // карточки за первой страницей списка не входили ни в один блок.
+    const similarOf = async (slug: string): Promise<string[]> => {
+      const response = await request(`/otkrytki/${slug}`);
+      return anchors(response.body)
+        .map((anchor) => anchor.href ?? '')
+        .filter((href) => href.startsWith('/otkrytki/') && href !== `/otkrytki/${slug}`)
+        .sort();
+    };
+
+    // Самая старая карточка корпуса и одна из самых свежих: у них не должно быть
+    // одинаковых блоков, и старая обязана видеть соседей, а не «свежие 12».
+    const oldest = `${PREFIX}-otkrytka-odna`;
+    const newest = `${PREFIX}-otkrytka-${String(DEFAULT_CARDS_PER_PAGE + 1)}`;
+    const oldestSimilar = await similarOf(oldest);
+    const newestSimilar = await similarOf(newest);
+
+    record(
+      'блок «Похожие» зависит от карточки, а не одинаков у всей темы (Ч-04-8)',
+      oldestSimilar.join(',') !== newestSimilar.join(','),
+      `у «${oldest}» ${String(oldestSimilar.length)} ссылок, у «${newest}» ` +
+        `${String(newestSimilar.length)}`,
+    );
+    record(
+      'самая старая карточка темы видит своих соседей, а не только свежие',
+      oldestSimilar.some((href) => !newestSimilar.includes(href)),
+    );
+    record(
+      'самая свежая карточка темы получает полный блок',
+      newestSimilar.length === 12,
+      `${String(newestSimilar.length)} ссылок`,
     );
     record(
       'карточка: атрибуты-ссылки ведут на подборки',
@@ -1174,27 +1244,45 @@ async function main(): Promise<void> {
         .catch(() => undefined);
     }
 
+    // Считаются ОСТАТКИ СМОУКА — тем же фильтром, которым их убирает
+    // `sweepLeftovers` (`LEFTOVER_FILTERS`). Счётчик по всей коллекции делал бы
+    // смоук красным на любой непустой базе и требовал бы удалить настоящие
+    // записи, чтобы стать зелёным.
     const counts = {
-      cards: (await cleanup.count({ collection: 'cards' })).totalDocs,
-      claims: (await cleanup.count({ collection: 'image-name-claims' })).totalDocs,
-      collections: (await cleanup.count({ collection: 'collections' })).totalDocs,
-      history: (await cleanup.count({ collection: 'seo-history' })).totalDocs,
-      images: (await cleanup.count({ collection: 'card-images' })).totalDocs,
+      cards: (await cleanup.count({ collection: 'cards', where: LEFTOVER_FILTERS.cards })).totalDocs,
+      claims: (
+        await cleanup.count({ collection: 'image-name-claims', where: LEFTOVER_FILTERS.claims })
+      ).totalDocs,
+      collections: (
+        await cleanup.count({ collection: 'collections', where: LEFTOVER_FILTERS.collections })
+      ).totalDocs,
+      images: (await cleanup.count({ collection: 'card-images', where: LEFTOVER_FILTERS.images }))
+        .totalDocs,
       publishedCards: (
-        await cleanup.count({ collection: 'cards', where: { status: { equals: 'published' } } })
+        await cleanup.count({
+          collection: 'cards',
+          where: { and: [LEFTOVER_FILTERS.cards, { status: { equals: 'published' } }] },
+        })
       ).totalDocs,
       publishedNodes: (
         await cleanup.count({
           collection: 'collections',
-          where: { status: { equals: 'published' } },
+          where: { and: [LEFTOVER_FILTERS.collections, { status: { equals: 'published' } }] },
         })
       ).totalDocs,
     };
+    // Записи истории смоука отбираются не префиксом, а идентификаторами удалённых
+    // документов, поэтому здесь их не пересчитать: удаление идёт выше и по тем же
+    // идентификаторам. Общее число `seo-history` печатается для сведения и в код
+    // выхода не входит — оно относится и к настоящим записям.
+    const historyTotal = (await cleanup.count({ collection: 'seo-history' })).totalDocs;
     console.log(
-      `\nПосле уборки: cards=${String(counts.cards)} collections=${String(counts.collections)} ` +
-        `card-images=${String(counts.images)} image-name-claims=${String(counts.claims)} ` +
-        `seo-history=${String(counts.history)} ` +
-        `published=${String(counts.publishedCards)}/${String(counts.publishedNodes)}`,
+      `\nОстатки смоука после уборки: cards=${String(counts.cards)} ` +
+        `collections=${String(counts.collections)} card-images=${String(counts.images)} ` +
+        `image-name-claims=${String(counts.claims)} ` +
+        `published=${String(counts.publishedCards)}/${String(counts.publishedNodes)}` +
+        `\nseo-history во всей коллекции (для сведения, на код выхода не влияет): ` +
+        String(historyTotal),
     );
 
     const failed = checks.filter((check) => !check.ok);
@@ -1208,9 +1296,15 @@ async function main(): Promise<void> {
       counts.publishedNodes > 0 ||
       counts.cards > 0 ||
       counts.collections > 0 ||
+      counts.claims > 0 ||
       counts.images > 0
     ) {
-      process.exitCode = 1;
+      // `process.exit`, а не `process.exitCode`: смоук запускается через
+      // `payload run`, а тот в конце делает `process.exit(0)` безусловно
+      // (`payload/dist/bin/index.js`) — выставленный `process.exitCode` он
+      // затирает, и красный смоук выходил бы нулём. Найдено на смоуке Э3-11.
+      // Весь вывод выше уже напечатан, поэтому терять нечего.
+      process.exit(1);
     }
   }
 }

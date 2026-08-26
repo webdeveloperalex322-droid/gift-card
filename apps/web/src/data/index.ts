@@ -114,6 +114,13 @@ export {
   collectionCatalogPage,
 } from './catalog.js';
 
+/**
+ * Служебные информационные страницы (Э3-11). Маршрут зовёт одну функцию: исхода
+ * «страницы нет» у неё нет — незаполненная страница отвечает 200 с заглушкой и
+ * `noindex` (обоснование в шапке `../seo/info-pages.ts`).
+ */
+export { infoPage, infoPageFacts } from './info-pages.js';
+
 export {
   type CardAttributeLink,
   cardAttributeLinks,
