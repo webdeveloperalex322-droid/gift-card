@@ -207,6 +207,15 @@ async function main(): Promise<void> {
       }),
     );
 
+    await expectRejected('имя правообладателя без выбранного вида отклонено', () =>
+      payload.updateGlobal({
+        slug: 'site-settings',
+        data: { imageLicense: { creator: 'Смоук без вида', creatorKind: null } },
+        overrideAccess: false,
+        user: admin as UserArg,
+      }),
+    );
+
     await expectRejected('четвёртый блок в ряду рекламы отклонён (Ч-11)', () =>
       payload.updateGlobal({
         slug: 'site-settings',
@@ -235,6 +244,10 @@ async function main(): Promise<void> {
         organization: { name: 'Смоук', logo: '/media/site/logo.svg' },
         imageLicense: {
           creator: 'Смоук',
+          // Вид правообладателя обязателен: без него `creator` не выводится, а
+          // значит не выводится и весь лицензионный набор (Ч-10 проверяется
+          // целиком). Правка по вердикту ревизии Э3-05/Э3-06.
+          creatorKind: 'Organization',
           creditText: 'смоук',
           copyrightNotice: '© смоук',
           license: '/usloviya',
@@ -355,6 +368,7 @@ async function main(): Promise<void> {
           aiDisclosure: null,
           copyrightNotice: null,
           creator: null,
+          creatorKind: null,
           creditText: null,
           license: null,
         },

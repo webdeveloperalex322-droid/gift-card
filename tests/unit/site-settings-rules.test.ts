@@ -26,7 +26,9 @@ import {
   MAX_AD_SLOTS_PER_POSITION,
   SITE_SETTINGS_SLUG,
   aiDisclosureText,
+  imageCreatorJsonLd,
   imageLicenseGaps,
+  validateImageCreatorKind,
   imageLicenseJsonLd,
   infoPageIndexation,
   isAdSlotRenderable,
@@ -116,6 +118,7 @@ describe('Ч-17: JSON-LD Organization выводится только по за�
 describe('Ч-10: лицензионные поля карточки', () => {
   const complete = {
     creator: 'Проект «Открытки»',
+    creatorKind: 'Organization',
     creditText: 'otkritka',
     copyrightNotice: '© Проект «Открытки»',
     license: '/usloviya',
@@ -132,6 +135,34 @@ describe('Ч-10: лицензионные поля карточки', () => {
       'license',
       'acquireLicensePage',
     ]);
+  });
+
+  it('без ВИДА правообладателя creator не выводится, а с ним — узел с типом', () => {
+    // Диапазон свойства creator в schema.org — Person|Organization. Строку без
+    // типа потребитель разметки игнорирует: свойство считалось бы выведенным,
+    // не будучи им (находка ревизии Э3-05/Э3-06).
+    expect(imageCreatorJsonLd({ creator: 'Проект «Открытки»' })).toBeNull();
+    expect(imageCreatorJsonLd({ creator: 'Проект «Открытки»', creatorKind: 'Company' })).toBeNull();
+    expect(imageCreatorJsonLd({ creatorKind: 'Organization' })).toBeNull();
+    expect(imageCreatorJsonLd({ creator: '  Иван Петров  ', creatorKind: 'Person' })).toEqual({
+      kind: 'Person',
+      name: 'Иван Петров',
+    });
+  });
+
+  it('имя без вида правообладателя не сохраняется: запрет стоит на вводе', () => {
+    // Условие проверяется валидацией поля, а не сборкой разметки: если такую
+    // пару невозможно сохранить, шаблону не приходится решать, что делать с
+    // половиной данных.
+    expect(validateImageCreatorKind('Organization', { creator: 'Проект «Открытки»' })).toBe(true);
+    expect(validateImageCreatorKind(null, {})).toBe(true);
+    expect(validateImageCreatorKind('', { creator: '   ' })).toBe(true);
+
+    const refusal = validateImageCreatorKind(null, { creator: 'Проект «Открытки»' });
+    expect(typeof refusal).toBe('string');
+    expect(String(refusal)).toContain('вид не выбран');
+
+    expect(typeof validateImageCreatorKind('Company', { creator: 'Проект' })).toBe('string');
   });
 
   it('одного незаполненного поля достаточно, чтобы блок промолчал', () => {

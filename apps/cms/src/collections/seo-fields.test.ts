@@ -96,4 +96,28 @@ describe('validateCanonicalOverride', () => {
     expect(validateCanonicalOverride('/otkrytki/x?utm_source=vk')).toEqual(expect.any(String));
     expect(validateCanonicalOverride('/otkrytki/x#top')).toEqual(expect.any(String));
   });
+
+  it('верхний регистр отклоняется: такой адрес отдаёт 404', () => {
+    // Находка ревизии url-guard: значение проходило проверку и canonical
+    // указывал на несуществующую страницу.
+    expect(validateCanonicalOverride('/otkrytki/Drugaya-STRANICA/')).toEqual(expect.any(String));
+    expect(validateCanonicalOverride('/Podborki/prazdniki')).toEqual(expect.any(String));
+  });
+
+  it('путь без ведущего слеша отклоняется: canonical задаётся от корня', () => {
+    expect(validateCanonicalOverride('otkrytki/otkrytka-mame')).toEqual(expect.any(String));
+  });
+
+  it('сегменты вне правил URL отклоняются: пробел, подчёркивание, кириллица', () => {
+    expect(validateCanonicalOverride('/otkrytki/otkrytka mame')).toEqual(expect.any(String));
+    expect(validateCanonicalOverride('/otkrytki/otkrytka_mame')).toEqual(expect.any(String));
+    expect(validateCanonicalOverride('/otkrytki/открытка')).toEqual(expect.any(String));
+  });
+
+  it('завершающий слеш нормализуется, а не отклоняется (решение Ч-21)', () => {
+    // Единое правило слеша — обязанность хелпера пути, а не автора значения:
+    // отказ здесь заставлял бы редактора помнить про форму, которую код и так
+    // приводит к канонической.
+    expect(validateCanonicalOverride('/otkrytki/otkrytka-mame/')).toBe(true);
+  });
 });

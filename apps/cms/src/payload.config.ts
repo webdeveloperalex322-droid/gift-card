@@ -14,7 +14,7 @@ import { ImageNameClaims } from './collections/image-name-claims';
 import { Redirects } from './collections/redirects';
 import { SeoHistory } from './collections/seo-history';
 import { Users } from './collections/users';
-import { adminPath, loadEnvFiles, requireEnv } from './env.mjs';
+import { adminPath, databasePush, loadEnvFiles, requireEnv } from './env.mjs';
 import { SiteSettings } from './globals/site-settings';
 import { MAX_UPLOAD_BYTES } from './images/upload-validation';
 import { seedFirstAdmin } from './seed-first-admin';
@@ -80,6 +80,14 @@ export default buildConfig({
     pool: {
       connectionString: requireEnv('DATABASE_URL'),
     },
+    // Авто-накат схемы — ПАРАМЕТР, а не поведение по умолчанию адаптера. При
+    // незаданном `push` Payload в неproduction-окружении зовёт `pushDevSchema`, а
+    // тот подтягивает `drizzle-kit/api`; из собранного сервера `apps/web`, где
+    // этот же конфиг поднимается через Local API, модуль не разрешается, и первый
+    // запрос к базе падает с `Cannot find module 'drizzle-kit/api'`. Значение по
+    // умолчанию оставлено «накатывать» (миграций в проекте пока нет — этап 7),
+    // выключается `PAYLOAD_DB_PUSH=false`. Подробности — в src/env.mjs.
+    push: databasePush(),
   }),
 
   // Редактор объявлен явно: без него Payload не собирает текстовые поля, а

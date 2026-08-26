@@ -146,6 +146,58 @@ export function requireEnv(name, source) {
 }
 
 /**
+ * Название параметра, которым включается и выключается авто-накат схемы в БД.
+ *
+ * Это НЕ значение по умолчанию для пути или хоста — это выключатель поведения
+ * самого адаптера, и дефолт у него есть намеренно (см. {@link databasePush}).
+ */
+export const DB_PUSH_ENV_KEY = 'PAYLOAD_DB_PUSH';
+
+/**
+ * Накатывать ли схему в БД при подключении (`push` адаптера Postgres).
+ *
+ * ЗАЧЕМ ПАРАМЕТР. При `push` не равном `false` Payload в неproduction-окружении
+ * зовёт `pushDevSchema`, а тот подтягивает `drizzle-kit/api` (проверено по
+ * `@payloadcms/db-postgres/dist/connect.js`). Из процесса CMS модуль
+ * разрешается, из СОБРАННОГО сервера `apps/web` — нет: тот же конфиг Payload
+ * поднимается там через Local API, и первый запрос к базе падает с
+ * `Cannot find module 'drizzle-kit/api'`. Найдено `url-guard` на стенде,
+ * поднятом не через смоук.
+ *
+ * ПОЧЕМУ ДЕФОЛТ — «накатывать». Миграций в проекте пока нет, и авто-накат это
+ * единственный способ, которым база получает таблицы: выключить его по
+ * умолчанию значило бы сломать и `pnpm dev`, и все смоуки. Поэтому дефолт
+ * сохраняет текущее поведение, а стенд, поднимающий собранный `apps/web` без
+ * `NODE_ENV=production`, ставит `PAYLOAD_DB_PUSH=false` и получает внятную
+ * работу вместо падения на первом запросе.
+ *
+ * Переход на миграции (и вместе с ним смена дефолта на «не накатывать») — задача
+ * этапа 7, а не побочный эффект этой правки.
+ *
+ * @param {Record<string, string | undefined>} [source] срез окружения
+ * @returns {boolean}
+ */
+export function databasePush(source) {
+  const env = source ?? process.env;
+  const raw = env[DB_PUSH_ENV_KEY];
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return true;
+  }
+  const value = raw.trim().toLowerCase();
+  if (value === 'false' || value === '0' || value === 'off') {
+    return false;
+  }
+  if (value === 'true' || value === '1' || value === 'on') {
+    return true;
+  }
+  throw new Error(
+    `Переменная окружения ${DB_PUSH_ENV_KEY} принимает только true/false ` +
+      `(допустимы 1/0, on/off), получено: «${raw}». Непонятное значение не трактуется ` +
+      'как «накатывать»: тогда опечатка молча включала бы правку схемы БД.',
+  );
+}
+
+/**
  * Разбирает и нормализует путь админки.
  *
  * Тело функции — ОДИН вызов `parseAdminPath` из `@otkritka/shared`, и это

@@ -82,6 +82,10 @@ describe('полнота перед review', () => {
       'image',
       'alt',
       'title',
+      // Добавлен по вердикту ревизии Э3-05/Э3-06: без description страница
+      // законно доходила до published, а п. 5.1 требует уникальные
+      // title/H1/description и проверяет их приёмка п. 22.
+      'metaDescription',
       'collections',
       'caption',
     ]);

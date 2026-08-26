@@ -33,6 +33,7 @@ import {
   urlShapeFieldAccess,
 } from '../access/policies';
 import { ROLES } from '../access/roles';
+import { publicRichTextEditor } from '../editor/public-rich-text';
 import { DEFAULT_ROBOTS } from '../seo/robots';
 import { COLLECTION_NODE_KINDS } from './collection-path';
 import { Collections, pickDefaultResponsibleEditor } from './collections';
@@ -101,6 +102,24 @@ describe('collections: базовые свойства коллекции', () =
   it('вводный текст — rich text (ТЗ §8.1)', () => {
     expect(findField(Collections.fields, 'intro').type).toBe('richText');
   });
+
+  it('вводный текст редактируется СУЖЕННЫМ набором фич, а не корневым редактором', () => {
+    // Корневой редактор (`payload.config.ts`) поднят с дефолтами Payload, где
+    // есть Upload и Relationship. Их узлы публичный разбор `apps/web` не
+    // печатает вовсе, поэтому у этого поля обязан стоять свой редактор — набор
+    // фич проверяется в `../editor/public-rich-text.test.ts`. Сравнение по
+    // ссылке: подмена на `lexicalEditor()` с полным набором уронит этот тест.
+    const intro = findField(Collections.fields, 'intro');
+    expect('editor' in intro ? intro.editor : undefined).toBe(publicRichTextEditor);
+  });
+
+  it('у вводного текста стоит серверный хук отказа на неподдерживаемый узел', () => {
+    // Набора фич недостаточно: узел отсутствующей фичи не имеет валидаций и
+    // через REST/GraphQL сохранился бы молча (см. ../editor/public-rich-text).
+    const intro = findField(Collections.fields, 'intro');
+    const hooks = 'hooks' in intro ? intro.hooks : undefined;
+    expect(hooks?.beforeValidate).toHaveLength(1);
+  });
 });
 
 describe('collections: дефолты новой записи', () => {
@@ -163,7 +182,9 @@ describe('collections: уникальность итогового пути', ()
     // Правила индексации у подборок и карточек должны быть одними и теми же,
     // поэтому проверяется факт подключения ОБЩЕЙ фабрики, а не локальных копий.
     expect(Collections.hooks?.beforeOperation).toHaveLength(1);
-    expect(Collections.hooks?.beforeValidate).toHaveLength(1);
+    // Второй хук beforeValidate — проверка наполненности узла (Ч-06, п. 5.1):
+    // общая фабрика о базе не знает, а подсчёт открыток без базы невозможен.
+    expect(Collections.hooks?.beforeValidate).toHaveLength(2);
   });
 
   it('удаление узла с вложенными перехватывается хуком', () => {

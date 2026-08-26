@@ -2,10 +2,12 @@ import type {
   CollectionAfterChangeHook,
   CollectionBeforeChangeHook,
   CollectionBeforeDeleteHook,
+  CollectionBeforeValidateHook,
   CollectionConfig,
   Field,
   FieldHook,
   FilterOptionsProps,
+  PayloadRequest,
   TypeWithID,
   Where,
 } from 'payload';
@@ -20,7 +22,9 @@ import {
 } from '../access/policies';
 import { ROLES, type RoledUser } from '../access/roles';
 import type { Collection } from '../payload-types';
+import { publicRichTextEditor, publicRichTextHooks } from '../editor/public-rich-text';
 import { COLLECTION_PATH_PREFIX } from '../seo/paths';
+import { isIndexableRobots, isRobotsDirective } from '../seo/robots';
 import {
   ALLOWED_PARENT_KINDS,
   COLLECTION_NODE_KINDS,
@@ -31,7 +35,13 @@ import {
   isCollectionNodeKind,
   planCollectionNode,
 } from './collection-path';
-import { collectFieldNames, contentHooks } from './content-hooks';
+import {
+  VOLUME_SCOPE,
+  assertEnoughCardsForIndex,
+  assertNotEmptyForPublish,
+  resolveMinPublishedCards,
+} from './collection-volume';
+import { collectFieldNames, contentHooks, rethrow } from './content-hooks';
 import {
   canonicalField,
   headingField,
@@ -85,6 +95,12 @@ import { DEFAULT_READINESS_LEAD_DAYS, readinessDeadline } from './seasonal';
  * поддерева, поэтому 301 создаётся на КАЖДЫЙ переехавший путь: потомков
  * пересобирает `syncDescendantPaths` штатным обновлением, а значит у каждого
  * срабатывают те же хуки.
+ *
+ * Наполненность узла проверяется ЗДЕСЬ, а не в шаблоне
+ * (`assertPublishableVolume`): шаблон, отдающий 404 на странице, которую человек
+ * только что опубликовал, спорил бы с ним молча. Границ две — «совсем пусто» на
+ * переходе в `published` и порог п. 5.1 (Ч-06 → 20) на переходе в `index,follow`;
+ * сами правила и порог — в `./collection-volume.ts`.
  *
  * Чего здесь сознательно НЕТ: порог перекрытия выдачи 80 % (Ч-04-6, этап 5),
  * дашборд сезонных дедлайнов (Э5-07).
@@ -265,6 +281,160 @@ const rejectDeleteWithChildren: CollectionBeforeDeleteHook = async ({ id, req })
       true,
     );
   }
+};
+
+/**
+ * Идентификаторы узла и всего его поддерева.
+ *
+ * Обход по `parent`, а не по префиксу `path`: путь — вычисляемое значение, и
+ * запрос «по началу строки» дал бы верный результат только пока `path` в базе
+ * согласован с иерархией. Связь `parent` авторитетна всегда.
+ *
+ * Глубина ограничена матрицей `ALLOWED_PARENT_KINDS` (три уровня), но обход
+ * всё равно защищён от повтора идентификатора: цикл в данных не должен
+ * превращаться в бесконечный запрос к базе.
+ */
+async function collectSubtreeIds(
+  rootId: number | string,
+  req: PayloadRequest,
+): Promise<readonly (number | string)[]> {
+  const seen: (number | string)[] = [rootId];
+  let frontier: readonly (number | string)[] = [rootId];
+
+  while (frontier.length > 0) {
+    const children = await req.payload.find({
+      collection: 'collections',
+      depth: 0,
+      overrideAccess: true,
+      pagination: false,
+      req,
+      where: { parent: { in: [...frontier] } },
+    });
+    const next = children.docs
+      .map((child) => child.id)
+      .filter((id) => !seen.some((known) => String(known) === String(id)));
+    seen.push(...next);
+    frontier = next;
+  }
+
+  return seen;
+}
+
+/** Сколько ОПУБЛИКОВАННЫХ открыток привязано к этим узлам. */
+async function countPublishedCards(
+  ids: readonly (number | string)[],
+  req: PayloadRequest,
+): Promise<number> {
+  const result = await req.payload.count({
+    collection: 'cards',
+    overrideAccess: true,
+    req,
+    where: { and: [{ collections: { in: [...ids] } }, { status: { equals: 'published' } }] },
+  });
+  return result.totalDocs;
+}
+
+/** Сколько ОПУБЛИКОВАННЫХ дочерних узлов у подборки. */
+async function countPublishedChildren(
+  parentId: number | string,
+  req: PayloadRequest,
+): Promise<number> {
+  const result = await req.payload.count({
+    collection: 'collections',
+    overrideAccess: true,
+    req,
+    where: { and: [{ parent: { equals: parentId } }, { status: { equals: 'published' } }] },
+  });
+  return result.totalDocs;
+}
+
+/**
+ * Наполненность узла на двух границах: публикация и открытие в `index,follow`.
+ *
+ * Правила и порог — в `./collection-volume.ts`; здесь только подсчёт, для
+ * которого нужна база, и выбор границы:
+ *
+ *   - переход в `published` требует, чтобы у узла было хоть что-то
+ *     опубликованное — открытка или дочерний узел. Условие повторяет условие
+ *     публичного шаблона: без этого он отдаёт 404, и ссылка на узел из
+ *     родительской подборки оказывается битой (вето V5 `seo-auditor`);
+ *   - переход robots в индексируемое значение требует порога п. 5.1 (Ч-06 → 20).
+ *     Порог стоит ЗДЕСЬ, а не на публикации: опубликованная страница с пятью
+ *     открытками в `noindex,follow` законна, а 20–40 — условие открытия в
+ *     индекс.
+ *
+ * Считаются ОПУБЛИКОВАННЫЕ записи: публичная страница показывает только их.
+ * Отсюда порядок работы администратора: сначала публикуются открытки (можно
+ * пакетом, решение Ч-07), потом узел, и только потом — отдельным сохранением —
+ * индексация.
+ *
+ * Ни одного пути, которым код мог бы что-то опубликовать, снять с публикации или
+ * переключить `index/noindex`, хук не добавляет: его единственный исход — отказ
+ * на попытку человека. Сохранение уже опубликованной записи без смены статуса и
+ * robots хук не трогает вовсе — иначе снятие открыток с публикации задним числом
+ * заблокировало бы правку самой подборки, включая исправление опечатки.
+ */
+const assertPublishableVolume: CollectionBeforeValidateHook<Collection> = async ({
+  data,
+  operation,
+  originalDoc,
+  req,
+}) => {
+  if (operation !== 'update' || originalDoc === undefined || data === undefined) {
+    return data;
+  }
+
+  const nextStatus = data.status ?? originalDoc.status;
+  const nextRobots = data.robots ?? originalDoc.robots;
+
+  const publishing = nextStatus === 'published' && originalDoc.status !== 'published';
+  const opening =
+    nextStatus === 'published' &&
+    nextRobots !== originalDoc.robots &&
+    isRobotsDirective(nextRobots) &&
+    isIndexableRobots(nextRobots);
+
+  if (!publishing && !opening) {
+    return data;
+  }
+
+  const nodeKind = data.nodeKind ?? originalDoc.nodeKind;
+  if (!isCollectionNodeKind(nodeKind)) {
+    // Неизвестный вид узла разберёт сборка пути (`assignCollectionPath`) — свой
+    // отказ здесь назвал бы причиной наполненность, а причина в другом.
+    return data;
+  }
+
+  const path = typeof originalDoc.path === 'string' ? originalDoc.path : null;
+
+  try {
+    if (publishing) {
+      const publishedCards = await countPublishedCards([originalDoc.id], req);
+      // Дочерние узлы считаются только когда своих открыток нет: у наполненного
+      // узла результат от них не зависит, а лишний запрос к базе стоит времени
+      // на каждой публикации.
+      const publishedChildren =
+        publishedCards > 0 ? 0 : await countPublishedChildren(originalDoc.id, req);
+      assertNotEmptyForPublish({ path, publishedCards, publishedChildren });
+    }
+
+    if (opening) {
+      const ids =
+        VOLUME_SCOPE[nodeKind] === 'subtree'
+          ? await collectSubtreeIds(originalDoc.id, req)
+          : [originalDoc.id];
+      assertEnoughCardsForIndex({
+        nodeKind,
+        path,
+        publishedCards: await countPublishedCards(ids, req),
+        threshold: resolveMinPublishedCards(),
+      });
+    }
+  } catch (error) {
+    rethrow(error);
+  }
+
+  return data;
 };
 
 /**
@@ -499,12 +669,24 @@ const collectionFields: Field[] = [
   {
     name: 'intro',
     type: 'richText',
+    // Суженный набор фич, а не корневой редактор: см. `../editor/public-rich-text`.
+    // Корневой поднят с дефолтами Payload, где есть Upload и Relationship, а их
+    // узлы публичный разбор `apps/web` не печатает — редактор вставлял бы
+    // изображение, видел его в админке и не видел на опубликованной странице.
+    editor: publicRichTextEditor,
+    // Хук обязателен рядом с набором фич: узел отсутствующей фичи не имеет
+    // валидаций и через REST/GraphQL сохранился бы молча. Набор фич закрывает
+    // форму админки, хук — все остальные входы.
+    hooks: publicRichTextHooks(),
     admin: {
       description:
         'Вводный текст страницы (ТЗ §8.1). Должен быть уникальным и осмысленным: ' +
         'шаблонный текст с заменой пары слов — прямой запрет п. 23 SEO ТЗ, а ' +
         'уникальность вводного текста входит в условия открытия страницы в ' +
-        'index,follow (п. 5.1).',
+        'index,follow (п. 5.1). Набор возможностей редактора сужен до того, что ' +
+        'печатает публичный шаблон: изображения, ссылки-записи, разделители и ' +
+        'выравнивание недоступны намеренно — они исчезали бы на странице молча. ' +
+        'Ссылка внутрь сайта задаётся путём от корня, например /podborki/prazdniki/8-marta.',
     },
   },
   {
@@ -653,7 +835,11 @@ export const Collections: CollectionConfig = {
     beforeChange: [assignCollectionPath, ...collectionContentHooks.beforeChange],
     beforeDelete: [rejectDeleteWithChildren],
     beforeOperation: [...collectionContentHooks.beforeOperation],
-    beforeValidate: [...collectionContentHooks.beforeValidate],
+    // Порог содержания идёт ПОСЛЕ общих правил статусной модели: сначала должно
+    // отказать более грубое нарушение (публикует не admin, переход не из
+    // review, полнота полей), и только потом тратится запрос к базе на подсчёт
+    // открыток.
+    beforeValidate: [...collectionContentHooks.beforeValidate, assertPublishableVolume],
   },
   fields: collectionFields,
 };

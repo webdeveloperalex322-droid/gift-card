@@ -180,7 +180,13 @@ describe('cards: поле image', () => {
 
   it('требование «изображение заполнено» перед review включилось само', () => {
     const missing = missingReviewFields({
-      data: { alt: 'alt', caption: 'подпись', collections: [1], title: 'Заголовок' },
+      data: {
+        alt: 'alt',
+        caption: 'подпись',
+        collections: [1],
+        metaDescription: 'Описание для выдачи',
+        title: 'Заголовок',
+      },
       knownFields: collectFieldNames(Cards.fields),
       requirements: CARD_REVIEW_REQUIREMENTS,
     });

@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AD_SLOT_POSITIONS,
+  IMAGE_CREATOR_KINDS,
   INFO_PAGE_INDEXING_FIELD,
   INFO_PAGE_KEYS,
   SITE_SETTINGS_SLUG,
@@ -26,6 +27,7 @@ import {
 } from '@otkritka/shared';
 
 import { ROLES } from '../access/roles';
+import { publicRichTextEditor } from '../editor/public-rich-text';
 import type { SiteSetting } from '../payload-types';
 import {
   SiteSettings,
@@ -46,6 +48,20 @@ function asRecord(value: unknown): Record<string, unknown> {
 function childFields(container: unknown): readonly Record<string, unknown>[] {
   const fields = asRecord(container).fields;
   return Array.isArray(fields) ? fields.map((field: unknown) => asRecord(field)) : [];
+}
+
+/** Хуки поля по фазе. */
+function childHooks(field: Record<string, unknown>, phase: string): readonly unknown[] {
+  const hooks = asRecord(field.hooks)[phase];
+  return Array.isArray(hooks) ? hooks : [];
+}
+
+/** Значения набора у select-поля. */
+function childOptions(field: Record<string, unknown>): readonly string[] {
+  const options = field.options;
+  return Array.isArray(options)
+    ? options.map((option: unknown) => String(asRecord(option).value))
+    : [];
 }
 
 /** Поле по пути вида `organization.logo`. Отсутствие поля — ошибка теста. */
@@ -222,6 +238,32 @@ describe('Э3-00: все поля пустые по умолчанию', () => {
     }
   });
 
+  it('вид правообладателя — отдельное поле без значения по умолчанию', () => {
+    // Правка по вердикту ревизии Э3-05/Э3-06: диапазон свойства creator в
+    // schema.org — Person|Organization, поэтому вид выбирает человек. Дефолта
+    // нет намеренно: подставленный вид был бы утверждением о правообладателе,
+    // которого никто не делал.
+    const kind = fieldAt('imageLicense.creatorKind');
+    expect(kind.type).toBe('select');
+    expect(kind.defaultValue).toBeUndefined();
+    expect(childOptions(kind)).toEqual([...IMAGE_CREATOR_KINDS]);
+  });
+
+  it('имя правообладателя без выбранного вида не сохраняется', () => {
+    // Запрет стоит на ВВОДЕ, а не в сборке разметки: строку без типа потребитель
+    // разметки игнорирует, и свойство creator выглядело бы выведенным, фактически
+    // отсутствуя. Валидация вызывается тем же способом, каким её зовёт Payload.
+    const validate = fieldAt('imageLicense.creatorKind').validate;
+    if (typeof validate !== 'function') {
+      throw new Error('у поля вида правообладателя нет валидации');
+    }
+    const call = validate as (value: unknown, options: unknown) => unknown;
+
+    expect(call('Organization', { siblingData: { creator: 'Проект «Открытки»' } })).toBe(true);
+    expect(call(null, { siblingData: {} })).toBe(true);
+    expect(typeof call(null, { siblingData: { creator: 'Проект «Открытки»' } })).toBe('string');
+  });
+
   it('состав служебной страницы — выключатель индексации, заголовок, H1, description и текст', () => {
     for (const key of INFO_PAGE_KEYS) {
       expect(childFields(fieldAt(`infoPages.${key}`)).map((field) => field.name)).toEqual([
@@ -232,6 +274,20 @@ describe('Э3-00: все поля пустые по умолчанию', () => {
         'body',
       ]);
       expect(fieldAt(`infoPages.${key}.body`).type).toBe('richText');
+    }
+  });
+
+  it('текст служебной страницы редактируется СУЖЕННЫМ набором фич', () => {
+    // Тот же дефект, что нашла ревизия у вводного текста подборки: корневой
+    // редактор поднят с дефолтами Payload (Upload, Relationship), а печатает
+    // эти тексты (Э3-11) тот же разбор lexical, который таких узлов не знает.
+    // Набор фич проверяется в `../editor/public-rich-text.test.ts`.
+    for (const key of INFO_PAGE_KEYS) {
+      const body = fieldAt(`infoPages.${key}.body`);
+      expect('editor' in body ? body.editor : undefined).toBe(publicRichTextEditor);
+      // Плюс серверный хук: узел отсутствующей фичи валидаций не имеет и через
+      // REST/GraphQL сохранился бы молча.
+      expect(childHooks(body, 'beforeValidate')).toHaveLength(1);
     }
   });
 });

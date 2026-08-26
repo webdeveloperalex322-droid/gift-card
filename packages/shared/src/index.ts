@@ -24,6 +24,11 @@
  *     вычисляется из `PAYLOAD_ADMIN_PATH`, а не записан строкой;
  *   - `./env.ts` — тип среза окружения; окружение всегда аргумент с дефолтом,
  *     чтобы тесты не мутировали `process.env`;
+ *   - `./rich-text-href.ts` — какие адреса публичный рендер вводного текста
+ *     печатает ССЫЛКОЙ. Правило общее потому, что по нему живут два разных
+ *     слоя: `apps/web` решает, что печатать, а `apps/cms` — что вообще можно
+ *     сохранить в поле. Разойдясь, они дают ссылку, которая на странице
+ *     превращается в текст, и редактор об этом не узнаёт;
  *   - `./site-settings-rules.ts` (задача Э3-00) — предикаты «выводить или
  *     промолчать» для настроек сайта: `Organization` (Ч-17), лицензия
  *     изображений (Ч-10), право служебной страницы на `index,follow`
@@ -54,6 +59,13 @@ export {
 } from './reserved-routes.js';
 
 export {
+  isPublicRichTextHref,
+  type PublicRichTextHref,
+  publicRichTextHref,
+  validatePublicRichTextHref,
+} from './rich-text-href.js';
+
+export {
   canonicalizePath,
   isPageRoute,
   isProtocolRelativeUrl,
@@ -68,7 +80,12 @@ export {
   type AdSlotFacts,
   type AdSlotPosition,
   aiDisclosureText,
+  IMAGE_CREATOR_KIND_LABELS,
+  IMAGE_CREATOR_KINDS,
   IMAGE_LICENSE_REQUIRED,
+  type ImageCreatorJsonLd,
+  type ImageCreatorKind,
+  imageCreatorJsonLd,
   type ImageLicenseFacts,
   type ImageLicenseField,
   imageLicenseGaps,
@@ -87,6 +104,7 @@ export {
   type InfoPageRequirement,
   isAdSlotPosition,
   isAdSlotRenderable,
+  isImageCreatorKind,
   isImageLicenseComplete,
   isInfoPageIndexable,
   isOrganizationJsonLdRendered,
@@ -102,6 +120,7 @@ export {
   richTextPlainText,
   SITE_SETTINGS_SLUG,
   validateAdSlotRows,
+  validateImageCreatorKind,
   validateProfileUrl,
   validateSiteRootPath,
 } from './site-settings-rules.js';

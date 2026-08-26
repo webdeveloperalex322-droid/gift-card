@@ -28,7 +28,9 @@ import {
   CONTENT_STATUSES,
   type ContentStatus,
   canonicalizePath,
+  isValidSlug,
   looksLikeAbsoluteUrl,
+  pathSegments,
 } from '@otkritka/shared';
 
 import {
@@ -131,6 +133,14 @@ export function validateRobotsForStatus(
  * единственным хелпером из `SITE_URL`. Абсолютный URL в поле запрещён именно
  * поэтому: он стал бы вторым источником хоста, и после переезда домена
  * canonical указывал бы на старый.
+ *
+ * Форма пути проверяется ПОСЕГМЕНТНО правилами slug проекта (`isValidSlug` из
+ * общего пакета) — находка ревизии `url-guard`: до неё поле принимало
+ * `/otkrytki/Drugaya-STRANICA/` и `otkrytki/x` без ведущего слеша, то есть
+ * администратор мог молча выставить canonical на адрес, которого нет. Верхний
+ * регистр здесь не «некрасиво»: URL проекта — только нижний регистр, и адрес с
+ * заглавными буквами отдаёт 404. Своих правил формы сегмента тут нет намеренно:
+ * они те же, по которым живут slug записей.
  */
 export function validateCanonicalOverride(value: unknown): string | true {
   if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
@@ -154,10 +164,30 @@ export function validateCanonicalOverride(value: unknown): string | true {
     );
   }
 
+  if (!raw.startsWith('/')) {
+    return (
+      `«${raw}» не начинается со слеша. Canonical задаётся путём ОТ КОРНЯ сайта, ` +
+      'например /otkrytki/otkrytka-mame: относительное значение зависело бы от того, ' +
+      'на какой странице оно выведено, а canonical обязан быть одним адресом.'
+    );
+  }
+
+  let canonical: string;
   try {
-    canonicalizePath(raw);
+    canonical = canonicalizePath(raw);
   } catch (error) {
     return `«${raw}» не является путём: ${error instanceof Error ? error.message : String(error)}`;
+  }
+
+  for (const segment of pathSegments(canonical)) {
+    if (!isValidSlug(segment)) {
+      return (
+        `Сегмент «${segment}» в «${raw}» не соответствует правилам URL проекта: только ` +
+        'нижний регистр, транслитерация и дефисы между словами. Адрес с заглавными ' +
+        'буквами, пробелами, подчёркиваниями или кириллицей отдаёт 404, то есть canonical ' +
+        'указал бы на несуществующую страницу — а это хуже отсутствия переопределения.'
+      );
+    }
   }
 
   return true;

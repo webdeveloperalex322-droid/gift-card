@@ -17,9 +17,13 @@
  *
  *   - **Ч-17** — данные `Organization` для JSON-LD главной. При незаполненных
  *     полях блок не выводится ВОВСЕ, а не выводится с фиктивными значениями;
- *   - **Ч-10** — лицензионные поля карточки (`creator`, `creditText`,
- *     `copyrightNotice`, `license`, `acquireLicensePage`) плюс указание на
- *     генерацию ИИ, которое выводится подписью на карточке;
+ *   - **Ч-10** — лицензионные поля карточки (`creator` вместе с ВИДОМ
+ *     правообладателя, `creditText`, `copyrightNotice`, `license`,
+ *     `acquireLicensePage`) плюс указание на генерацию ИИ, которое выводится
+ *     подписью на карточке. Вид правообладателя появился по вердикту ревизии
+ *     Э3-05/Э3-06: диапазон свойства `creator` в schema.org — `Person |
+ *     Organization`, и строка без типа для потребителя разметки равна
+ *     отсутствию свойства;
  *   - **Ч-19 + Ч-23** — тексты `/o-proekte`, `/usloviya`, `/kontakty`. Страница
  *     получает `index,follow`, self-canonical и место в sitemap ТОЛЬКО при
  *     конъюнкции двух условий: человек ЯВНО включил выключатель
@@ -172,9 +176,43 @@ export function organizationJsonLd(
 /* Ч-10: лицензия изображений                                         */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Вид правообладателя для свойства `creator`.
+ *
+ * ЗАЧЕМ ОТДЕЛЬНОЕ ПОЛЕ, А НЕ ОДНА СТРОКА. Диапазон свойства `creator` в
+ * schema.org — `Person | Organization`, то есть УЗЕЛ с собственным типом.
+ * Значение типа Text потребитель разметки игнорирует: свойство фактически
+ * отсутствует, хотя код считает его выведенным (находка ревизии Э3-05/Э3-06).
+ * Догадаться о виде по строке нельзя — «Проект «Открытки»» это организация, а
+ * «Иван Петров» человек, и различие тут юридическое, а не стилистическое.
+ * Поэтому вид выбирает человек, а пока не выбрал — узла нет вовсе, как и у
+ * остальных незаполненных значений (Ч-10).
+ */
+export const IMAGE_CREATOR_KINDS = ['Organization', 'Person'] as const;
+
+export type ImageCreatorKind = (typeof IMAGE_CREATOR_KINDS)[number];
+
+export function isImageCreatorKind(value: unknown): value is ImageCreatorKind {
+  return typeof value === 'string' && (IMAGE_CREATOR_KINDS as readonly string[]).includes(value);
+}
+
+/** Подписи видов правообладателя для админки. */
+export const IMAGE_CREATOR_KIND_LABELS: Readonly<Record<ImageCreatorKind, string>> = {
+  Organization: 'Организация',
+  Person: 'Человек',
+};
+
+/** Узел `creator` разметки: тип и имя. Сборку JSON-LD делает шаблон. */
+export interface ImageCreatorJsonLd {
+  readonly kind: ImageCreatorKind;
+  readonly name: string;
+}
+
 /** Минимальный контракт лицензионных данных (см. {@link OrganizationFacts}). */
 export interface ImageLicenseFacts {
   readonly creator?: string | null;
+  /** Вид правообладателя: `Organization` или `Person` (см. {@link IMAGE_CREATOR_KINDS}). */
+  readonly creatorKind?: string | null;
   readonly creditText?: string | null;
   readonly copyrightNotice?: string | null;
   readonly license?: string | null;
@@ -207,6 +245,60 @@ export function imageLicenseGaps(
   license: ImageLicenseFacts | null | undefined,
 ): readonly ImageLicenseField[] {
   return IMAGE_LICENSE_REQUIRED.filter((field) => filledText(license?.[field]) === null);
+}
+
+/**
+ * Проверка поля «вид правообладателя»: заполненное имя без вида недопустимо.
+ *
+ * ПОЧЕМУ ЗАПРЕТ СТОИТ НА ВВОДЕ, А НЕ В СБОРКЕ РАЗМЕТКИ. Диапазон свойства
+ * `creator` в schema.org — `Person | Organization`, то есть узел со своим типом;
+ * значение типа Text потребитель игнорирует, и свойство фактически
+ * отсутствует, хотя выглядит выведенным. Второй раз то же условие проверять в
+ * шаблоне не нужно: если имя без вида НЕВОЗМОЖНО сохранить, шаблону не приходится
+ * решать, что делать с половиной данных. Обратное направление (вид выбран, имя
+ * пусто) отказом не является: это просто незаполненное поле, и узел не
+ * выводится — как любое пустое значение по Ч-10.
+ */
+export function validateImageCreatorKind(
+  value: unknown,
+  siblingData: { readonly creator?: unknown } | null | undefined,
+): string | true {
+  const kind = filledText(value);
+  if (kind !== null && !isImageCreatorKind(kind)) {
+    return (
+      `«${kind}» не входит в набор видов правообладателя ` +
+      `(${IMAGE_CREATOR_KINDS.join(' / ')}). Набор закрыт диапазоном свойства creator в ` +
+      'schema.org: другой тип узла потребитель разметки не поймёт.'
+    );
+  }
+  if (kind === null && filledText(siblingData?.creator) !== null) {
+    return (
+      'Имя правообладателя заполнено, а вид не выбран. Свойство creator в schema.org — это ' +
+      `узел типа ${IMAGE_CREATOR_KINDS.join(' или ')}, и строку без типа потребитель ` +
+      'разметки игнорирует: свойство выглядело бы выведенным, фактически отсутствуя. ' +
+      'Выберите вид либо очистите имя.'
+    );
+  }
+  return true;
+}
+
+/**
+ * Узел `creator` либо `null`.
+ *
+ * `null` — когда имя пусто ИЛИ вид правообладателя не выбран человеком. Вторая
+ * половина условия и есть смысл правки: строку без типа потребитель разметки
+ * игнорирует, то есть свойство считалось бы выведенным, не будучи им. Пустое
+ * место лучше — оно видно.
+ */
+export function imageCreatorJsonLd(
+  license: ImageLicenseFacts | null | undefined,
+): ImageCreatorJsonLd | null {
+  const name = filledText(license?.creator);
+  const kind = filledText(license?.creatorKind);
+  if (name === null || !isImageCreatorKind(kind)) {
+    return null;
+  }
+  return { kind, name };
 }
 
 /** Заполнен ли лицензионный блок целиком (Ч-10). */

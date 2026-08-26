@@ -129,16 +129,38 @@ function asComparable(value: unknown): string {
   return JSON.stringify(value) ?? '';
 }
 
+/**
+ * Условие выборки: `equals`, `in`, `and`, `or`.
+ *
+ * `in` разбирается и по значению поля, и по МАССИВУ значений: связь `hasMany`
+ * (`cards.collections`) хранится массивом, и запрос «карточки этих подборок»
+ * иначе совпадал бы с чем угодно. Пока `in` игнорировался, стенд возвращал на
+ * такой запрос ВСЕ записи коллекции — то есть подтверждал бы порог содержания
+ * (Ч-06) на выборке, которой в базе не соответствует ничего.
+ */
 function matchesWhere(doc: Doc, where: unknown): boolean {
   if (!isPlainObject(where)) {
     return true;
   }
   return Object.entries(where).every(([field, condition]) => {
+    if (field === 'and' && Array.isArray(condition)) {
+      return condition.every((part) => matchesWhere(doc, part));
+    }
+    if (field === 'or' && Array.isArray(condition)) {
+      return condition.some((part) => matchesWhere(doc, part));
+    }
     if (!isPlainObject(condition)) {
       return true;
     }
     if ('equals' in condition) {
       return asComparable(doc[field]) === asComparable(condition.equals);
+    }
+    if ('in' in condition && Array.isArray(condition.in)) {
+      const wanted = condition.in.map((value) => asComparable(value));
+      const actual = Array.isArray(doc[field])
+        ? doc[field].map((value) => asComparable(value))
+        : [asComparable(doc[field])];
+      return actual.some((value) => wanted.includes(value));
     }
     return true;
   });
@@ -353,6 +375,10 @@ function completeCard(slug: string): Doc {
     caption: 'С 8 Марта!',
     collections: [10],
     image: 500,
+    // Требование полноты появилось по вердикту ревизии Э3-05/Э3-06: без
+    // description карточка законно доходила до published, а п. 5.1 требует
+    // уникальные title/H1/description.
+    metaDescription: 'Открытка с тюльпанами к 8 Марта',
     robots: 'noindex,follow',
     slug,
     status: 'draft',
@@ -398,6 +424,9 @@ describe('Э1-07: seo-history заполняется хуками', () => {
     const entries = harness.docs('seo-history');
     expect(entries.map((entry) => entry.field)).toEqual([
       'title',
+      // description входит в отслеживаемые SEO-поля и с Э3 обязателен перед
+      // review, поэтому заполненная карточка фиксирует его с самого создания.
+      'metaDescription',
       'slug',
       'robots',
       'status',
@@ -1362,5 +1391,226 @@ describe('Э1-09: перенос поддерева подборок', () => {
       '/podborki/prazdniki/8-marta',
       '/podborki/prazdniki/8-marta/mame',
     ]);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Наполненность подборки: две границы (Ч-06, п. 5.1)                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Проводка проверки наполненности (`assertPublishableVolume`).
+ *
+ * Здесь проверяется то, чего чистое правило проверить не может: КАКАЯ граница
+ * стоит на каком переходе и что считаются именно ОПУБЛИКОВАННЫЕ записи. Это и
+ * есть находка вето V5: опубликованный пустой узел давал ссылку на 404, а порог
+ * п. 5.1 не проверялся нигде.
+ *
+ * Порог на время прогона снижен до 2 через параметр окружения — тот самый,
+ * которым он настраивается в проде (значение по умолчанию 20 проверено в
+ * `collection-volume.test.ts`). Сеять двадцать карточек ради утверждения
+ * «порог соблюдается» значило бы проверять арифметику, а не проводку.
+ */
+describe('наполненность подборки: публикация и открытие в индекс', () => {
+  const THRESHOLD_KEY = 'COLLECTION_MIN_PUBLISHED_CARDS';
+  let savedThreshold: string | undefined;
+
+  beforeAll(() => {
+    savedThreshold = process.env[THRESHOLD_KEY];
+    process.env[THRESHOLD_KEY] = '2';
+  });
+
+  afterAll(() => {
+    if (savedThreshold === undefined) {
+      delete process.env[THRESHOLD_KEY];
+    } else {
+      process.env[THRESHOLD_KEY] = savedThreshold;
+    }
+  });
+
+  /** Подборка, готовая к публикации по всем ОСТАЛЬНЫМ правилам. */
+  function seedNode(harness: Harness, overrides: Doc = {}): Doc {
+    // Родитель нужен, чтобы собрался путь узла: без него `assignCollectionPath`
+    // отказывает раньше проверки наполненности.
+    harness.seed('collections', {
+      id: 100,
+      nodeKind: 'group',
+      parent: null,
+      path: '/podborki/prazdniki',
+      robots: 'noindex,follow',
+      slug: 'prazdniki',
+      status: 'draft',
+      title: 'Праздники',
+    });
+    return harness.seed('collections', {
+      id: 200,
+      intro: {
+        root: {
+          children: [{ children: [{ text: 'Вводный текст', type: 'text' }], type: 'paragraph' }],
+          type: 'root',
+        },
+      },
+      metaDescription: 'Описание подборки',
+      nodeKind: 'occasion',
+      parent: 100,
+      path: '/podborki/prazdniki/8-marta',
+      related: [999],
+      responsibleEditor: 1,
+      robots: 'noindex,follow',
+      slug: '8-marta',
+      status: 'review',
+      title: '8 Марта',
+      urlChange: { confirm: false },
+      withdrawal: { mode: null, redirectTo: null },
+      ...overrides,
+    });
+  }
+
+  /** Открытки, привязанные к узлу, в заданном статусе. */
+  function seedCards(harness: Harness, nodeId: number, count: number, status = 'published'): void {
+    for (let index = 0; index < count; index += 1) {
+      harness.seed('cards', {
+        ...completeCard(`otkrytka-${String(nodeId)}-${String(index)}`),
+        collections: [nodeId],
+        id: 900 + index,
+        publishedAt: '2026-01-10T00:00:00.000Z',
+        status,
+      });
+    }
+  }
+
+  it('пустой узел не публикуется: его страница отдала бы 404', async () => {
+    const harness = createHarness();
+    const node = seedNode(harness);
+
+    await expectRejected(
+      () => harness.update('collections', node.id as number, { status: 'published' }, admin),
+      'нет ни одной опубликованной открытки',
+    );
+    expect(harness.docs('collections').find((doc) => doc.id === node.id)?.status).toBe('review');
+  });
+
+  it('черновики и записи на проверке содержанием не считаются', async () => {
+    const harness = createHarness();
+    const node = seedNode(harness);
+    seedCards(harness, node.id as number, 3, 'review');
+
+    await expectRejected(
+      () => harness.update('collections', node.id as number, { status: 'published' }, admin),
+      'нет ни одной опубликованной открытки',
+    );
+  });
+
+  it('одна опубликованная открытка — узел публикуется', async () => {
+    const harness = createHarness();
+    const node = seedNode(harness);
+    seedCards(harness, node.id as number, 1);
+
+    const updated = await harness.update(
+      'collections',
+      node.id as number,
+      { status: 'published' },
+      admin,
+    );
+    expect(updated.status).toBe('published');
+    // Публикация НЕ открывает индексацию: robots остаётся закрывающим.
+    expect(updated.robots).toBe('noindex,follow');
+  });
+
+  it('группирующий узел публикуется по опубликованному ребёнку, без своих открыток', async () => {
+    const harness = createHarness();
+    const group = seedNode(harness, {
+      id: 300,
+      nodeKind: 'group',
+      parent: null,
+      path: '/podborki/prazdniki',
+      slug: 'prazdniki',
+      title: 'Праздники',
+    });
+    harness.seed('collections', {
+      id: 301,
+      nodeKind: 'occasion',
+      parent: 300,
+      path: '/podborki/prazdniki/8-marta',
+      robots: 'noindex,follow',
+      slug: '8-marta',
+      status: 'published',
+      title: '8 Марта',
+    });
+
+    const updated = await harness.update(
+      'collections',
+      group.id as number,
+      { status: 'published' },
+      admin,
+    );
+    expect(updated.status).toBe('published');
+  });
+
+  it('открытие в index,follow ниже порога отклонено, а публикация при этом законна', async () => {
+    const harness = createHarness();
+    const node = seedNode(harness);
+    seedCards(harness, node.id as number, 1);
+
+    const published = await harness.update(
+      'collections',
+      node.id as number,
+      { status: 'published' },
+      admin,
+    );
+    expect(published.status).toBe('published');
+
+    await expectRejected(
+      () => harness.update('collections', node.id as number, { robots: 'index,follow' }, admin),
+      'Открыть в index,follow нельзя',
+    );
+    expect(harness.docs('collections').find((doc) => doc.id === node.id)?.robots).toBe(
+      'noindex,follow',
+    );
+  });
+
+  it('на пороге индексация открывается — вторым сохранением и рукой admin', async () => {
+    const harness = createHarness();
+    const node = seedNode(harness);
+    seedCards(harness, node.id as number, 2);
+
+    await harness.update('collections', node.id as number, { status: 'published' }, admin);
+    const opened = await harness.update(
+      'collections',
+      node.id as number,
+      { robots: 'index,follow' },
+      admin,
+    );
+    expect(opened.robots).toBe('index,follow');
+  });
+
+  it('сервисный аккаунт индексацию не открывает даже при выполненном пороге', async () => {
+    const harness = createHarness();
+    const node = seedNode(harness);
+    seedCards(harness, node.id as number, 2);
+
+    await harness.update('collections', node.id as number, { status: 'published' }, admin);
+    await expectRejected(
+      () => harness.update('collections', node.id as number, { robots: 'index,follow' }, aiEditor),
+      'только admin',
+    );
+  });
+
+  it('правка опубликованного узла без смены статуса и robots проверку не запускает', async () => {
+    // Иначе снятие открыток с публикации задним числом заблокировало бы даже
+    // исправление опечатки в заголовке.
+    const harness = createHarness();
+    const node = seedNode(harness, {
+      publishedAt: '2026-01-10T00:00:00.000Z',
+      status: 'published',
+    });
+
+    const updated = await harness.update(
+      'collections',
+      node.id as number,
+      { title: '8 Марта — открытки' },
+      admin,
+    );
+    expect(updated.title).toBe('8 Марта — открытки');
   });
 });

@@ -16,8 +16,10 @@ import { describe, expect, it } from 'vitest';
 import { parseAdminPath } from '@otkritka/shared';
 
 import {
+  DB_PUSH_ENV_KEY,
   ENV_EXAMPLE_ADMIN_PATH,
   adminPathRewrites,
+  databasePush,
   requireEnv,
   resolveAdminPath,
 } from './env.mjs';
@@ -161,5 +163,26 @@ describe('requireEnv', () => {
     expect(() => requireEnv('PAYLOAD_SECRET', { PAYLOAD_SECRET: '   ' })).toThrow(
       /PAYLOAD_SECRET/,
     );
+  });
+});
+
+describe('databasePush', () => {
+  it('по умолчанию схема накатывается: миграций в проекте пока нет', () => {
+    expect(databasePush({})).toBe(true);
+    expect(databasePush({ [DB_PUSH_ENV_KEY]: '' })).toBe(true);
+    expect(databasePush({ [DB_PUSH_ENV_KEY]: '  ' })).toBe(true);
+  });
+
+  it('выключается явно — этим стенд собранного apps/web обходит drizzle-kit', () => {
+    // Находка url-guard: при включённом push собранный сервер apps/web падает на
+    // первом запросе к базе с «Cannot find module 'drizzle-kit/api'».
+    expect(databasePush({ [DB_PUSH_ENV_KEY]: 'false' })).toBe(false);
+    expect(databasePush({ [DB_PUSH_ENV_KEY]: '0' })).toBe(false);
+    expect(databasePush({ [DB_PUSH_ENV_KEY]: 'OFF' })).toBe(false);
+    expect(databasePush({ [DB_PUSH_ENV_KEY]: 'true' })).toBe(true);
+  });
+
+  it('непонятное значение — ошибка, а не молчаливое «накатывать»', () => {
+    expect(() => databasePush({ [DB_PUSH_ENV_KEY]: 'нет' })).toThrow(DB_PUSH_ENV_KEY);
   });
 });

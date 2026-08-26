@@ -1,9 +1,19 @@
-import type { ArrayFieldValidation, Field, FieldHook, GlobalConfig, TextFieldSingleValidation, TypeWithID } from 'payload';
+import type {
+  ArrayFieldValidation,
+  Field,
+  FieldHook,
+  GlobalConfig,
+  SelectFieldSingleValidation,
+  TextFieldSingleValidation,
+  TypeWithID,
+} from 'payload';
 
 import {
   AD_SLOT_POSITIONS,
   AD_SLOT_POSITION_LABELS,
   type AdSlotFacts,
+  IMAGE_CREATOR_KIND_LABELS,
+  IMAGE_CREATOR_KINDS,
   IMAGE_LICENSE_REQUIRED,
   INFO_PAGE_INDEXING_FIELD,
   INFO_PAGE_KEYS,
@@ -18,6 +28,7 @@ import {
   type OrganizationFacts,
   SITE_SETTINGS_SLUG,
   validateAdSlotRows,
+  validateImageCreatorKind,
   validateProfileUrl,
   validateSiteRootPath,
 } from '@otkritka/shared';
@@ -28,6 +39,7 @@ import {
   systemFieldAccess,
 } from '../access/policies';
 import { HISTORY_AUTHOR_ROLES, describeHistoryAuthor, readAuthorUserId } from '../collections/seo-history-diff';
+import { publicRichTextEditor, publicRichTextHooks } from '../editor/public-rich-text';
 import type { SiteSetting } from '../payload-types';
 
 /**
@@ -89,6 +101,10 @@ const auditFieldAccess = {
 const validateSiteRootPathValue: TextFieldSingleValidation = (value) => validateSiteRootPath(value);
 const validateProfileUrlValue: TextFieldSingleValidation = (value) => validateProfileUrl(value);
 const validateAdSlotsValue: ArrayFieldValidation = (value) => validateAdSlotRows(value);
+// Вид правообладателя проверяется вместе с именем: значение поля само по себе
+// допустимо пустым, недопустима ПАРА «имя заполнено, вид не выбран».
+const validateCreatorKindValue: SelectFieldSingleValidation = (value, { siblingData }) =>
+  validateImageCreatorKind(value, siblingData);
 
 /* ------------------------------------------------------------------ */
 /* Ч-17: Organization                                                 */
@@ -190,7 +206,28 @@ const imageLicenseGroup: Field = {
       admin: {
         description:
           'Кто создал изображение (свойство creator). Фиктивный автор запрещён п. 23 ТЗ: ' +
-          'изображения генерирует нейросеть, и указание должно быть правдивым.',
+          'изображения генерирует нейросеть, и указание должно быть правдивым. Рядом ' +
+          'обязателен ВИД правообладателя: без него свойство не выводится.',
+      },
+    },
+    {
+      name: 'creatorKind',
+      type: 'select',
+      label: 'Вид правообладателя (тип узла creator)',
+      options: IMAGE_CREATOR_KINDS.map((kind) => ({
+        label: IMAGE_CREATOR_KIND_LABELS[kind],
+        value: kind,
+      })),
+      validate: validateCreatorKindValue,
+      admin: {
+        description:
+          'Организация или человек. Выбор обязателен при заполненном имени, и значения по ' +
+          'умолчанию у него нет ' +
+          'намеренно: диапазон свойства creator в schema.org — Person или Organization, то ' +
+          'есть УЗЕЛ со своим типом, а строка без типа для потребителя разметки равна ' +
+          'отсутствию свойства. Догадаться о виде по имени нельзя — различие юридическое, ' +
+          'а не стилистическое, поэтому его выбирает человек. Пока не выбран, лицензионный ' +
+          'блок разметки не выводится вовсе (набор Ч-10 проверяется целиком).',
       },
     },
     {
@@ -316,10 +353,23 @@ function infoPageGroup(key: InfoPageKey): Field {
       {
         name: 'body',
         type: 'richText',
+        // Тот же суженный набор фич, что у вводного текста подборки: этот текст
+        // печатает публичный шаблон (Э3-11) тем же разбором lexical. Корневой
+        // редактор поднят с дефолтами Payload, где есть Upload и Relationship, —
+        // их узлы разбор не печатает, то есть вставленное в «Условия
+        // использования» изображение исчезло бы на странице молча.
+        editor: publicRichTextEditor,
+        // Хук рядом с набором фич обязателен: узел отсутствующей фичи валидаций
+        // не имеет и через REST/GraphQL сохранился бы молча.
+        hooks: publicRichTextHooks(),
         admin: {
           description:
             'Основной текст. Присутствует в HTML-ответе сервера — страница обязана быть ' +
-            'полноценной при отключённом JS.',
+            'полноценной при отключённом JS. Набор возможностей редактора сужен до того, ' +
+            'что печатает публичный шаблон: изображения, ссылки-записи, разделители и ' +
+            'выравнивание недоступны намеренно. Ссылка внутрь сайта задаётся путём от ' +
+            'корня (например /usloviya), внешняя — полным адресом по http или https; ' +
+            'mailto: и tel: шаблон ссылкой не печатает, поэтому и сохранить их нельзя.',
         },
       },
     ],
