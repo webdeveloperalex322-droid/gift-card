@@ -49,8 +49,10 @@ import {
   childCollectionsQuery,
   collectionByIdQuery,
   collectionByPathQuery,
+  collectionCardsCountQuery,
   collectionCardsQuery,
   collectionsByIdsQuery,
+  type PublicCountQuery,
   type PublicFindQuery,
   recentCardsQuery,
   type RecordId,
@@ -100,6 +102,151 @@ async function findMany<TSlug extends 'cards' | 'collections'>(
   const payload = await payloadClient();
   const result = await payload.find(query);
   return { docs: result.docs, totalDocs: result.totalDocs, totalPages: result.totalPages };
+}
+
+async function countMany<TSlug extends 'cards' | 'collections'>(
+  query: PublicCountQuery<TSlug>,
+): Promise<number> {
+  const payload = await payloadClient();
+  const { totalDocs } = await payload.count(query);
+  return totalDocs;
+}
+
+/* ------------------------------------------------------------------ */
+/* Предикат «опубликован И непуст» (условие Э3-13-A)                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ПОЧЕМУ СПИСКИ УЗЛОВ ОТБИРАЮТ ПО СОДЕРЖАНИЮ, А НЕ ПО СТАТУСУ.
+ *
+ * «Опубликовано» не равно «отвечает 200». CMS отказывает в публикации пустого
+ * узла (`assertNotEmptyForPublish`), но граница ОДНОСТОРОННЯЯ — она сторожит
+ * переход вперёд: снятие с публикации последней открытки, её отвязка, её
+ * удаление, а у группы снятие последнего дочернего узла оставляют узел
+ * опубликованным и ПУСТЫМ. Это принятый риск Э3-13-A
+ * (`docs/otkrytye-voprosy.md`), и закрывать его отказами в CMS решено не было:
+ * ТЗ §8.2 оставляет снятие с публикации правом администратора и требует не
+ * отказа, а решения о судьбе URL.
+ *
+ * Цена риска лежит здесь: страница пустого узла законно отдаёт 404 (пустая
+ * посадочная не отдаёт 200), а родительская подборка продолжала его показывать —
+ * то есть возвращалась битая внутренняя ссылка, ради которой вводилось вето V5.
+ * Условие снятия риска, записанное в реестре: списки узлов обязаны отбирать их
+ * предикатом «опубликован И непуст», ТЕМ ЖЕ, которым решает шаблон. Тогда пустой
+ * опубликованный узел становится записью, на которую нигде нет ссылки, и ссылки
+ * на 404 не существует ни при каком состоянии данных.
+ *
+ * ## Определение и почему оно рекурсивное
+ *
+ * Шаблон отдаёт 200, если у узла есть хотя бы одна опубликованная открытка ЛИБО
+ * хотя бы один показанный дочерний узел (`collectionPageContent`). Дочерние узлы
+ * приходят из этой же выборки, поэтому определение замыкается само на себя:
+ *
+ *   непуст(N) = есть опубликованная открытка у N, ИЛИ есть опубликованный
+ *               ребёнок C, для которого непуст(C).
+ *
+ * Одноуровневая проверка («есть открытка ИЛИ есть опубликованный ребёнок»)
+ * закрыла бы дефект только на листьях и сдвинула бы его на уровень выше: узел
+ * без открыток с единственным ПУСТЫМ ребёнком сам отдаёт 404, а в списке
+ * родителя остался бы. Поэтому предикат рекурсивный — и ровно поэтому он
+ * совпадает с решением шаблона, а не приближает его.
+ *
+ * ## Чего он стоит, и почему это названо, а не скрыто
+ *
+ * Дешёвого запроса «непуст» у Payload нет: связь m:n живёт в карточке, и
+ * существование открытки у КАЖДОГО узла набора одним запросом не получить —
+ * выборка карточек с пределом дала бы ложное «пусто» у тех узлов, чьи карточки в
+ * предел не попали, то есть скрывала бы живые страницы. Поэтому цена — один
+ * `count` на узел, у которого своих открыток нет и который приходится раскрывать
+ * вглубь. Порядок величины: у узла с открытками — 1 `count`; у группирующего узла
+ * без своих открыток — 1 `count` плюс по одному на каждого ребёнка. Глубина
+ * таксономии ограничена тремя уровнями (решение Ч-04-5), поэтому рекурсия
+ * заканчивается быстро, но ШИРИНА не ограничена ничем: группа с тридцатью
+ * праздниками стоит тридцать `count` при каждом рендере страницы, где она
+ * упомянута, — включая страницу карточки, где группа стоит атрибутом «Раздел».
+ *
+ * Правильное лекарство — денормализованный признак наполненности в записи
+ * подборки, поддерживаемый хуками CMS (владелец предложил взять серверную часть).
+ * До него запросы мемоизируются в пределах одного рендера {@link NodeContentMemo},
+ * и это единственная оптимизация здесь: кеш между запросами означал бы, что
+ * ссылка живёт дольше содержания.
+ */
+export interface NodeContentMemo {
+  readonly resolved: Map<string, Promise<boolean>>;
+}
+
+/** Свежий мемоизатор предиката. Один на рендер страницы, не на процесс. */
+export function newNodeContentMemo(): NodeContentMemo {
+  return { resolved: new Map() };
+}
+
+/**
+ * Предел глубины раскрытия — защита от цикла в связях `parent`.
+ *
+ * Цикл в данных CMS не создаётся (путь узла собирается из цепочки родителей и
+ * зациклиться не может), но рекурсия по данным без предела — это способ уронить
+ * рендер на состоянии базы, а не на коде. Значение с запасом к трём уровням
+ * таксономии.
+ */
+const MAX_CONTENT_DEPTH = 8;
+
+async function hasContent(
+  id: RecordId,
+  memo: NodeContentMemo,
+  depth: number,
+): Promise<boolean> {
+  const key = String(id);
+  const known = memo.resolved.get(key);
+  if (known !== undefined) {
+    return known;
+  }
+  const computing = computeHasContent(id, memo, depth);
+  // Обещание кладётся в мемо ДО его разрешения: параллельные ветви обхода
+  // (`Promise.all` ниже) обязаны ждать один и тот же счёт, а не запускать свой.
+  memo.resolved.set(key, computing);
+  return computing;
+}
+
+async function computeHasContent(
+  id: RecordId,
+  memo: NodeContentMemo,
+  depth: number,
+): Promise<boolean> {
+  if ((await countMany(collectionCardsCountQuery(id))) > 0) {
+    return true;
+  }
+  if (depth >= MAX_CONTENT_DEPTH) {
+    return false;
+  }
+  const { docs } = await findMany(childCollectionsQuery(id));
+  const children = docs as Collection[];
+  if (children.length === 0) {
+    return false;
+  }
+  const flags = await Promise.all(
+    children.map((child) => hasContent(child.id, memo, depth + 1)),
+  );
+  return flags.includes(true);
+}
+
+/**
+ * Оставляет из набора те узлы, страница которых отвечает 200.
+ *
+ * Порядок сохраняется: его задаёт запрос, и менять его отбор не вправе.
+ *
+ * @param memo мемоизатор на один рендер. Не передан — создаётся свой; передавать
+ *   стоит там, где на одной странице отбираются пересекающиеся наборы (каталог
+ *   `/podborki` и главная считают и корни, и их детей).
+ */
+export async function nodesWithContent(
+  nodes: readonly Collection[],
+  memo: NodeContentMemo = newNodeContentMemo(),
+): Promise<readonly Collection[]> {
+  if (nodes.length === 0) {
+    return nodes;
+  }
+  const flags = await Promise.all(nodes.map((node) => hasContent(node.id, memo, 0)));
+  return nodes.filter((_node, index) => flags[index] === true);
 }
 
 /** Опубликованная карточка по slug. `null` — записи нет либо она не опубликована. */
@@ -169,31 +316,43 @@ export async function listCatalogCards(input: {
 /**
  * Узлы верхнего уровня таксономии — содержание каталога `/podborki` (Э3-08).
  *
- * Неопубликованные не приходят, поэтому ссылки на черновик каталог не выводит.
- * Ссылки на 200 это само по себе не гарантирует: опубликованный узел без открыток
- * и без детей отдаёт 404, и закрыто это отказом CMS в публикации пустого узла
- * (`assertNotEmptyForPublish`), а не выборкой.
+ * Неопубликованные не приходят, поэтому ссылок на черновик каталог не выводит. А
+ * с условия Э3-13-A не приходят и опубликованные ПУСТЫЕ узлы: отбор идёт
+ * предикатом {@link nodesWithContent}, то есть тем же условием, по которому
+ * шаблон решает отдать 200. Обоснование — в шапке предиката.
  *
  * Пустой результат означает, что каталогу нечего показывать, и маршрут отвечает
  * 404: пустая страница не отдаёт 200 как посадочная (ТЗ §5.3).
  */
-export async function listRootCollections(): Promise<readonly Collection[]> {
+export async function listRootCollections(
+  memo?: NodeContentMemo,
+): Promise<readonly Collection[]> {
   const { docs } = await findMany(rootCollectionsQuery());
-  return (docs as Collection[]).map((node) => assertPublicallyReadable(node, 'узел каталога'));
+  const nodes = (docs as Collection[]).map((node) =>
+    assertPublicallyReadable(node, 'узел каталога'),
+  );
+  return nodesWithContent(nodes, memo);
 }
 
 /**
  * Дочерние узлы подборки. Неопубликованные не приходят — ссылок на них не будет.
  *
- * Оговорка та же, что у {@link listRootCollections}: опубликованность не равна
- * ответу 200, и «опубликованный пустой узел» закрыт отказом CMS на публикации, а
- * не этой выборкой.
+ * Пустые опубликованные узлы тоже не приходят (условие Э3-13-A, предикат
+ * {@link nodesWithContent}). Для этой функции отбор значим дважды: из её
+ * результата собирается и видимый блок «Разделы подборки», и решение шаблона
+ * «страница пуста → 404». Поэтому отбор здесь делает определение шаблона
+ * рекурсивным ровно в том смысле, в каком оно записано у предиката, — и ссылка
+ * на узел печатается тогда и только тогда, когда его адрес отвечает 200.
  */
 export async function listChildCollections(
   parentId: RecordId | null,
+  memo?: NodeContentMemo,
 ): Promise<readonly Collection[]> {
   const { docs } = await findMany(childCollectionsQuery(parentId));
-  return (docs as Collection[]).map((node) => assertPublicallyReadable(node, 'дочернюю подборку'));
+  const nodes = (docs as Collection[]).map((node) =>
+    assertPublicallyReadable(node, 'дочернюю подборку'),
+  );
+  return nodesWithContent(nodes, memo);
 }
 
 /**
@@ -213,12 +372,23 @@ export async function findCollectionById(id: RecordId | null): Promise<Collectio
   return node === undefined ? null : assertPublicallyReadable(node, 'подборку по идентификатору');
 }
 
-/** Смежные подборки для обязательного блока перелинковки (решение Ч-04-8). */
+/**
+ * Смежные подборки для обязательного блока перелинковки (решение Ч-04-8).
+ *
+ * Пустые опубликованные узлы отсеиваются (условие Э3-13-A): связь `related`
+ * заполняет редактор, и узел, опустевший после снятия открыток, остался бы в ней
+ * ссылкой на 404 — притом в блоке, на который решение Ч-04-8 возлагает
+ * достижимость.
+ */
 export async function listRelatedCollections(
   ids: readonly RecordId[],
+  memo?: NodeContentMemo,
 ): Promise<readonly Collection[]> {
   const { docs } = await findMany(relatedCollectionsQuery(ids));
-  return (docs as Collection[]).map((node) => assertPublicallyReadable(node, 'смежную подборку'));
+  const nodes = (docs as Collection[]).map((node) =>
+    assertPublicallyReadable(node, 'смежную подборку'),
+  );
+  return nodesWithContent(nodes, memo);
 }
 
 /**
@@ -231,12 +401,15 @@ export async function listRelatedCollections(
  */
 export async function listCollectionsByIds(
   ids: readonly RecordId[],
+  memo?: NodeContentMemo,
 ): Promise<readonly Collection[]> {
   const { docs } = await findMany(collectionsByIdsQuery(ids));
   const nodes = (docs as Collection[]).map((node) =>
     assertPublicallyReadable(node, 'подборку карточки'),
   );
-  return orderByIds(nodes, ids);
+  // Отбор по содержанию (условие Э3-13-A) стоит ДО восстановления порядка:
+  // порядок задаёт редактор, и выпадение узла его не перетасовывает.
+  return orderByIds(await nodesWithContent(nodes, memo), ids);
 }
 
 /**
@@ -280,11 +453,15 @@ export async function searchCards(query: string, limit: number): Promise<readonl
 export async function searchCollections(
   query: string,
   limit: number,
+  memo?: NodeContentMemo,
 ): Promise<readonly Collection[]> {
   const { docs } = await findMany(searchCollectionsQuery({ limit, query }));
-  return (docs as Collection[]).map((node) =>
+  const nodes = (docs as Collection[]).map((node) =>
     assertPublicallyReadable(node, 'найденную подборку'),
   );
+  // Выдача поиска сама неиндексируема, но ссылка на 404 — это ссылка на 404 и в
+  // ней: отбор по содержанию (условие Э3-13-A) один на все списки узлов.
+  return nodesWithContent(nodes, memo);
 }
 
 /** Свежие опубликованные карточки. */
@@ -299,9 +476,17 @@ export async function listRecentCards(limit: number): Promise<readonly Card[]> {
  * День — аргумент, а не `new Date()` внутри: страница главной кешируется и
  * рендерится в разное время, а тест обязан задавать день сам.
  */
-export async function listSeasonalCollections(today: Date): Promise<readonly Collection[]> {
+export async function listSeasonalCollections(
+  today: Date,
+  memo?: NodeContentMemo,
+): Promise<readonly Collection[]> {
   const { docs } = await findMany(seasonalCollectionsQuery(today));
-  return (docs as Collection[]).map((node) => assertPublicallyReadable(node, 'сезонную подборку'));
+  const nodes = (docs as Collection[]).map((node) =>
+    assertPublicallyReadable(node, 'сезонную подборку'),
+  );
+  // Сезонный блок главной — самое видное место сайта, и ссылка на 404 в нём
+  // дороже всего: отбор по содержанию тот же (условие Э3-13-A).
+  return nodesWithContent(nodes, memo);
 }
 
 /**

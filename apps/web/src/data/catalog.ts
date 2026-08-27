@@ -60,6 +60,7 @@ import {
   listCatalogCards,
   listChildCollections,
   listRootCollections,
+  newNodeContentMemo,
   readSiteSettings,
 } from './content.js';
 import {
@@ -182,10 +183,13 @@ export async function cardCatalogPage(
 export async function collectionCatalogPage(
   env?: SharedEnv,
 ): Promise<CatalogPageResult<CollectionCatalogBody>> {
-  const roots = await listRootCollections();
+  // Общий мемоизатор предиката «непуст» на рендер: корни и их дети пересекаются
+  // наборами (обоснование предиката — шапка `nodesWithContent` в `./content.ts`).
+  const memo = newNodeContentMemo();
+  const roots = await listRootCollections(memo);
   const sections = catalogSections(
     await Promise.all(
-      roots.map(async (node) => ({ children: await listChildCollections(node.id), node })),
+      roots.map(async (node) => ({ children: await listChildCollections(node.id, memo), node })),
     ),
   );
   const items = catalogSectionItems(sections);

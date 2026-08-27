@@ -44,6 +44,7 @@ import {
   childCollectionsQuery,
   collectionByIdQuery,
   collectionByPathQuery,
+  collectionCardsCountQuery,
   collectionCardsQuery,
   collectionsByIdsQuery,
   MAX_LIST_ROWS,
@@ -162,6 +163,22 @@ describe('запросы к коллекциям', () => {
     expect(query.overrideAccess).toBe(false);
     expect(JSON.stringify(query.where)).toBe(JSON.stringify({ slug: { equals: 'otkrytka-mame' } }));
     expect(JSON.stringify(query)).not.toContain('published');
+  });
+
+  it('счётчик открыток узла: та же область чтения, фильтра по статусу нет', () => {
+    // Половина предиката «непуст» (условие Э3-13-A). `overrideAccess: false`
+    // здесь так же обязателен, как в чтении: со включённым счётчик считал бы и
+    // черновики, и узел без ни одной ОПУБЛИКОВАННОЙ открытки выглядел бы
+    // наполненным — то есть ссылка на 404 вернулась бы через счётчик.
+    const query = collectionCardsCountQuery(7);
+
+    expect(query.collection).toBe('cards');
+    expect(query.overrideAccess).toBe(false);
+    expect(query.where).toEqual({ collections: { in: [7] } });
+    expect(JSON.stringify(query)).not.toContain('published');
+    // Ни `depth`, ни `sort`, ни `limit`: у `payload.count` их нет, и передавать
+    // их значило бы делать вид, что они на что-то влияют.
+    expect(Object.keys(query).sort()).toEqual(['collection', 'overrideAccess', 'where']);
   });
 
   it('подборка по итоговому пути: путь приводится к каноническому виду', () => {
@@ -517,9 +534,36 @@ function similarBlockFor(card: FakeCard): readonly FakeCard[] {
   return blockIn(THEME, card);
 }
 
+/**
+ * Блок карточки, посчитанный по ЕЁ набору подборок, а не по одной общей теме.
+ *
+ * Нужен для случая с разными наборами: запрос темизует ОБЪЕДИНЕНИЕМ подборок
+ * карточки (`collections: { in: [...] }`), поэтому у двух карточек с разными
+ * наборами разные пулы соседей, и `blockIn` с фиксированным `[THEME_ID]` этого
+ * состояния не воспроизводит.
+ */
+function blockByOwnCollections(
+  pool: readonly FakeCard[],
+  card: FakeCard,
+): readonly FakeCard[] {
+  const queries = similarCardsQueries({
+    collectionIds: card.collections,
+    excludeCardId: card.id,
+    publishedAt: card.publishedAt,
+  });
+  return similarCardsWindow({
+    newer: runQuery(pool, queries.newer),
+    older: runQuery(pool, queries.older),
+  });
+}
+
 describe('блок «Похожие открытки» как средство достижимости (Ч-04-8)', () => {
-  it('ЛЮБАЯ карточка темы попадает хотя бы в один блок «Похожие»', () => {
-    // Это и есть требование Ч-04-8, на которое ссылается шапка шаблона карточки.
+  it('в теме с ОДНИМ набором подборок любая карточка попадает в чей-то блок', () => {
+    // ГРАНИЦА УТВЕРЖДЕНИЯ (сужена по вердикту `reviewer`, MINOR 6): свойство
+    // доказано для карточек с ОДИНАКОВЫМ набором подборок — то есть для одного
+    // пула соседей. Причина ограничения и случай, на котором свойство перестаёт
+    // держаться, разобраны ниже отдельным тестом.
+    //
     // Прежняя выборка («свежие 12 минус сама») давала всем карточкам темы ОДИН
     // список, и карточка с тринадцатой по счёту не входила ни в один блок — то
     // есть за первой страницей списка была недостижима ссылками.
@@ -531,6 +575,62 @@ describe('блок «Похожие открытки» как средство �
     }
 
     expect([...covered].sort((a, b) => a - b)).toEqual(THEME.map((card) => card.id));
+  });
+
+  it('при РАЗНЫХ наборах подборок «быть соседом» перестаёт быть взаимным', () => {
+    // ЧТО ЗДЕСЬ ЗАФИКСИРОВАНО. Пул соседей карточки — объединение её подборок.
+    // Поэтому у карточки малой подборки пул мал, а у её соседа, входящего ещё и в
+    // большую подборку, пул велик: карточка малой подборки не попадает в его
+    // двенадцать позиций, хотя он попадает в её. Взаимность отношения «быть
+    // соседом» держится только внутри ОДНОГО пула, и вместе с ней — покрытие.
+    //
+    // Набор: подборка SMALL из двух карточек, одна из которых входит ещё и в
+    // BIG с плотным корпусом вокруг. Карточка `lonely` есть только в SMALL.
+    const SMALL = 100;
+    const BIG = 200;
+    const lonely: FakeCard = {
+      collections: [SMALL],
+      id: 1000,
+      publishedAt: '2026-01-01T10:00:00.000Z',
+    };
+    const bridge: FakeCard = {
+      collections: [SMALL, BIG],
+      id: 1001,
+      publishedAt: '2026-06-15T10:00:00.000Z',
+    };
+    // Корпус BIG обступает `bridge` с ОБЕИХ сторон по десять карточек: обе
+    // половины окна (по шесть позиций) заполняются им целиком, и дальний по дате
+    // `lonely` в них не попадает. Односторонний корпус свойства не показал бы —
+    // недобранная половина отдаёт позиции второй, и `lonely` прошла бы.
+    const bigCorpus: readonly FakeCard[] = Array.from({ length: 20 }, (_, index) => ({
+      collections: [BIG],
+      id: 1100 + index,
+      publishedAt: `2026-06-${String(index < 10 ? 16 + index : 14 - (index - 10)).padStart(2, '0')}T10:00:00.000Z`,
+    }));
+    const pool = [lonely, bridge, ...bigCorpus];
+
+    // Со стороны `lonely` сосед виден: её пул — только SMALL.
+    expect(blockByOwnCollections(pool, lonely).map((card) => card.id)).toEqual([bridge.id]);
+
+    // А со стороны `bridge` её нет: двенадцать ближайших в объединении SMALL ∪ BIG
+    // заняты корпусом BIG. Входящей ссылки «Похожие» у `lonely` не остаётся ни от
+    // кого — других карточек в SMALL нет.
+    const fromBridge = blockByOwnCollections(pool, bridge).map((card) => card.id);
+    expect(fromBridge).not.toContain(lonely.id);
+
+    // Отсюда и суженная формулировка: блок гарантирует ИСХОДЯЩИЕ ссылки на
+    // непосредственных соседей карточки в её собственном пуле, а «каждая карточка
+    // имеет входящую ссылку» верно там, где пул у соседей общий. Полное покрытие
+    // при разнородных наборах требует считать окно по КАЖДОЙ подборке карточки
+    // отдельно (тогда взаимность восстанавливается внутри каждой), и это
+    // изменение запроса, а не формулировки, — вынесено в отчёт задачи.
+    const covered = new Set<number>();
+    for (const card of pool) {
+      for (const similar of blockByOwnCollections(pool, card)) {
+        covered.add(similar.id);
+      }
+    }
+    expect(covered.has(lonely.id)).toBe(false);
   });
 
   it('блок зависит от карточки, а не одинаков у всей темы', () => {

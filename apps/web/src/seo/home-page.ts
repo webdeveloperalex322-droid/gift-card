@@ -43,7 +43,13 @@
  *     было бы ссылкой на текущую страницу (ТЗ §7.6 такого звена не даёт).
  */
 
-import { buildAbsoluteUrl, type OrganizationJsonLd, type SharedEnv } from '@otkritka/shared';
+import {
+  buildAbsoluteUrl,
+  type OrganizationFacts,
+  organizationJsonLd,
+  resolveSiteName,
+  type SharedEnv,
+} from '@otkritka/shared';
 
 import { canonicalUrlFor } from '../routing/canonical.js';
 import type { RobotsDirective } from '../routing/pagination.js';
@@ -173,11 +179,25 @@ export interface HomePageJsonLd extends JsonLdDocument {
 
 export interface HomePageJsonLdInput {
   /**
-   * Отобранные данные организации из глобала либо `null` — блока не будет вовсе
-   * (предикат `organizationJsonLd` из `@otkritka/shared`, решение Ч-17). Своей
-   * трактовки «заполнено ли» у этого модуля нет: она одна на монорепозиторий.
+   * СЫРЫЕ данные организации из глобала (`site-settings.organization`) либо
+   * `null`/`undefined`, если глобал пуст.
+   *
+   * Раньше сюда приходило уже отобранное значение (`organizationJsonLd(...)`), и
+   * это было ошибкой распределения: из одного и того же поля глобала выводятся
+   * ДВА разных решения с разными условиями —
+   *
+   *   - выводить ли узел `Organization` (нужны и `name`, и `logo` — решение
+   *     Ч-17);
+   *   - какое имя у сайта в `WebSite.name` (нужно только `name`, логотип к имени
+   *     отношения не имеет — см. `resolveSiteName`).
+   *
+   * Отобрав значение раньше, вызывающий терял второе решение целиком: при
+   * заполненном имени и пустом логотипе имя, которое задал человек, не попадало
+   * в разметку вовсе. Поэтому оба предиката зовутся здесь, из одного значения, а
+   * своей трактовки «заполнено ли» у модуля по-прежнему нет — она одна на
+   * монорепозиторий и живёт в `@otkritka/shared`.
    */
-  readonly organization: OrganizationJsonLd | null;
+  readonly organization: OrganizationFacts | null | undefined;
 }
 
 /**
@@ -193,16 +213,30 @@ export function homePageJsonLd(input: HomePageJsonLdInput, env?: SharedEnv): Hom
   // два способа собрать один адрес расходятся, а `WebSite.url` обязан совпадать с
   // canonical символ в символ.
   const homeUrl = canonicalUrlFor(HOME_PATH, env);
-  const organization = input.organization;
+  // Оба решения — из одного значения глобала и оба чужими предикатами: узел
+  // организации выводится при заполненных `name` и `logo` (Ч-17), имя сайта — при
+  // заполненном `name` (логотип на имя не влияет).
+  const organization = organizationJsonLd(input.organization);
+  const siteName = resolveSiteName(input.organization, HOME_PAGE.heading);
 
   const site: WebSiteJsonLd = {
     '@type': 'WebSite',
     url: homeUrl,
-    // Имя сайта — его видимый H1. Выдумать «бренд» нельзя: разметка обязана
-    // соответствовать видимому содержимому, а название проекта, которое человек
-    // задал в глобале, попадает в разметку узлом Organization — там, где ему и
-    // место.
-    name: HOME_PAGE.heading,
+    // Имя сайта — заполненное `organization.name` из глобала, а при пустом
+    // глобале видимый H1 главной. Второго имени сайта в документе разметки не
+    // бывает: и `WebSite.name`, и `Organization.name` приходят из одного поля.
+    //
+    // ОБЯЗАННОСТЬ, КОТОРУЮ ЭТО СОЗДАЁТ (п. 23 ТЗ, проверка 22.16): имя из глобала
+    // обязано быть НАПЕЧАТАНО на странице. Сейчас единственное видимое название
+    // сайта — H1 главной, поэтому заполненное поле, отличающееся от H1, развело
+    // бы разметку с видимым содержимым. Это состояние не остаётся незамеченным:
+    // приёмка ищет `WebSite.name` в видимом тексте страницы
+    // (`tests/seo/structured-data-matches-visible.spec.ts`) и краснеет ровно на
+    // нём. Появление видимой подписи с названием — продуктовое решение человека
+    // (строка Э3-13-B); признака источника в документе разметки нет намеренно:
+    // `jsonLdScriptText` печатает документ целиком, и служебный ключ уехал бы в
+    // JSON-LD страницы.
+    name: siteName.value,
     description: HOME_PAGE.description,
     ...(organization === null ? {} : { publisher: { '@id': ORGANIZATION_NODE_ID } }),
   };

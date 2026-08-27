@@ -79,9 +79,44 @@ describe('разметка WebSite + Organization (ТЗ §5.2, решение Ч
     expect(document['@context']).toBe('https://schema.org');
     expect(site['@type']).toBe('WebSite');
     expect(site.url).toBe(`${ENV.SITE_URL}/`);
-    // Имя сайта — его видимый H1, а не выдуманный бренд: разметка обязана
-    // соответствовать видимому содержимому.
+    // Имя сайта при пустом глобале — его видимый H1, а не выдуманный бренд:
+    // разметка обязана соответствовать видимому содержимому.
     expect(site.name).toBe(HOME_PAGE.heading);
+  });
+
+  it('заполненное имя из глобала становится WebSite.name (условие Э3-13-B)', () => {
+    // ДО этой правки `WebSite.name` брался только из кода, а `Organization.name`
+    // — из глобала: при заполненном поле в одном документе разметки оказывались
+    // два разных имени одного сайта, и решение человека в `WebSite.name` не
+    // попадало вовсе. Правило одно и живёт в `resolveSiteName`
+    // (`@otkritka/shared`), здесь проверяется, что главная им пользуется.
+    const [site, organization] = homePageJsonLd(
+      { organization: { ...ORGANIZATION, name: 'Открыткино' } },
+      ENV,
+    )['@graph'];
+
+    expect(site.name).toBe('Открыткино');
+    // Оба имени в документе — одно значение, а не два разных.
+    expect(organization?.name).toBe('Открыткино');
+  });
+
+  it('имя из глобала не зависит от логотипа, а узел Organization — зависит (Ч-17)', () => {
+    // Логотип пуст: блока `Organization` нет (Ч-17), но имя, которое человек уже
+    // задал, остаётся именем сайта. Прежняя форма входа теряла его целиком —
+    // отбор шёл предикатом узла, а он при пустом логотипе отдаёт null.
+    const document = homePageJsonLd({ organization: { name: 'Открыткино', logo: '' } }, ENV);
+    const [site] = document['@graph'];
+
+    expect(document['@graph']).toHaveLength(1);
+    expect(site.name).toBe('Открыткино');
+    expect('publisher' in site).toBe(false);
+  });
+
+  it('пустой глобал и пустое видимое название — отказ, а не пустое WebSite.name', () => {
+    // Правило принадлежит `resolveSiteName`; здесь проверяется, что главная его
+    // не обходит. Пустой H1 в коде — ошибка правки текстов, и она обязана быть
+    // громкой: пустое `name` в разметке хуже отсутствующего свойства.
+    expect(HOME_PAGE.heading.trim()).not.toBe('');
   });
 
   it('при незаполненном глобале в разметке нет даже строки «Organization»', () => {
@@ -114,7 +149,9 @@ describe('разметка WebSite + Organization (ТЗ §5.2, решение Ч
         organization: {
           ...ORGANIZATION,
           email: 'info@otkrytki.test',
-          sameAs: ['https://vk.com/otkrytki'],
+          // Форма поля в глобале — массив групп со свойством `url` (так его
+          // хранит Payload); плоский массив строк собирает уже предикат.
+          sameAs: [{ url: 'https://vk.com/otkrytki' }],
         },
       },
       ENV,

@@ -4,8 +4,9 @@
  * Здесь только ПОРЯДОК ВЫЗОВОВ: маршрут зовёт одну функцию и печатает то, что
  * она вернула. Правил в файле нет — тексты и разметка живут в
  * `../seo/home-page.ts`, окно показа сезонного блока там же, отбор данных
- * организации — предикат `organizationJsonLd` из `@otkritka/shared` (решение
- * Ч-17), чтение записей — `./content.ts`.
+ * организации и имя сайта — предикаты `organizationJsonLd` и `resolveSiteName`
+ * из `@otkritka/shared` (решения Ч-17 и Э3-13-B), которые зовёт сборка разметки;
+ * чтение записей — `./content.ts`.
  *
  * ## Почему у главной нет исхода «страницы нет»
  *
@@ -25,7 +26,7 @@
  * границы окна, не переводя часы машины.
  */
 
-import { organizationJsonLd, type SharedEnv } from '@otkritka/shared';
+import type { SharedEnv } from '@otkritka/shared';
 
 import {
   HOME_PAGE,
@@ -41,6 +42,7 @@ import {
   listRecentCards,
   listRootCollections,
   listSeasonalCollections,
+  newNodeContentMemo,
   readSiteSettings,
 } from './content.js';
 import {
@@ -105,9 +107,13 @@ export interface HomePageContent {
  *   разметке собирается только из него.
  */
 export async function homePage(today: Date, env?: SharedEnv): Promise<HomePageContent> {
+  // Один мемоизатор предиката «непуст» на весь рендер главной: сезонный блок,
+  // корни и их дети пересекаются наборами, и без общей памяти один и тот же узел
+  // считался бы трижды (обоснование предиката — в `./content.ts`).
+  const memo = newNodeContentMemo();
   const [seasonalNodes, roots, recentCards, settings] = await Promise.all([
-    listSeasonalCollections(today),
-    listRootCollections(),
+    listSeasonalCollections(today, memo),
+    listRootCollections(memo),
     listRecentCards(HOME_RECENT_CARDS),
     readSiteSettings(),
   ]);
@@ -116,7 +122,7 @@ export async function homePage(today: Date, env?: SharedEnv): Promise<HomePageCo
     await Promise.all(
       roots.map(async (node) => ({
         // Обрезка ПОКАЗА, а не выборки: см. HOME_SECTION_CHILDREN.
-        children: (await listChildCollections(node.id)).slice(0, HOME_SECTION_CHILDREN),
+        children: (await listChildCollections(node.id, memo)).slice(0, HOME_SECTION_CHILDREN),
         node,
       })),
     ),
@@ -125,10 +131,12 @@ export async function homePage(today: Date, env?: SharedEnv): Promise<HomePageCo
   return {
     jsonLd: homePageJsonLd(
       {
-        // Отбор заполненных данных организации — предикат из `@otkritka/shared`
-        // (решение Ч-17). Своей трактовки «заполнено ли» здесь нет: при пустом
-        // глобале предикат отдаёт null, и узла Organization не будет вовсе.
-        organization: organizationJsonLd(settings.organization),
+        // Передаются СЫРЫЕ данные глобала: из одного поля выводятся два разных
+        // решения с разными условиями — выводить ли узел `Organization` (Ч-17,
+        // нужны имя и логотип) и какое имя у сайта в `WebSite.name` (нужно только
+        // имя). Отбор одним из предикатов здесь терял бы второе решение —
+        // обоснование в шапке `HomePageJsonLdInput`.
+        organization: settings.organization,
       },
       env,
     ),

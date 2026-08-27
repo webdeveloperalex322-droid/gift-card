@@ -123,6 +123,7 @@ import {
   listChildCollections,
   listCollectionCards,
   listRelatedCollections,
+  newNodeContentMemo,
   readSiteSettings,
   relationId,
   relationIds,
@@ -168,11 +169,16 @@ if (node === null) {
 const page = paging.action === 'redirect-to-base' ? 1 : paging.page;
 
 const env = serverEnv();
+// Один мемоизатор предиката «непуст» на рендер: дети и смежные узлы могут
+// пересекаться наборами (редактор вправе указать ребёнка в `related`), и без
+// общей памяти один узел считался бы дважды. Обоснование самого предиката — шапка
+// `nodesWithContent` в `../../data/content.ts`.
+const contentMemo = newNodeContentMemo();
 const [cardsPage, children, parent, related] = await Promise.all([
   listCollectionCards({ collectionId: node.id, page }),
-  listChildCollections(node.id),
+  listChildCollections(node.id, contentMemo),
   findCollectionById(relationId(node.parent)),
-  listRelatedCollections(relationIds(node.related)),
+  listRelatedCollections(relationIds(node.related), contentMemo),
 ]);
 
 // Номер вне диапазона — 404, а не 200 с пустой сеткой. Проверка стоит до сборки

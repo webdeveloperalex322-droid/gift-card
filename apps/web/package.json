@@ -25,6 +25,7 @@
     "@otkritka/images": "workspace:*",
     "@otkritka/shared": "workspace:*",
     "astro": "^7.2.4",
+    "drizzle-kit": "0.31.7",
     "graphql": "^16.14.2",
     "payload": "3.88.0"
   },

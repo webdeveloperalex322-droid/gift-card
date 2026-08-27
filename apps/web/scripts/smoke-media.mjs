@@ -313,10 +313,10 @@ async function main() {
     }
     server = spawn(process.execPath, [serverEntry], {
       cwd: appDir,
-      // Окружение собирает `./server-child-env.mjs`: он добавляет виртуальное
-      // хранилище pnpm в NODE_PATH. Без этого собранный сервер падает на
-      // динамическом импорте `drizzle-kit/api` при первом обращении к базе, и
-      // выглядит это как «страница отдаёт 500» — симптом вместо причины.
+      // Окружение конкретного входа собирает `./server-child-env.mjs` — одна
+      // точка на все входы, поднимающие собранный сервер. Правки NODE_PATH там
+      // больше нет: `drizzle-kit` объявлен зависимостью apps/web, разбор и замер
+      // — в шапке того модуля.
       env: serverChildEnv(appDir, { HOST: host, PORT: String(port) }),
       stdio: ['ignore', 'inherit', 'inherit'],
     });

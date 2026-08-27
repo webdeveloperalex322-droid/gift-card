@@ -63,6 +63,7 @@
 
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import { inspect } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -132,6 +133,45 @@ function record(name: string, ok: boolean, detail = ''): void {
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Итог уборки. Считается ОДИН раз и читается на верхнем уровне — там же, где
+ * решается код выхода.
+ */
+interface CleanupOutcome {
+  /** Остатков смоука в базе не осталось и настройки восстановлены. */
+  readonly clean: boolean;
+}
+
+let outcomeValue: CleanupOutcome | null = null;
+
+/**
+ * Чтение итога уборки ФУНКЦИЕЙ, а не переменной напрямую.
+ *
+ * Присваивание живёт внутри вложенной функции, поэтому анализ потока управления
+ * TypeScript на верхнем уровне модуля считает переменную всё ещё `null` и сужает
+ * её до `never` после проверки. Функция возвращает объявленный тип, и проверка
+ * `=== null` снова становится проверкой, а не тавтологией.
+ */
+function readOutcome(): CleanupOutcome | null {
+  return outcomeValue;
+}
+
+/**
+ * Ждёт, пока stdout действительно уйдёт в дескриптор.
+ *
+ * `process.exit` очередь вывода НЕ дожидается, а на Windows перехваченный stdout
+ * — конвейер (асинхронная запись). Без этого ожидания теряются именно последние
+ * строки: итог проверок и остатки уборки, то есть всё, ради чего смоук
+ * запускают.
+ */
+function flushStdout(): Promise<void> {
+  return new Promise((resolve) => {
+    process.stdout.write('', () => {
+      resolve();
+    });
   });
 }
 
@@ -477,6 +517,39 @@ async function main(): Promise<void> {
   const claimedStems: string[] = [];
   let server: ReturnType<typeof spawn> | null = null;
 
+  /**
+   * Уборка выполняется ровно один раз — из `finally` штатного пути ИЛИ из
+   * обработчика сигнала.
+   *
+   * Обещание запоминается ДО разрешения: если сигнал пришёл посреди штатной
+   * уборки, обработчик ждёт ту же уборку, а не запускает вторую и не выходит
+   * посреди неё.
+   */
+  let cleanupStarted: Promise<CleanupOutcome> | null = null;
+  const cleanupOnce = (): Promise<CleanupOutcome> => {
+    cleanupStarted ??= runCleanup();
+    return cleanupStarted;
+  };
+
+  /**
+   * УБОРКА ПО СИГНАЛУ. Без неё `Ctrl+C` (или `kill` со стенда) оставлял на
+   * локальном сайте ОПУБЛИКОВАННЫЕ фикстурные карточки и узлы: `finally` при
+   * обрыве сигналом не исполняется вовсе, а `sweepLeftovers` следующего прогона
+   * — это «когда-нибудь потом», причём другого смоука. Обработчик зовёт ту же
+   * уборку и выходит кодом 1: прерванный прогон — не успех.
+   */
+  const onSignal = (signal: NodeJS.Signals): void => {
+    void (async (): Promise<void> => {
+      console.log(`\nПрогон прерван сигналом ${signal}: выполняется уборка, дождитесь её конца.`);
+      await cleanupOnce();
+      await flushStdout();
+      process.exit(1);
+    })();
+  };
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(signal, onSignal);
+  }
+
   try {
     const admins = await payload.find({
       collection: 'users',
@@ -788,9 +861,10 @@ async function main(): Promise<void> {
 
     server = spawn(process.execPath, [serverEntry], {
       cwd: appDir,
-      // Окружение собирает `./server-child-env.mjs`: он добавляет виртуальное
-      // хранилище pnpm в NODE_PATH, иначе собранный сервер падает на
-      // динамическом импорте `drizzle-kit/api` при первом обращении к базе.
+      // Окружение конкретного входа собирает `./server-child-env.mjs` — одна
+      // точка на все входы, поднимающие собранный сервер. Правки NODE_PATH там
+      // больше нет: `drizzle-kit` объявлен зависимостью apps/web, разбор и замер
+      // — в шапке того модуля.
       env: serverChildEnv(appDir, { HOST, PORT: String(PORT), SITE_URL: ORIGIN }),
       stdio: ['ignore', 'inherit', 'inherit'],
     });
@@ -1181,6 +1255,21 @@ async function main(): Promise<void> {
       );
     }
 
+    // И ГЛАВНОЕ: на адрес с 404 не должно вести ни одной ссылки. Условие Э3-13-A
+    // требует, чтобы списки узлов отбирали их предикатом «опубликован И непуст»,
+    // а не одним статусом; иначе каталог `/podborki`, карта разделов главной и
+    // блок «Разделы подборки» продолжали бы печатать ссылку на страницу, которая
+    // законно отвечает 404. Проверка живая, потому что именно живой прогон
+    // показывает разницу: юнит-тест не знает состояния базы.
+    for (const page of ['/podborki', '/']) {
+      const response = await request(page);
+      record(
+        `ссылки на опустевший узел нет: ${page}`,
+        !anchors(response.body).some((anchor) => anchor.href === emptiedPath),
+        `status=${String(response.status)}`,
+      );
+    }
+
     /* ------------------------------------------------------------ */
     /* 5. Каталоги разделов (задача Э3-08)                          */
     /* ------------------------------------------------------------ */
@@ -1295,6 +1384,16 @@ async function main(): Promise<void> {
       await delay(holdMs);
     }
   } finally {
+    await cleanupOnce();
+  }
+
+  /**
+   * Тело уборки. Кода выхода НЕ ставит: `process.exit(1)` из `finally` при
+   * исключении в полёте съедал бы саму ошибку — она не печаталась вовсе, и
+   * красный смоук выглядел как «просто не сошлись числа». Код выхода считает
+   * верхний уровень файла, где виден и результат уборки, и исключение.
+   */
+  async function runCleanup(): Promise<CleanupOutcome> {
     if (server !== null) {
       server.kill();
     }
@@ -1377,27 +1476,16 @@ async function main(): Promise<void> {
         String(historyTotal),
     );
 
-    const failed = checks.filter((check) => !check.ok);
-    console.log(`\nПроверок: ${String(checks.length)}, провалено: ${String(failed.length)}`);
-    for (const check of failed) {
-      console.log(`  - ${check.name}${check.detail === '' ? '' : ` (${check.detail})`}`);
-    }
-    if (
-      failed.length > 0 ||
-      counts.publishedCards > 0 ||
-      counts.publishedNodes > 0 ||
-      counts.cards > 0 ||
-      counts.collections > 0 ||
-      counts.claims > 0 ||
-      counts.images > 0
-    ) {
-      // `process.exit`, а не `process.exitCode`: смоук запускается через
-      // `payload run`, а тот в конце делает `process.exit(0)` безусловно
-      // (`payload/dist/bin/index.js`) — выставленный `process.exitCode` он
-      // затирает, и красный смоук выходил бы нулём. Найдено на смоуке Э3-11.
-      // Весь вывод выше уже напечатан, поэтому терять нечего.
-      process.exit(1);
-    }
+    outcomeValue = {
+      clean:
+        counts.publishedCards === 0 &&
+        counts.publishedNodes === 0 &&
+        counts.cards === 0 &&
+        counts.collections === 0 &&
+        counts.claims === 0 &&
+        counts.images === 0,
+    };
+    return outcomeValue;
   }
 }
 
@@ -1469,5 +1557,56 @@ async function checkWithJavaScriptDisabled(
   }
 }
 
-await main();
-process.exit(process.exitCode ?? 0);
+/* ------------------------------------------------------------------ */
+/* Верхний уровень: итог и код выхода                                 */
+/* ------------------------------------------------------------------ */
+//
+// КОД ВЫХОДА СЧИТАЕТСЯ ЗДЕСЬ, а не в `finally`. Причина замерена на смоуках
+// `apps/cms`: `process.exit(1)` из `finally` при исключении в полёте гасит саму
+// ошибку — она не печатается, и красный смоук докладывает «не сошлись числа»
+// вместо настоящей причины. Здесь видно и исключение, и результат уборки.
+//
+// `process.exit`, а не `process.exitCode`: смоук запускается через `payload run`,
+// а тот в конце делает `process.exit(0)` безусловно
+// (`payload/dist/bin/index.js`) — выставленный `process.exitCode` он затирает, и
+// красный смоук выходил бы нулём.
+
+/**
+ * Текст непойманного исключения для итоговой строки.
+ *
+ * Не шаблонная подстановка значения: у объекта, не являющегося `Error`,
+ * стандартное приведение к строке даёт «[object Object]», то есть скрывает
+ * причину падения ровно в тот момент, когда она нужнее всего.
+ */
+function describeCrash(error: unknown): string {
+  return error instanceof Error ? (error.stack ?? error.message) : inspect(error, { depth: 3 });
+}
+
+let crashed: unknown = null;
+try {
+  await main();
+} catch (error) {
+  crashed = error;
+}
+
+const failed = checks.filter((check) => !check.ok);
+console.log(`\nПроверок: ${String(checks.length)}, провалено: ${String(failed.length)}`);
+for (const check of failed) {
+  console.log(`  - ${check.name}${check.detail === '' ? '' : ` (${check.detail})`}`);
+}
+if (crashed !== null) {
+  console.error(
+    `\nСмоук прерван ошибкой:\n${describeCrash(crashed)}`,
+  );
+}
+const outcome = readOutcome();
+if (outcome === null) {
+  console.error(
+    '\nУборка не выполнялась вовсе: в базе могли остаться ОПУБЛИКОВАННЫЕ фикстуры смоука. ' +
+      'Проверьте записи с префиксом «smoke-e3-05».',
+  );
+}
+
+const ok = crashed === null && outcome !== null && outcome.clean && failed.length === 0;
+await flushStdout();
+process.exit(ok ? 0 : 1);

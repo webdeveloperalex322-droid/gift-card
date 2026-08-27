@@ -57,6 +57,7 @@
 
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import { inspect } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -174,6 +175,41 @@ function record(name: string, ok: boolean, detail = ''): void {
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Итог уборки. Считается ОДИН раз и читается на верхнем уровне — там же, где
+ * решается код выхода.
+ */
+interface CleanupOutcome {
+  /** Остатков смоука в базе нет и настройки сайта восстановлены. */
+  readonly clean: boolean;
+}
+
+let outcomeValue: CleanupOutcome | null = null;
+
+/**
+ * Чтение итога уборки ФУНКЦИЕЙ, а не переменной напрямую: присваивание живёт
+ * внутри вложенной функции, и анализ потока управления TypeScript на верхнем
+ * уровне модуля сузил бы переменную до `never` после проверки на `null`.
+ */
+function readOutcome(): CleanupOutcome | null {
+  return outcomeValue;
+}
+
+/**
+ * Ждёт, пока stdout уйдёт в дескриптор.
+ *
+ * `process.exit` очередь вывода НЕ дожидается, а перехваченный stdout на Windows
+ * — конвейер: без ожидания теряются именно последние строки, то есть итог
+ * проверок и остатки уборки.
+ */
+function flushStdout(): Promise<void> {
+  return new Promise((resolve) => {
+    process.stdout.write('', () => {
+      resolve();
+    });
   });
 }
 
@@ -359,6 +395,36 @@ async function main(): Promise<void> {
     adSlots: SiteSetting['adSlots'];
   } | null = null;
   let settingsRestored = false;
+
+  /**
+   * Уборка выполняется ровно один раз — из `finally` штатного пути ИЛИ из
+   * обработчика сигнала. Обещание запоминается ДО разрешения: сигнал посреди
+   * штатной уборки ждёт её же, а не запускает вторую.
+   */
+  let cleanupStarted: Promise<CleanupOutcome> | null = null;
+  const cleanupOnce = (): Promise<CleanupOutcome> => {
+    cleanupStarted ??= runCleanup();
+    return cleanupStarted;
+  };
+
+  /**
+   * УБОРКА ПО СИГНАЛУ. Без неё `Ctrl+C` оставлял на локальном сайте
+   * ОПУБЛИКОВАННЫЕ фикстурные карточки, узлы и — что хуже — подменённые значения
+   * глобала «Настройки сайта»: `finally` при обрыве сигналом не исполняется, и
+   * предупреждение о невосстановленном глобале печаталось там же, то есть тоже
+   * не печаталось. Обработчик зовёт ту же уборку и выходит кодом 1.
+   */
+  const onSignal = (signal: NodeJS.Signals): void => {
+    void (async (): Promise<void> => {
+      console.log(`\nПрогон прерван сигналом ${signal}: выполняется уборка, дождитесь её конца.`);
+      await cleanupOnce();
+      await flushStdout();
+      process.exit(1);
+    })();
+  };
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(signal, onSignal);
+  }
 
   try {
     const admins = await payload.find({
@@ -949,6 +1015,15 @@ async function main(): Promise<void> {
       await delay(holdMs);
     }
   } finally {
+    await cleanupOnce();
+  }
+
+  /**
+   * Тело уборки. Кода выхода НЕ ставит: `process.exit(1)` из `finally` при
+   * исключении в полёте съедал бы саму ошибку. Код выхода считает верхний уровень
+   * файла, где виден и результат уборки, и исключение.
+   */
+  async function runCleanup(): Promise<CleanupOutcome> {
     if (server !== null) {
       server.kill();
     }
@@ -1062,26 +1137,17 @@ async function main(): Promise<void> {
         `\nНастройки сайта восстановлены: ${settingsRestored ? 'да' : 'НЕТ'}`,
     );
 
-    const failed = checks.filter((check) => !check.ok);
-    console.log(`\nПроверок: ${String(checks.length)}, провалено: ${String(failed.length)}`);
-    for (const check of failed) {
-      console.log(`  - ${check.name}${check.detail === '' ? '' : ` (${check.detail})`}`);
-    }
-    if (
-      failed.length > 0 ||
-      !settingsRestored ||
-      counts.publishedCards > 0 ||
-      counts.publishedNodes > 0 ||
-      counts.cards > 0 ||
-      counts.collections > 0 ||
-      counts.claims > 0 ||
-      counts.images > 0
-    ) {
-      // `process.exit`, а не `process.exitCode`: смоук запускается через
-      // `payload run`, а тот в конце делает `process.exit(0)` безусловно и
-      // выставленный код затирает.
-      process.exit(1);
-    }
+    outcomeValue = {
+      clean:
+        settingsRestored &&
+        counts.publishedCards === 0 &&
+        counts.publishedNodes === 0 &&
+        counts.cards === 0 &&
+        counts.collections === 0 &&
+        counts.claims === 0 &&
+        counts.images === 0,
+    };
+    return outcomeValue;
   }
 }
 
@@ -1201,5 +1267,55 @@ async function checkWithJavaScriptDisabled(
   }
 }
 
-await main();
-process.exit(process.exitCode ?? 0);
+/* ------------------------------------------------------------------ */
+/* Верхний уровень: итог и код выхода                                 */
+/* ------------------------------------------------------------------ */
+//
+// КОД ВЫХОДА СЧИТАЕТСЯ ЗДЕСЬ, а не в `finally`: `process.exit(1)` из `finally`
+// при исключении в полёте гасит саму ошибку, и красный смоук докладывает «не
+// сошлись числа» вместо настоящей причины.
+//
+// `process.exit`, а не `process.exitCode`: смоук запускается через `payload run`,
+// а тот в конце делает `process.exit(0)` безусловно и выставленный код затирает.
+
+/**
+ * Текст непойманного исключения для итоговой строки.
+ *
+ * Не шаблонная подстановка значения: у объекта, не являющегося `Error`,
+ * стандартное приведение к строке даёт «[object Object]», то есть скрывает
+ * причину падения ровно в тот момент, когда она нужнее всего.
+ */
+function describeCrash(error: unknown): string {
+  return error instanceof Error ? (error.stack ?? error.message) : inspect(error, { depth: 3 });
+}
+
+let crashed: unknown = null;
+try {
+  await main();
+} catch (error) {
+  crashed = error;
+}
+
+const failed = checks.filter((check) => !check.ok);
+console.log(`\nПроверок: ${String(checks.length)}, провалено: ${String(failed.length)}`);
+for (const check of failed) {
+  console.log(`  - ${check.name}${check.detail === '' ? '' : ` (${check.detail})`}`);
+}
+if (crashed !== null) {
+  console.error(
+    `\nСмоук прерван ошибкой:\n${describeCrash(crashed)}`,
+  );
+}
+
+const outcome = readOutcome();
+if (outcome === null) {
+  console.error(
+    '\nУборка не выполнялась вовсе: в базе могли остаться ОПУБЛИКОВАННЫЕ фикстуры смоука и ' +
+      'подменённые значения глобала «Настройки сайта». Проверьте записи с префиксом ' +
+      '«smoke-e3-09».',
+  );
+}
+
+const ok = crashed === null && outcome !== null && outcome.clean && failed.length === 0;
+await flushStdout();
+process.exit(ok ? 0 : 1);
