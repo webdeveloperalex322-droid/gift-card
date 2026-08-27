@@ -35,6 +35,7 @@ import {
   infoPageFacts,
   organizationFacts,
 } from '../src/globals/site-settings';
+import { finishSmoke } from '../src/scripts/smoke-exit';
 
 interface Check {
   readonly detail: string;
@@ -420,9 +421,21 @@ async function main(): Promise<void> {
 
   const failed = checks.filter((check) => !check.ok);
   console.log(`\nПроверок: ${checks.length}, провалено: ${failed.length}`);
-  if (failed.length > 0) {
-    process.exitCode = 1;
+  for (const check of failed) {
+    console.log(`  ПРОВАЛ: ${check.name}${check.detail === '' ? '' : ` — ${check.detail}`}`);
   }
 }
 
-await main();
+// Код выхода выставляет `finishSmoke`, а не `process.exitCode`: `payload run`
+// после скрипта безусловно делает `process.exit(0)` (`payload/dist/bin/index.js`)
+// и выставленное поле затирает — красный смоук выходил бы нулём. Решение о коде
+// вынесено ЗА `main` намеренно: вызов изнутри `finally` при исключении,
+// оборвавшем смоук, вышел бы нулём и съел саму ошибку.
+try {
+  await main();
+} catch (error) {
+  console.error('\nСмоук оборван ошибкой:', error);
+  await finishSmoke(1);
+}
+
+await finishSmoke(checks.filter((check) => !check.ok).length);

@@ -27,6 +27,7 @@ import { getPayload } from 'payload';
 
 import config from '../src/payload.config';
 import { createPngFixture } from '../src/images/png-fixture';
+import { finishSmoke } from '../src/scripts/smoke-exit';
 
 interface Check {
   readonly detail: string;
@@ -296,6 +297,11 @@ async function main(): Promise<void> {
           caption: 'Смоук: подпись',
           collections: [groupA.id],
           image: imageMain,
+          // Требование полноты перед `review` пополнилось description по
+          // вердикту ревизии Э3-05/Э3-06 (`CARD_REVIEW_REQUIREMENTS`). Смоук
+          // этап-1 об этом не знал и обрывался на переходе в `review`, а
+          // докладывал нулём: код выхода затирал `payload run`.
+          metaDescription: 'Смоук: описание карточки для проверки полноты перед review.',
         },
         overrideAccess: false,
         user: aiEditor,
@@ -545,6 +551,7 @@ async function main(): Promise<void> {
           caption: 'Смоук: подпись',
           collections: [groupA.id],
           image,
+          metaDescription: `Смоук: описание карточки пакета ${suffix}.`,
           robots: 'noindex,follow',
           slug: `smoke-paket-${suffix}`,
           status: 'draft',
@@ -854,6 +861,25 @@ async function main(): Promise<void> {
     });
     created.collections.push(occasion.id);
 
+    // Пустой узел не публикуется (`empty-for-publish`, вердикт ревизии
+    // Э3-05/Э3-06), а перенос поддерева проверяется именно на ОПУБЛИКОВАННЫХ
+    // узлах: 301 возникает только у известного поисковику пути. Поэтому в
+    // дочерний узел добавляется уже опубликованная карточка пакета — связь
+    // many-to-many, поэтому URL самой карточки от этого не меняется, она просто
+    // входит в две подборки. До этой правки смоук обрывался здесь исключением, а
+    // докладывал нулём: код выхода затирал `payload run`.
+    const [, secondOfBatch] = batch;
+    if (secondOfBatch === undefined) {
+      throw new Error('во выборке пакета меньше двух записей — смоук собран неверно');
+    }
+    await payload.update({
+      collection: 'cards',
+      id: secondOfBatch,
+      data: { collections: [groupA.id, occasion.id] },
+      overrideAccess: false,
+      user: admin,
+    });
+
     for (const node of [groupA, occasion]) {
       await payload.update({
         collection: 'collections',
@@ -1049,4 +1075,16 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+// Код выхода выставляет `finishSmoke`, а не `process.exitCode`: `payload run`
+// после скрипта безусловно делает `process.exit(0)` (`payload/dist/bin/index.js`)
+// и выставленное поле затирает — красный смоук выходил бы нулём. Решение о коде
+// вынесено ЗА `main` намеренно: вызов изнутри `finally` при исключении,
+// оборвавшем смоук, вышел бы нулём и съел саму ошибку.
+try {
+  await main();
+} catch (error) {
+  console.error('\nСмоук оборван ошибкой:', error);
+  await finishSmoke(1);
+}
+
+await finishSmoke(checks.filter((check) => !check.ok).length);

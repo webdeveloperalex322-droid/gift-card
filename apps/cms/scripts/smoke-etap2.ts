@@ -27,6 +27,7 @@ import {
   derivativePublicPath,
 } from '../src/images/storage';
 import { resolveImageStorageRoots } from '../src/images/storage-env';
+import { finishSmoke } from '../src/scripts/smoke-exit';
 
 interface Check {
   readonly detail: string;
@@ -257,6 +258,10 @@ async function main(): Promise<void> {
         caption: 'С 8 Марта!',
         collections: [group.id],
         image: imageA.id,
+        // Полнота перед `review` пополнилась description по вердикту ревизии
+        // Э3-05/Э3-06 (`CARD_REVIEW_REQUIREMENTS`); смоук этапа 2 об этом не
+        // знал и обрывался на переходе в `review`, докладывая при этом нулём.
+        metaDescription: 'Смоук: описание первой открытки этапа 2.',
         robots: 'noindex,follow',
         slug: 'smouk-otkrytka-odin',
         status: 'draft',
@@ -296,6 +301,7 @@ async function main(): Promise<void> {
         caption: 'С праздником!',
         collections: [group.id],
         image: imageB.id,
+        metaDescription: 'Смоук: описание второй открытки этапа 2.',
         robots: 'noindex,follow',
         slug: 'smouk-otkrytka-dva',
         status: 'draft',
@@ -670,4 +676,16 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+// Код выхода выставляет `finishSmoke`, а не `process.exitCode`: `payload run`
+// после скрипта безусловно делает `process.exit(0)` (`payload/dist/bin/index.js`)
+// и выставленное поле затирает — красный смоук выходил бы нулём. Решение о коде
+// вынесено ЗА `main` намеренно: вызов изнутри `finally` при исключении,
+// оборвавшем смоук, вышел бы нулём и съел саму ошибку.
+try {
+  await main();
+} catch (error) {
+  console.error('\nСмоук оборван ошибкой:', error);
+  await finishSmoke(1);
+}
+
+await finishSmoke(checks.filter((check) => !check.ok).length);

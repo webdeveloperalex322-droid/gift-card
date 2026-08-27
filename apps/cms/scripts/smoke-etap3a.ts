@@ -20,6 +20,7 @@ import { getPayload } from 'payload';
 
 import config from '../src/payload.config';
 import { createPngFixture } from '../src/images/png-fixture';
+import { finishSmoke } from '../src/scripts/smoke-exit';
 
 interface Check {
   readonly detail: string;
@@ -132,6 +133,12 @@ async function main(): Promise<void> {
         caption: 'С праздником!',
         collections: [group.id],
         image: image.id,
+        // Полнота перед `review` требует description у карточки
+        // (`CARD_REVIEW_REQUIREMENTS`, вердикт ревизии Э3-05/Э3-06). Без него
+        // смоук обрывался исключением на переходе в `review` — и до правки кода
+        // выхода докладывал об этом строкой «8/8 проверок пройдено» и нулём.
+        metaDescription:
+          'Служебная карточка смоука Э3-03a: проверяется зеркало путей производных в записи.',
         robots: 'noindex,follow',
         slug: 'smouk-zerkalo-variantov',
         status: 'draft',
@@ -543,10 +550,19 @@ async function main(): Promise<void> {
     for (const check of failed) {
       console.log(`  ПРОВАЛ: ${check.name} — ${check.detail}`);
     }
-    if (failed.length > 0) {
-      process.exitCode = 1;
-    }
   }
 }
 
-await main();
+// Код выхода выставляет `finishSmoke`, а не `process.exitCode`: `payload run`
+// после скрипта безусловно делает `process.exit(0)` (`payload/dist/bin/index.js`)
+// и выставленное поле затирает — красный смоук выходил бы нулём. Решение о коде
+// вынесено ЗА `main` намеренно: вызов изнутри `finally` при исключении,
+// оборвавшем смоук, вышел бы нулём и съел саму ошибку.
+try {
+  await main();
+} catch (error) {
+  console.error('\nСмоук оборван ошибкой:', error);
+  await finishSmoke(1);
+}
+
+await finishSmoke(checks.filter((check) => !check.ok).length);

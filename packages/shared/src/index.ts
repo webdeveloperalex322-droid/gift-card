@@ -32,7 +32,10 @@
  *   - `./site-settings-rules.ts` (задача Э3-00) — предикаты «выводить или
  *     промолчать» для настроек сайта: `Organization` (Ч-17), лицензия
  *     изображений (Ч-10), право служебной страницы на `index,follow`
- *     (Ч-19/Ч-23), рекламные места (Ч-11). Живёт здесь, а не в `apps/cms`,
+ *     (Ч-19/Ч-23), рекламные места (Ч-11), а также имя сайта
+ *     (`resolveSiteName`) — одно значение и для видимой подписи, и для
+ *     `WebSite.name`, иначе заполненное человеком имя расходится с разметкой.
+ *     Живёт здесь, а не в `apps/cms`,
  *     потому что тех же функций требует `apps/web`, а импорт из `payload`
  *     сломал бы его сборку: в зависимостях этого пакета `payload` нет, поэтому
  *     инвариант держится структурой, а не комментарием.
@@ -117,7 +120,10 @@ export {
   type OrganizationRequiredField,
   type RenderableAdSlot,
   renderableAdSlots,
+  resolveSiteName,
   richTextPlainText,
+  type SiteName,
+  type SiteNameSource,
   SITE_SETTINGS_SLUG,
   validateAdSlotRows,
   validateImageCreatorKind,
