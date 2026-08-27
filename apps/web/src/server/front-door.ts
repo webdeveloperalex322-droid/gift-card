@@ -36,14 +36,11 @@ import { readFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 
-import { decideRequestTarget } from '../routing/path-policy.js';
+import { decideRequestTarget, NOT_FOUND_PAGE_FILE } from '../routing/path-policy.js';
 import type { AstroNodeHandler } from './astro-app.js';
 import type { MaintenanceDecision } from './maintenance.js';
 import { decideMediaRequest, type MediaDecision } from './media-files.js';
 import { tryServeStaticFile } from './static-files.js';
-
-/** Имя файла заранее отрендеренной страницы 404 в корне статики. */
-const PRERENDERED_NOT_FOUND_FILE = '404.html';
 
 /**
  * Ответ 404 на случай, когда заранее отрендеренной страницы 404 в сборке нет.
@@ -54,7 +51,10 @@ const PRERENDERED_NOT_FOUND_FILE = '404.html';
  * `dist/client/404.html`. Этот файл читают ОБА пути — наш (`loadNotFoundBody`
  * ниже) и приложение Astro (адаптер `@astrojs/node` подставляет
  * `prerenderedErrorPageFetch`, читающий `404.html` из корня клиента), — то есть
- * страница 404 у сайта одна, а не две разные.
+ * страница 404 у сайта одна, а не две разные. Имя файла приходит из
+ * `NOT_FOUND_PAGE_FILE`, то есть из того же места, где политика пути объявляет
+ * `/404` НЕ адресом: «какое тело читаем» и «какой путь не обслуживаем» не могут
+ * разойтись.
  *
  * Резерв поэтому достижим ровно в одном состоянии: артефакт собран без страницы
  * 404 (например, каталог `dist/client` подменён). Он отдаёт настоящий 404 и одну
@@ -130,7 +130,7 @@ async function loadNotFoundBody(clientRoot: string): Promise<Buffer | string> {
     return notFoundBody;
   }
   try {
-    notFoundBody = await readFile(path.join(clientRoot, PRERENDERED_NOT_FOUND_FILE));
+    notFoundBody = await readFile(path.join(clientRoot, NOT_FOUND_PAGE_FILE));
   } catch {
     notFoundBody = FALLBACK_NOT_FOUND_HTML;
   }

@@ -39,7 +39,10 @@
  *   - **пропускает адреса не тех схем.** Ссылкой становится либо путь от корня
  *     сайта, либо абсолютный `http`/`https`. `javascript:`, `data:` и прочее
  *     ссылкой не становятся вовсе — это не оформление, а исполняемый код в
- *     атрибуте;
+ *     атрибуте. Само правило здесь НЕ реализовано: оно одно на проект и живёт в
+ *     `publicRichTextHref` из `@otkritka/shared`, откуда его же берёт валидатор
+ *     поля в `apps/cms`. Так «что можно сохранить» и «что печатается ссылкой» не
+ *     расходятся молча;
  *   - **переносит строку пробелом.** Отдельного `<br>` нет: внутри вводного
  *     текста посадочной перенос — оформление, а склейка слов без пробела была бы
  *     потерей содержания. Тем же пробелом разделяются вложенные блоки внутри
@@ -62,7 +65,7 @@
  * проверяется юнит-тестом `tests/unit/web-rich-text.test.ts`.
  */
 
-import { looksLikeAbsoluteUrl } from '@otkritka/shared';
+import { publicRichTextHref, type PublicRichTextHref } from '@otkritka/shared';
 
 /**
  * Битовые маски форматирования текстового узла lexical — те, что разбор ПЕЧАТАЕТ.
@@ -162,8 +165,18 @@ interface LexicalNode {
  *
  * `horizontalrule` в списке есть: его пропуск — решение задачи Э3-06 (оформление
  * без содержания), а не потеря.
+ *
+ * НАБОР ЭКСПОРТИРУЕТСЯ РАДИ ТЕСТА, и это не послабление инкапсуляции. Со стороны
+ * CMS стоит парный набор `PUBLIC_RICH_TEXT_NODE_TYPES`
+ * (`apps/cms/src/editor/public-rich-text.ts`), и два набора объявлены «двумя
+ * половинами одной защиты». Машинной связи между ними не было: тип, добавленный
+ * в набор CMS без правки разбора, давал бы либо отказ на опубликованной странице
+ * (узел без детей), либо молча расплющенный блок (узел с детьми). Связь
+ * появилась тестом `tests/unit/rich-text-node-types.test.ts` — он импортирует
+ * ОБА набора и требует «набор CMS ⊆ этот набор» (находка вердикта `reviewer`,
+ * MINOR 2).
  */
-const PRINTABLE_NODE_TYPES: ReadonlySet<string> = new Set([
+export const PRINTABLE_NODE_TYPES: ReadonlySet<string> = new Set([
   'autolink',
   'heading',
   'horizontalrule',
@@ -254,29 +267,31 @@ function tagsFor(format: unknown): readonly string[] {
 /**
  * Адрес ссылки из полей узла либо `null`.
  *
- * Белый список, а не чёрный: пропускается путь от корня сайта и абсолютный
- * адрес по `http`/`https`. Всё остальное — включая `javascript:`, `data:`,
- * протокольно-относительную форму `//host` и внутреннюю ссылку по
- * идентификатору записи — ссылкой не становится (обоснование в шапке модуля).
+ * ЗДЕСЬ РЕШАЕТСЯ РОВНО ОДНО — вид ссылки: `linkType: 'internal'` ссылкой не
+ * становится, потому что путь записи по её идентификатору в чистом модуле не
+ * вычислить (обоснование в шапке модуля). Условие стоит ПЕРЕД предикатом и
+ * сильнее его: у внутренней ссылки в `fields.url` может лежать остаток от
+ * прошлой правки, и печатать его значило бы вести на чужой адрес.
+ *
+ * А вот белый список СХЕМ здесь не живёт: он один на весь проект и лежит в
+ * {@link publicRichTextHref} из `@otkritka/shared`. Тем же правилом `apps/cms`
+ * валидирует поле адреса в редакторе, поэтому «что можно сохранить» и «что
+ * печатается ссылкой» не расходятся. Локальная копия списка схем однажды уже
+ * стояла здесь (находка вердикта `reviewer`): расхождение копий дало бы либо
+ * молчаливую потерю ссылочности, либо адрес, который CMS принимает, а рендер
+ * выводит текстом. Согласие проверяется тестом
+ * `tests/unit/web-rich-text.test.ts` на корпусе адресов, где ожидания выводятся
+ * из самого предиката.
  */
-function hrefFor(fields: unknown): { readonly href: string; readonly external: boolean } | null {
+function hrefFor(fields: unknown): PublicRichTextHref | null {
   const record = asNode(fields);
   if (record === null) {
     return null;
   }
-  const raw = (record as { readonly url?: unknown }).url;
-  const linkType = (record as { readonly linkType?: unknown }).linkType;
-  if (linkType === 'internal' || typeof raw !== 'string') {
+  if ((record as { readonly linkType?: unknown }).linkType === 'internal') {
     return null;
   }
-  const url = raw.trim();
-  if (url === '') {
-    return null;
-  }
-  if (!looksLikeAbsoluteUrl(url)) {
-    return url.startsWith('/') ? { external: false, href: url } : null;
-  }
-  return /^https?:\/\//iu.test(url) ? { external: true, href: url } : null;
+  return publicRichTextHref((record as { readonly url?: unknown }).url);
 }
 
 /**

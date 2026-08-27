@@ -182,7 +182,20 @@ if (page > 1 && page > cardsPage.pageCount) {
 }
 
 if (paging.action === 'redirect-to-base') {
-  if (cardsPage.pageCount === 0 && children.length === 0) {
+  // Условие ДОСЛОВНО повторяет условие содержимого страницы
+  // (`collectionPageContent`: ни плиток, ни детей → `null` → 404), и это
+  // обязательно: 301 отдаётся только когда базовый URL отвечает 200.
+  //
+  // Проверять `pageCount === 0` было НЕДОСТАТОЧНО, и не «на всякий случай», а по
+  // замеру: у пустой выборки Payload ставит `totalPages: 1` при `totalDocs: 0`
+  // (`@payloadcms/drizzle/dist/find/findMany.js`), поэтому условие было
+  // недостижимо, и опубликованный узел без открыток и без детей отдавал по
+  // `/page/1` одиночный 301 на адрес, который сам отвечает 404 — прямо против
+  // инварианта из шапки этого файла. Тот же замер уже был учтён в каталоге
+  // (`../../data/catalog.ts`), а здесь нет: две копии одного правила разошлись.
+  // Находка вердикта `reviewer` (MAJOR 1); смоук на `/page/1` пустого узла — в
+  // `apps/web/scripts/smoke-pages.ts`.
+  if (cardsPage.cards.length === 0 && children.length === 0) {
     // Базовый URL сам отвечает 404 (ни открыток, ни детей) — редиректа нет.
     return new Response(null, { status: 404 });
   }

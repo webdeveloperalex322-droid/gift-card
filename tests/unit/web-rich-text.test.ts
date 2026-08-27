@@ -15,6 +15,8 @@ import { pathToFileURL } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { publicRichTextHref } from '@otkritka/shared';
+
 import {
   DECLINED_TEXT_FORMAT_BITS,
   richTextBlocks,
@@ -271,6 +273,70 @@ describe('ссылки внутри вводного текста', () => {
 
     expect(run?.href).toBe('/podborki/adresaty/mame');
     expect(run?.tags).toEqual(['strong']);
+  });
+
+  /**
+   * ЕДИНСТВЕННОСТЬ ПРАВИЛА «какой адрес печатается ссылкой».
+   *
+   * Разбор `apps/web` и валидатор поля в `apps/cms` обязаны решать это одинаково:
+   * иначе редактор сохранит адрес, который рендер напечатает ТЕКСТОМ (потеря
+   * ссылочности без единой ошибки), либо наоборот — валидатор откажет в адресе,
+   * который рендер вывел бы ссылкой. Правило живёт в `@otkritka/shared`
+   * (`publicRichTextHref`), и здесь проверяется, что `apps/web` пользуется именно
+   * им, а не своей копией белого списка схем (находка вердикта `reviewer`,
+   * MAJOR 2).
+   *
+   * Ожидания НЕ выписаны руками намеренно: они выводятся из предиката. Тест
+   * поэтому ловит расхождение при любом изменении набора схем — включая то, о
+   * котором автор правки не подумал.
+   */
+  it('решение «ссылка или текст» приходит из предиката @otkritka/shared', () => {
+    const corpus: readonly string[] = [
+      '/podborki/prazdniki/8-marta',
+      '/otkrytki/otkrytka-mame-na-8-marta',
+      '/',
+      'https://example.test/a',
+      'http://example.test',
+      'HTTPS://EXAMPLE.TEST/a',
+      'javascript:alert(1)',
+      'data:text/html,<script>alert(1)</script>',
+      '//chuzhoy.test/x',
+      'mailto:a@b.test',
+      'tel:+70000000000',
+      'ftp://example.test/file',
+      'otnositelnyy/put',
+      '  /podborki/adresaty/mame  ',
+      '   ',
+      '',
+    ];
+
+    for (const url of corpus) {
+      const expected = publicRichTextHref(url);
+      const run = firstRun(linkDoc({ linkType: 'custom', url }));
+
+      expect(run.href, `адрес «${url}»`).toBe(expected === null ? null : expected.href);
+      expect(run.external, `внешность адреса «${url}»`).toBe(expected?.external ?? false);
+      // Слова не теряются ни в одном из исходов — это отдельное требование.
+      expect(run.text, `текст ссылки «${url}»`).toBe('ссылка');
+    }
+  });
+
+  it('внутренняя ссылка по идентификатору остаётся текстом ДАЖЕ при заполненном url', () => {
+    // Проверка границы между общим правилом и локальным: предикат про схемы
+    // ничего не знает о `linkType`, поэтому условие `linkType === 'internal'`
+    // остаётся здесь — и обязано быть сильнее предиката. Иначе ссылка на запись,
+    // у которой в `fields.url` лежит остаток от прошлой правки, повела бы на
+    // чужой адрес.
+    const run = firstRun(
+      linkDoc({
+        linkType: 'internal',
+        url: '/podborki/prazdniki/8-marta',
+        doc: { relationTo: 'collections', value: 7 },
+      }),
+    );
+
+    expect(run.href).toBeNull();
+    expect(run.text).toBe('ссылка');
   });
 });
 

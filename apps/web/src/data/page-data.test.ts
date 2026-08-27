@@ -755,7 +755,7 @@ describe('фильтр представления на странице подб
     expect(filtered.jsonLd).toBeNull();
   });
 
-  it('ряд ссылок фильтра строится от canonical страницы, сброс ведёт на чистый путь', () => {
+  it('ряд ссылок фильтра строится от АДРЕСА страницы, сброс ведёт на её чистый путь', () => {
     const filtered = collectionContent({
       cards: [vertical, horizontal],
       page: 2,
@@ -763,11 +763,51 @@ describe('фильтр представления на странице подб
       view: FILTER,
     });
 
-    expect(filtered.filterOptions[0]?.href).toBe(filtered.canonicalPath);
     expect(filtered.filterOptions[0]?.href).toBe('/podborki/prazdniki/8-marta/page/2');
     for (const option of filtered.filterOptions) {
-      expect(option.href.startsWith(filtered.canonicalPath)).toBe(true);
+      expect(option.href.startsWith('/podborki/prazdniki/8-marta/page/2')).toBe(true);
     }
+  });
+
+  it('переопределённый canonical не уводит ссылки фильтра на чужой путь', () => {
+    // Найдено вердиктами `reviewer` и `url-guard` (независимо друг от друга).
+    // Ряд строился от `canonicalPath`, а на ПЕРВОЙ странице это может быть
+    // переопределение из поля `canonical` записи. Тогда и пункт сброса, и все
+    // ссылки фильтра вели на адрес ДРУГОЙ страницы, а пагинация рядом считалась
+    // от собственного пути записи — то есть один блок страницы уводил с неё, а
+    // другой оставался. Правильный источник один: адрес самой страницы.
+    const node = collection({
+      canonical: '/podborki/prazdniki/8-marta',
+      path: '/podborki/prazdniki/8-marta/mame',
+    });
+
+    const first = collectionContent({
+      cards: [vertical, horizontal],
+      node,
+      pageCount: 2,
+      view: FILTER,
+    });
+    expect(first.canonicalPath).toBe('/podborki/prazdniki/8-marta');
+    expect(first.filterOptions[0]?.href).toBe('/podborki/prazdniki/8-marta/mame');
+    for (const option of first.filterOptions) {
+      expect(option.href.startsWith('/podborki/prazdniki/8-marta/mame')).toBe(true);
+    }
+    // Ряд фильтра и пагинация считаются от ОДНОГО источника — пути записи.
+    const firstEntry = first.pagination?.entries[0];
+    expect(firstEntry?.kind === 'page' ? firstEntry.path : null).toBe(
+      '/podborki/prazdniki/8-marta/mame',
+    );
+
+    // На страницах 2+ переопределение в canonical не участвует вовсе, и ряд
+    // остаётся на своей странице — свойство от правки не изменилось.
+    const second = collectionContent({
+      cards: [vertical, horizontal],
+      node,
+      page: 2,
+      pageCount: 2,
+      view: FILTER,
+    });
+    expect(second.filterOptions[0]?.href).toBe('/podborki/prazdniki/8-marta/mame/page/2');
   });
 
   it('чужие параметры страницу не меняют вовсе', () => {

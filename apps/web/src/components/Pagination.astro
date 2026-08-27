@@ -15,6 +15,13 @@
  *     страницы нечем по построению;
  *   - `rel="next"`/`rel="prev"` НЕ выводятся. Google их не использует, а ошибка
  *     в них дороже отсутствия (решение задачи Э3-07);
+ *   - ссылка с НЕПУСТОЙ строкой запроса получает `rel="nofollow"`. Адреса с
+ *     параметрами не участвуют в перелинковке (ТЗ §6.5), и на отфильтрованном
+ *     виде без этого обходимым становилось бы всё произведение «страницы ×
+ *     форматы» — при том, что ровно такие адреса уже закрывает `FilterRow.astro`
+ *     (находка вердикта `reviewer`, MINOR 1). На чистом списке `rel` не
+ *     появляется: это обычные внутренние ссылки, обход которых и держит
+ *     достижимость открыток за первой страницей;
  *   - текущая страница — `<span aria-current="page">`, а не ссылка на себя;
  *   - разрыв в списке номеров помечен видимым многоточием и скрыт от
  *     вспомогательных технологий (`aria-hidden`): это оформление, а не элемент
@@ -43,6 +50,11 @@ interface Props {
 }
 
 const { ariaLabel = 'Страницы списка', model, query = '' } = Astro.props;
+
+// Одно значение на весь блок: строка запроса у всех звеньев одна и та же, потому
+// что фильтр не пересобирает список, а меняет представление его страниц.
+// `undefined` печатает атрибут отсутствующим, а не пустым.
+const rel = query === '' ? undefined : 'nofollow';
 ---
 
 <nav class="pagination" aria-label={ariaLabel}>
@@ -50,7 +62,9 @@ const { ariaLabel = 'Страницы списка', model, query = '' } = Astro
     {
       model.previousPath === null ? null : (
         <li>
-          <a class="pagination__step" href={`${model.previousPath}${query}`}>Предыдущая</a>
+          <a class="pagination__step" href={`${model.previousPath}${query}`} rel={rel}>
+            Предыдущая
+          </a>
         </li>
       )
     }
@@ -64,7 +78,7 @@ const { ariaLabel = 'Страницы списка', model, query = '' } = Astro
           </li>
         ) : (
           <li>
-            <a class="pagination__page" href={`${entry.path}${query}`}>{entry.page}</a>
+            <a class="pagination__page" href={`${entry.path}${query}`} rel={rel}>{entry.page}</a>
           </li>
         ),
       )
@@ -72,7 +86,9 @@ const { ariaLabel = 'Страницы списка', model, query = '' } = Astro
     {
       model.nextPath === null ? null : (
         <li>
-          <a class="pagination__step" href={`${model.nextPath}${query}`}>Следующая</a>
+          <a class="pagination__step" href={`${model.nextPath}${query}`} rel={rel}>
+            Следующая
+          </a>
         </li>
       )
     }

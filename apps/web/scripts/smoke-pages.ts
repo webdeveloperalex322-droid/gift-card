@@ -584,6 +584,41 @@ async function main(): Promise<void> {
 
     const occasion = await makeNode(`${PREFIX}-povod`, 'Смоук Э3-05: повод с открытками');
 
+    /**
+     * Узел, который ОПУСТЕЕТ после снятия открытки, — фикстура принятого риска
+     * Э3-13-A (`docs/otkrytye-voprosy.md`).
+     *
+     * Публиковать пустой узел CMS не даёт (`empty-for-publish`), но граница
+     * односторонняя: она сторожит переход ВПЕРЁД. Отвязка последней открытки
+     * оставляет узел опубликованным и пустым, и в этом состоянии базовый URL
+     * законно отвечает 404. Проверяется здесь ровно то, что на таком узле
+     * `/page/1` тоже отвечает 404, а НЕ отдаёт одиночный 301 на адрес с 404
+     * (находка вердикта `reviewer`, MAJOR 1: условие ветки редиректа было
+     * `pageCount === 0`, а Payload при `totalDocs: 0` ставит `totalPages: 1`,
+     * поэтому условие было недостижимо).
+     *
+     * Родителя у узла нет намеренно: ребёнком группы он добавил бы в её блок
+     * «Разделы подборки» ссылку на адрес с 404 и смешал бы проверку редиректа с
+     * проверкой перелинковки. Здесь проверяется статус ответа, а не то, откуда
+     * на этот адрес ссылаются.
+     */
+    const emptied = await payload.create({
+      collection: 'collections',
+      data: {
+        intro: INTRO,
+        metaDescription: 'Смоук Э3-05: узел, опустевший после отвязки открытки.',
+        nodeKind: 'occasion',
+        related: [group.id],
+        responsibleEditor: adminId,
+        robots: 'noindex,follow',
+        slug: `${PREFIX}-opustevshiy`,
+        status: 'draft',
+        title: 'Смоук Э3-05: узел, опустевший после отвязки',
+      },
+      ...asAdmin,
+    });
+    created.collections.push(emptied.id);
+
     await payload.update({
       collection: 'collections',
       id: group.id,
@@ -601,14 +636,16 @@ async function main(): Promise<void> {
     // публикуется независимо от статуса своих подборок. Обратный порядок —
     // прежний в этом смоуке — теперь получает отказ `thin-content-for-publish`.
     //
-    // Узла «повод без открыток» в фикстурах больше нет по той же причине: пустую
-    // подборку CMS публиковать не даёт вовсе, поэтому состояние «опубликованная
-    // подборка без содержания» через админку и API недостижимо. Ветка 404 в
-    // шаблоне остаётся защитной и проверяется юнит-тестом
-    // (`collectionPageContent` возвращает null).
+    // Узла, ПУСТОГО С САМОГО НАЧАЛА, в фикстурах нет и быть не может: публикацию
+    // пустой подборки CMS отклоняет (`empty-for-publish`). А вот узел, ОПУСТЕВШИЙ
+    // после отвязки последней открытки, достижим — граница CMS односторонняя
+    // (принятый риск Э3-13-A). Именно он и заведён выше (`emptied`): состояние
+    // «опубликованная подборка без содержания» проверяется на живом сервере, а не
+    // объявляется недостижимым.
 
     const makeCard = async (args: {
       readonly composition?: 'grid' | 'rings' | 'stripes';
+      readonly collections?: readonly number[];
       readonly slug: string;
       readonly title: string;
     }): Promise<number> => {
@@ -619,7 +656,7 @@ async function main(): Promise<void> {
         data: {
           alt: `Синтетический узор фикстуры: ${args.title}`,
           caption: `Подпись смоука: ${args.title}`,
-          collections: [occasion.id, group.id],
+          collections: [...(args.collections ?? [occasion.id, group.id])],
           description: `Видимое описание открытки «${args.title}».`,
           ...(imageId === undefined ? {} : { image: imageId }),
           metaDescription: `Смоук Э3-05, meta description: ${args.title}`,
@@ -649,6 +686,18 @@ async function main(): Promise<void> {
       slug: `${PREFIX}-otkrytka-tri`,
       title: 'Смоук Э3-05: открытка третья',
     });
+    // Единственная открытка узла `emptied`. Второй её подборкой стоит ГРУППА, а не
+    // `occasion`, по двум причинам сразу: после отвязки карточка не остаётся без
+    // подборок (это требование полноты перед `review`), и корпус пагинации
+    // `occasion` не меняется — иначе на второй странице списка оказалось бы две
+    // плитки вместо одной, и проверка границы расчёта страниц перестала бы её
+    // проверять.
+    const detachableCardId = await makeCard({
+      collections: [group.id, emptied.id],
+      composition: 'rings',
+      slug: `${PREFIX}-otkrytka-otvyazyvaemaya`,
+      title: 'Смоук Э3-05: открытка, отвязываемая от узла',
+    });
     // Черновик остаётся в `draft`: идентификатор дальше не нужен — запись
     // проверяется по её адресу, который обязан отвечать 404.
     await makeCard({
@@ -661,7 +710,7 @@ async function main(): Promise<void> {
       title: 'Смоук Э3-05: открытка в review',
     });
 
-    for (const id of [mainCardId, secondCardId, thirdCardId]) {
+    for (const id of [mainCardId, secondCardId, thirdCardId, detachableCardId]) {
       await publish('cards', id);
     }
     await toReview('cards', reviewCardId);
@@ -718,6 +767,20 @@ async function main(): Promise<void> {
     // ребёнка — ссылки на неопубликованный узел не бывает.
     await publish('collections', group.id);
     await publish('collections', occasion.id);
+    // Узел `emptied` публикуется, ПОКА у него есть открытка, — иначе CMS
+    // справедливо откажет (`empty-for-publish`).
+    await publish('collections', emptied.id);
+
+    // …и опустевает отвязкой этой открытки. Ровно так состояние
+    // «опубликованный узел без содержания» и возникает в жизни (принятый риск
+    // Э3-13-A): граница CMS сторожит переход вперёд, а не назад. Отвязка идёт ДО
+    // старта сервера, потому что проверяются ответы уже опустевшего узла.
+    await payload.update({
+      collection: 'cards',
+      id: detachableCardId,
+      data: { collections: [group.id] },
+      ...asAdmin,
+    });
 
     /* ------------------------------------------------------------ */
     /* Собранный сервер                                             */
@@ -1090,6 +1153,31 @@ async function main(): Promise<void> {
         `номер вне диапазона — 404 без редиректа: ${target}`,
         response.status === 404 && response.headers.location === undefined,
         `status=${String(response.status)}`,
+      );
+    }
+
+    /* ------------------------------------------------------------ */
+    /* 4a. Опустевший узел: 301 не ведёт на 404                     */
+    /* ------------------------------------------------------------ */
+    //
+    // Инвариант шаблона: `/page/1` отдаёт одиночный 301 ТОЛЬКО когда базовый URL
+    // отвечает 200. У опубликованного, но опустевшего узла базовый URL отвечает
+    // 404, значит и `/page/1` обязан отвечать 404, а не отправлять клиента на
+    // адрес с 404 (находка вердикта `reviewer`, MAJOR 1).
+
+    const emptiedPath = `/podborki/${PREFIX}-opustevshiy`;
+    const emptiedBase = await request(emptiedPath);
+    record(
+      'опустевший узел: базовый URL отдаёт 404, а не 200 с пустой сеткой',
+      emptiedBase.status === 404,
+      `status=${String(emptiedBase.status)}`,
+    );
+    for (const target of [`${emptiedPath}/page/1`, `${emptiedPath}/page/2`]) {
+      const response = await request(target);
+      record(
+        `опустевший узел: ${target} — 404 без Location (301 на 404 запрещён)`,
+        response.status === 404 && response.headers.location === undefined,
+        `status=${String(response.status)} location=${String(response.headers.location)}`,
       );
     }
 

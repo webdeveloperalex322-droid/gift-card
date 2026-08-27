@@ -470,6 +470,14 @@ export function collectionPageContent(input: CollectionPageInput): CollectionPag
   const canonicalPath = isFirstPage
     ? canonicalPathFor(input.node.canonical, path)
     : paginationPathFor(path, page);
+  // АДРЕС САМОЙ СТРАНИЦЫ — не то же, что её canonical, и разводить их обязательно.
+  // canonical на первой странице может быть переопределением из поля `canonical`
+  // записи, то есть указывать на ДРУГУЮ страницу; адрес же всегда собирается из
+  // сохранённого пути. Всё, что ведёт «сюда же» (ряд фильтра, пункт сброса
+  // фильтра), обязано брать этот путь, иначе ссылки уводили бы с той страницы,
+  // на которой напечатаны (находка вердиктов `reviewer` и `url-guard`).
+  // `/page/1` не возникает: `paginationPathFor` на номере 1 отдаёт базовый путь.
+  const pagePath = paginationPathFor(path, page);
   // Заголовок и title получают номер страницы: два одинаковых title на двух
   // адресах — это дубль (п. 22.1). Правило одно на подборку и на каталог и живёт
   // в ../routing/pagination.ts.
@@ -492,10 +500,10 @@ export function collectionPageContent(input: CollectionPageInput): CollectionPag
     canonicalPath,
     children,
     filter: view,
-    // Ряд ссылок строится от canonical ЭТОЙ страницы: на второй странице списка
-    // фильтр остаётся на второй странице, а сброс ведёт на её чистый адрес.
-    // `/page/1` при этом не возникает — путь берётся готовым, а не собирается.
-    filterOptions: filterOptions(canonicalPath, view),
+    // Ряд ссылок строится от АДРЕСА этой страницы: на второй странице списка
+    // фильтр остаётся на второй странице, а сброс ведёт на её чистый адрес. Тот
+    // же источник, что у пагинации ниже, — и это условие, а не совпадение.
+    filterOptions: filterOptions(pagePath, view),
     heading,
     intro: isFirstPage ? input.node.intro : null,
     jsonLd:
