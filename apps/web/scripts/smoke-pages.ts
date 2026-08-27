@@ -72,6 +72,7 @@ import type { Collection } from '@otkritka/cms/types';
 
 import { createPngFixture } from '../../cms/src/images/png-fixture.js';
 import { DEFAULT_CARDS_PER_PAGE, payloadClient } from '../src/data/index.js';
+import { serverChildEnv } from './server-child-env.mjs';
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const serverEntry = path.join(appDir, 'dist', 'server', 'entry.mjs');
@@ -724,7 +725,10 @@ async function main(): Promise<void> {
 
     server = spawn(process.execPath, [serverEntry], {
       cwd: appDir,
-      env: { ...process.env, HOST, PORT: String(PORT), SITE_URL: ORIGIN },
+      // Окружение собирает `./server-child-env.mjs`: он добавляет виртуальное
+      // хранилище pnpm в NODE_PATH, иначе собранный сервер падает на
+      // динамическом импорте `drizzle-kit/api` при первом обращении к базе.
+      env: serverChildEnv(appDir, { HOST, PORT: String(PORT), SITE_URL: ORIGIN }),
       stdio: ['ignore', 'inherit', 'inherit'],
     });
     await waitForServer();

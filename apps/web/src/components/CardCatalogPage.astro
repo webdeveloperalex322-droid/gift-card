@@ -19,8 +19,14 @@
  *   - **ноль клиентского JS**, навигация только `<a href>`;
  *   - **self-canonical и директива робота** приходят готовыми: у страницы
  *     пагинации canonical указывает на неё саму, а директива — `noindex,follow`
- *     (решение Ч-01b).
+ *     (решение Ч-01b);
+ *   - **рекламные ряды** (Ч-11, задача Э3-12): под H1 над сеткой и после
+ *     пагинации. Ряд под H1 стоит ПОСЛЕ вводного абзаца — «под H1, над сеткой» по
+ *     Ч-11 и «первый экран не занят рекламой полностью» по ТЗ §5.7 выполняются
+ *     оба только в этом порядке. Незаполненные места не печатаются вовсе
+ *     (`../seo/ad-slots.ts`).
  */
+import AdRow from './AdRow.astro';
 import CardGrid from './CardGrid.astro';
 import Breadcrumbs from './Breadcrumbs.astro';
 import Pagination from './Pagination.astro';
@@ -55,9 +61,13 @@ const jsonLd = jsonLdScriptText(body.jsonLd);
     body.page === 1 ? <p class="catalog__lead">{facts.lead}</p> : null
   }
 
+  <AdRow slots={body.ads.underH1} position="under-h1" />
+
   <CardGrid tiles={body.tiles} prioritizeFirst ariaLabel={facts.listLabel} />
 
   {body.pagination === null ? null : <Pagination model={body.pagination} />}
+
+  <AdRow slots={body.ads.afterPagination} position="after-pagination" />
 
   <script type="application/ld+json" is:inline set:html={jsonLd} />
 </BaseLayout>

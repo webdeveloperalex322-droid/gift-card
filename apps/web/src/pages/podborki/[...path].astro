@@ -75,16 +75,44 @@
  *     отвечает 200: иначе получился бы переход на 404;
  *   - номер больше числа страниц — 404, а не 200 с пустой сеткой.
  *
- * ## Чего на странице ещё нет и кто это делает
+ * ## Фильтр представления (задача Э3-10)
  *
- * Рекламные места (два ряда по три блока, Ч-11) — задача Э3-12: ряд под H1 (над
- * сеткой) и ряд после пагинации встают в плоскую разметку без переделки.
+ * `?format=…` меняет ТО, ЧТО ВИДНО, и не создаёт адресов:
+ *
+ *   - canonical остаётся чистым путём страницы — параметр в него не попадает
+ *     (ТЗ §6.5), поэтому набор параметров на канонический адрес не влияет вовсе;
+ *   - отфильтрованное представление получает `noindex` (ТЗ §5.2: фильтры — всегда
+ *     `noindex`), и только в сторону закрытия;
+ *   - статус ответа от параметров НЕ зависит: решение «страница существует»
+ *     принимается по записи до применения фильтра. Иначе один адрес отдавал бы
+ *     200 без хвоста ссылки и 404 с ним;
+ *   - пагинация не пересобирается: фильтр прячет плитки на страницах
+ *     канонического списка, а не заводит свой список. Ссылки пагинации несут
+ *     строку запроса, и `/page/1` среди них по-прежнему не появляется.
+ *
+ * Измерение фильтра — формат открытки (вертикальная / горизонтальная /
+ * квадратная): он считается по фактическим размерам файла. Стиля и настроения
+ * среди фильтров нет — значений человек не утверждал, а придумывать данные за
+ * него нельзя (Ч-04-3 запрещает лишь отдельные URL под них, но не отменяет
+ * отсутствия самих значений).
+ *
+ * ## Рекламные места (задача Э3-12, решение Ч-11)
+ *
+ * Два ряда: под H1 над сеткой и после пагинации. Ряд под H1 стоит ПОСЛЕ вводного
+ * текста и фильтра — «под H1, над сеткой» по Ч-11 и «первый экран не занят
+ * рекламой полностью» по ТЗ §5.7 выполняются оба только в этом порядке. Блок с
+ * незаполненными размерами не печатается вовсе, иначе резерв был бы нулевым и
+ * появление баннера сдвинуло бы макет (`../../seo/ad-slots.ts`).
+ *
+ * ## Чего на странице ещё нет и кто это делает
  *
  * Каталог `/podborki` живёт в соседнем маршруте (`./index.astro`, задача Э3-08),
  * поэтому пустой рест-параметр сюда больше не приходит.
  */
+import AdRow from '../../components/AdRow.astro';
 import CardGrid from '../../components/CardGrid.astro';
 import Breadcrumbs from '../../components/Breadcrumbs.astro';
+import FilterRow from '../../components/FilterRow.astro';
 import Pagination from '../../components/Pagination.astro';
 import RichText from '../../components/RichText.astro';
 import {
@@ -95,11 +123,14 @@ import {
   listChildCollections,
   listCollectionCards,
   listRelatedCollections,
+  readSiteSettings,
   relationId,
   relationIds,
 } from '../../data';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import { decidePageParam, splitPaginatedPath } from '../../routing/pagination';
+import { parseViewParams, viewParamsQuery } from '../../routing/view-params';
+import { adRows } from '../../seo/ad-slots';
 import { jsonLdScriptText } from '../../seo/json-ld';
 import { richTextBlocks } from '../../seo/rich-text';
 import { serverEnv } from '../../server-env';
@@ -164,6 +195,10 @@ if (paging.action === 'redirect-to-base') {
   });
 }
 
+// Параметры представления разбираются ПОСЛЕ всех решений о статусе: фильтр
+// меняет то, что видно, и ни на 200, ни на 301, ни на 404 не влияет.
+const view = parseViewParams(Astro.url.searchParams);
+
 const content = collectionPageContent({
   cards: cardsPage.cards,
   children,
@@ -173,14 +208,25 @@ const content = collectionPageContent({
   pageCount: cardsPage.pageCount,
   parent,
   related,
+  view,
 });
 if (content === null) {
   return new Response(null, { status: 404 });
 }
 
-const trail = await collectionBreadcrumbTrail(node, page);
+// Настройки читаются ПОСЛЕ всех решений о статусе: рекламные места ни на 200, ни
+// на 301, ни на 404 не влияют.
+const [trail, settings] = await Promise.all([
+  collectionBreadcrumbTrail(node, page),
+  readSiteSettings(),
+]);
+const ads = adRows(settings.adSlots);
 const intro = richTextBlocks(content.intro);
-const jsonLd = jsonLdScriptText(content.jsonLd);
+// Разметки нет ровно тогда, когда нет видимого списка: фильтр не оставил плиток,
+// а дочерних узлов у подборки нет. `ItemList` без элементов описывал бы то, чего
+// на экране не видно.
+const jsonLd = content.jsonLd === null ? null : jsonLdScriptText(content.jsonLd);
+const filterQuery = viewParamsQuery(view);
 // Дата содержательного обновления показывается ровно тогда, когда она есть в
 // записи, и в разметку `dateModified` попадает то же значение (ТЗ §5.3).
 // Формат — ISO в атрибуте `datetime` и день по-русски в тексте.
@@ -203,13 +249,47 @@ const updatedLabel =
 
   {intro.length === 0 ? null : <RichText blocks={intro} />}
 
+  {content.tilesOnPage === 0 ? null : <FilterRow options={content.filterOptions} />}
+
+  <AdRow slots={ads.underH1} position="under-h1" />
+
+  {
+    /* Видимая подпись фильтра: сколько плиток этой страницы он оставил. Без неё
+       посетитель считал бы, что список кончился, тогда как остальные открытки
+       просто скрыты выбранным форматом. */
+    content.filter.format === null || content.tilesOnPage === 0 ? null : (
+      <p class="collection__filtered">
+        Показано открыток: {content.tiles.length} из {content.tilesOnPage} на этой странице.
+      </p>
+    )
+  }
+
   {
     content.tiles.length === 0 ? null : (
       <CardGrid tiles={content.tiles} prioritizeFirst ariaLabel="Открытки подборки" />
     )
   }
 
-  {content.pagination === null ? null : <Pagination model={content.pagination} ariaLabel="Страницы подборки" />}
+  {
+    content.tilesOnPage > 0 && content.tiles.length === 0 ? (
+      <p class="collection__filtered">
+        На этой странице нет открыток выбранного формата. Снимите фильтр или загляните на
+        соседнюю страницу списка.
+      </p>
+    ) : null
+  }
+
+  {
+    content.pagination === null ? null : (
+      <Pagination
+        model={content.pagination}
+        ariaLabel="Страницы подборки"
+        query={filterQuery}
+      />
+    )
+  }
+
+  <AdRow slots={ads.afterPagination} position="after-pagination" />
 
   {
     content.children.length === 0 ? null : (
@@ -261,10 +341,16 @@ const updatedLabel =
     )
   }
 
-  <script type="application/ld+json" is:inline set:html={jsonLd} />
+  {jsonLd === null ? null : <script type="application/ld+json" is:inline set:html={jsonLd} />}
 </BaseLayout>
 
 <style>
+  .collection__filtered {
+    margin-block: 1rem 0;
+    font-size: 0.9375rem;
+    opacity: 0.85;
+  }
+
   .collection__updated {
     margin-block-start: 2rem;
     font-size: 0.875rem;

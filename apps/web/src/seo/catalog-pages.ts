@@ -47,6 +47,7 @@ import {
   type RobotsDirective,
 } from '../routing/pagination.js';
 import { type BreadcrumbTrail, buildBreadcrumbTrail } from './breadcrumbs.js';
+import { SEARCH_PAGE, SEARCH_PATH } from './search-page.js';
 
 /**
  * Ключи каталогов названы по коллекции, содержимое которой каталог перечисляет, а
@@ -123,13 +124,22 @@ export interface NavLink {
  * навигация, а не крошки — в крошках ссылки на текущую страницу нет по правилу
  * ТЗ §7.6, здесь же пункт помечается `aria-current="page"`.
  *
- * Служебные страницы (`/o-proekte`, `/usloviya`, `/kontakty`) и поиск в меню
- * появятся на своих задачах — Э3-10 и Э3-11; список ведётся добавлением.
+ * Служебные информационные страницы (`/o-proekte`, `/usloviya`, `/kontakty`) в
+ * меню не входят: их ряд печатает подвал (`./info-pages.ts`, задача Э3-11) — так
+ * условие «страница входит в навигацию» выполняется на каждой странице, не
+ * отнимая места у каталогов.
+ *
+ * Пункт «Поиск» добавлен на Э3-10. Он ведёт на неиндексируемую страницу, и это
+ * не противоречие: пункт меню — навигация для посетителя, а `/search` закрыт
+ * `noindex` и (этап 4) директивой `Disallow` в robots.txt. Ссылка при этом
+ * обязательна на странице 404 по ТЗ §5.6, а держать её только там значило бы
+ * прятать поиск от того, кто ничего не сломал.
  */
 export const SITE_NAV: readonly NavLink[] = [
   { label: 'Главная', path: '/' },
   { label: CATALOGS.cards.heading, path: CATALOGS.cards.path },
   { label: CATALOGS.collections.heading, path: CATALOGS.collections.path },
+  { label: SEARCH_PAGE.heading, path: SEARCH_PATH },
 ];
 
 /** Голова документа и директива робота для страницы каталога. */

@@ -56,6 +56,8 @@ import {
   type RecordId,
   relatedCollectionsQuery,
   rootCollectionsQuery,
+  searchCardsQuery,
+  searchCollectionsQuery,
   seasonalCollectionsQuery,
   similarCardsQueries,
   type SimilarCardsQueryInput,
@@ -261,6 +263,28 @@ export async function listSimilarCards(
     older: readable(older.docs),
     ...(input.limit === undefined ? {} : { limit: input.limit }),
   });
+}
+
+/**
+ * Внутренний поиск по открыткам (ТЗ §5.5).
+ *
+ * Возвращает не больше `limit` записей: страницы результатов у поиска нет — её
+ * отсутствие обосновано в `../seo/search-page.ts`.
+ */
+export async function searchCards(query: string, limit: number): Promise<readonly Card[]> {
+  const { docs } = await findMany(searchCardsQuery({ limit, query }));
+  return (docs as Card[]).map((card) => assertPublicallyReadable(card, 'найденную карточку'));
+}
+
+/** Внутренний поиск по подборкам — поиск «по атрибутам» из ТЗ §5.5. */
+export async function searchCollections(
+  query: string,
+  limit: number,
+): Promise<readonly Collection[]> {
+  const { docs } = await findMany(searchCollectionsQuery({ limit, query }));
+  return (docs as Collection[]).map((node) =>
+    assertPublicallyReadable(node, 'найденную подборку'),
+  );
 }
 
 /** Свежие опубликованные карточки. */

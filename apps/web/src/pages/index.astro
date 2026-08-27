@@ -1,41 +1,171 @@
 ---
 /**
- * Техническая страница-заглушка на корне сайта.
+ * Главная страница — `/` (задача Э3-09).
  *
- * Её единственное назначение — дать `pnpm dev`, `pnpm build` и curl'у что
- * проверять: что сервер отдаёт готовый HTML, что правило завершающего слеша
- * работает, что canonical абсолютный и собран из `SITE_URL`.
+ * Норма: ТЗ §5.2 (заголовок и вводный блок с уникальным текстом; блоки
+ * «актуальные праздничные подборки», «популярные разделы», «свежие открытки»;
+ * сезонные блоки управляются датами из админки; JSON-LD `WebSite` +
+ * `Organization`), решение Ч-17 (при незаполненном глобале блок `Organization`
+ * не выводится вовсе), следствие Ч-04-5 (прямые ссылки с главной на праздничные
+ * узлы), `CLAUDE.md` — разделы «Рендеринг», «Правила индексации»,
+ * «Структурированные данные».
  *
- * Настоящая главная — задача Э3-09. Никаких других маршрутов на этой задаче не
- * создаётся: массовое создание URL до готовности контента запрещено п. 23 ТЗ, а
- * `/otkrytki`, `/podborki` и информационные страницы — задачи Э3-05…Э3-11.
+ * До этой задачи по адресу стояла техническая заглушка Э3-01.
  *
- * Директива `noindex,follow`, и это не перестраховка: страница не удовлетворяет
- * ни одному условию п. 5.1 ТЗ (нет содержания, нет открыток, нет навигации).
- * Открыть страницу в `index,follow` может только человек с ролью `admin`.
+ * ## Почему маршрут SSR, а не пререндер
+ *
+ * Критерий готовности задачи: сезонный блок переключается по датам из CMS БЕЗ
+ * ПЕРЕСБОРКИ. Пререндер зафиксировал бы и состав блока, и день, на который он
+ * собран, в артефакте — «управление из админки» превратилось бы в «управление
+ * деплоем». Поэтому `prerender = false`, а день берётся на запросе и передаётся
+ * аргументом (`homePage(new Date())`).
+ *
+ * ## Инварианты, закодированные здесь
+ *
+ *   - **ровно один `<h1>`** — заголовок из `HOME_PAGE`; заголовки блоков `<h2>`;
+ *   - **весь текст и все ссылки — в ответе сервера**, ноль клиентского JS,
+ *     навигация только `<a href>`;
+ *   - **первое крупное изображение одно** — первая плитка блока свежих открыток
+ *     (`prioritizeFirst`); выше на странице изображений нет;
+ *   - **ссылки только на опубликованные записи**: сезонные подборки, разделы и
+ *     открытки приходят из слоя данных, а он читает правами анонима. Статических
+ *     ссылок на узлы таксономии в коде нет — узел может быть не опубликован, и
+ *     вписанная ссылка вела бы на 404 (то же правило, что у меню на Э3-08);
+ *   - **`noindex,follow`** — открыть главную в индекс может только человек.
+ *
+ * ## Почему блок, для которого нет данных, не печатается
+ *
+ * Заголовок «Подборки к ближайшим праздникам» над пустым местом — обещание,
+ * которого страница не выполняет. Пока сезонных подборок нет, блока нет вовсе;
+ * то же у разделов и у свежих открыток. Сама страница при этом отвечает 200
+ * всегда: у главной, в отличие от списка, содержание не сводится к записям
+ * (обоснование — шапка `../data/home.ts`).
+ *
+ * ## Чего на странице нет и почему
+ *
+ * Рекламных мест (Ч-11): решение называет две позиции — под H1 над сеткой и
+ * после пагинации, — и обе привязаны к странице СПИСКА с пагинацией. У главной
+ * пагинации нет, поэтому вторая позиция здесь неопределима, а ставить рекламу
+ * по собственному разумению агент не будет: место рекламы на главной — решение
+ * человека (вынесено в отчёт задачи Э3-12).
  */
+import CardGrid from '../components/CardGrid.astro';
+import SearchForm from '../components/SearchForm.astro';
+import { homePage } from '../data';
 import BaseLayout from '../layouts/BaseLayout.astro';
+import { HOME_PAGE } from '../seo/home-page';
+import { jsonLdScriptText } from '../seo/json-ld';
+import { serverEnv } from '../server-env';
 
-// Страница отдаётся по запросу, а не пререндерится. Так canonical и директива
-// robots собираются из окружения ТОГО сервера, который отвечает, а не того,
-// который однажды собрал артефакт. Форма гибридного режима в astro 7 —
-// именно этот флаг, см. комментарий в astro.config.mjs.
 export const prerender = false;
+
+const content = await homePage(new Date(), serverEnv());
+const jsonLd = jsonLdScriptText(content.jsonLd);
 ---
 
 <BaseLayout
-  title="Открытки — сайт в разработке"
-  description="Служебная страница: сайт поздравительных открыток находится в разработке, содержание ещё не опубликовано."
-  canonicalPath="/"
-  robots="noindex,follow"
+  title={content.view.title}
+  description={content.view.metaDescription}
+  canonicalPath={content.view.canonicalPath}
+  robots={content.view.robots}
 >
-  <h1>Сайт в разработке</h1>
-  <p>
-    Это техническая страница. Каталог открыток, подборки и информационные разделы ещё не
-    опубликованы: содержание появляется только после ручной модерации.
-  </p>
-  <p>
-    Страница закрыта от индексации директивой <code>noindex,follow</code> и в sitemap не
-    входит.
-  </p>
+  <h1>{content.view.heading}</h1>
+
+  <div class="home__lead">
+    {content.lead.map((paragraph) => <p>{paragraph}</p>)}
+  </div>
+
+  {/* Форма поиска (Э3-10): обычная HTML-форма с method="get", ноль клиентского
+      JS. Она ведёт на единственный маршрут /search с чистым canonical и второго
+      адреса главной не создаёт. */}
+  <SearchForm fieldId="home-search-query" />
+
+  {
+    content.seasonal.length === 0 ? null : (
+      <nav class="page-section" aria-label={HOME_PAGE.seasonal.listLabel}>
+        <h2>{HOME_PAGE.seasonal.heading}</h2>
+        <ul class="link-row">
+          {
+            content.seasonal.map((link) => (
+              <li>
+                <a href={link.path}>{link.name}</a>
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
+    )
+  }
+
+  {
+    content.sections.length === 0 ? null : (
+      <nav class="page-section" aria-label={HOME_PAGE.sections.listLabel}>
+        <h2>{HOME_PAGE.sections.heading}</h2>
+        <ul class="home__sections">
+          {
+            content.sections.map((section) => (
+              <li class="home__section">
+                <h3 class="home__section-title">
+                  <a href={section.node.path}>{section.node.name}</a>
+                </h3>
+                {
+                  section.children.length === 0 ? null : (
+                    <ul class="link-row">
+                      {
+                        section.children.map((child) => (
+                          <li>
+                            <a href={child.path}>{child.name}</a>
+                          </li>
+                        ))
+                      }
+                    </ul>
+                  )
+                }
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
+    )
+  }
+
+  {
+    content.recent.length === 0 ? null : (
+      <section class="page-section">
+        <h2>{HOME_PAGE.recent.heading}</h2>
+        <CardGrid
+          tiles={content.recent}
+          prioritizeFirst
+          ariaLabel={HOME_PAGE.recent.listLabel}
+        />
+      </section>
+    )
+  }
+
+  <script type="application/ld+json" is:inline set:html={jsonLd} />
 </BaseLayout>
+
+<style>
+  .home__lead {
+    max-width: 45rem;
+  }
+
+  .home__lead > p {
+    margin-block: 0 0.75rem;
+  }
+
+  .home__sections {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .home__section + .home__section {
+    margin-block-start: 1.25rem;
+  }
+
+  .home__section-title {
+    font-size: 1.0625rem;
+    margin-block: 0 0.375rem;
+  }
+</style>

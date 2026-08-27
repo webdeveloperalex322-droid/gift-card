@@ -21,11 +21,10 @@
  * прокидывал сам; после смены версии Node он перестал приходить, и падение
  * выглядело как «сломался билд», хотя сломалось разрешение модулей.
  *
- * Поэтому запуск фиксируется здесь, а не в подсказке в README: обёртка сама
- * находит виртуальное хранилище и добавляет его в `NODE_PATH` дочернего
- * процесса. Если хранилища нет (установка не pnpm-овская, hoisted-раскладка),
- * ничего не добавляется — и это не ошибка: значит цепочка разрешения и без него
- * полная.
+ * Поэтому запуск фиксируется здесь, а не в подсказке в README. Само правило
+ * живёт в `./server-child-env.mjs` — его же импортируют смоуки, которые тоже
+ * поднимают собранный сервер: пока правило было только здесь, смоук правила
+ * слеша падал «главная отдаёт 500», то есть с симптомом вместо причины.
  *
  * ## Почему дочерний процесс, а не правка `process.env` на месте
  *
@@ -43,8 +42,10 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { serverChildEnv, serverNodePath } from './server-child-env.mjs';
 
 const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(appDir, 'dist', 'server', 'entry.mjs');
@@ -58,46 +59,18 @@ if (!existsSync(entry)) {
   process.exit(1);
 }
 
-/**
- * Корень монорепозитория ищется по маркеру `pnpm-workspace.yaml` — тем же
- * правилом, что в `src/server-env.ts`: привязки к глубине вложенности нет ни в
- * исходниках, ни в сборке. Копия правила здесь потому, что обёртка обязана
- * работать ДО загрузки любого нашего модуля.
- */
-function findWorkspaceRoot(from) {
-  let dir = from;
-  for (;;) {
-    if (existsSync(join(dir, 'pnpm-workspace.yaml'))) {
-      return dir;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) {
-      return null;
-    }
-    dir = parent;
-  }
-}
-
-const workspaceRoot = findWorkspaceRoot(appDir);
-const virtualStore =
-  workspaceRoot === null ? null : join(workspaceRoot, 'node_modules', '.pnpm', 'node_modules');
-
-const nodePath = [
-  ...(virtualStore !== null && existsSync(virtualStore) ? [virtualStore] : []),
-  ...(process.env.NODE_PATH ?? '').split(delimiter).filter((entryPath) => entryPath !== ''),
-];
-
-if (nodePath.length === 0) {
+const nodePath = serverNodePath(appDir);
+if (nodePath === null) {
   console.warn(
     '[apps/web] Виртуальное хранилище pnpm не найдено, NODE_PATH не дополняется. Если сервер ' +
-      'упадёт с «Cannot find module \'drizzle-kit/api\'», причина здесь: см. шапку ' +
-      'apps/web/scripts/start-server.mjs.',
+      "упадёт с «Cannot find module 'drizzle-kit/api'», причина здесь: см. шапку " +
+      'apps/web/scripts/server-child-env.mjs.',
   );
 }
 
 const child = spawn(process.execPath, [entry], {
   cwd: appDir,
-  env: { ...process.env, ...(nodePath.length === 0 ? {} : { NODE_PATH: nodePath.join(delimiter) }) },
+  env: serverChildEnv(appDir),
   stdio: 'inherit',
 });
 

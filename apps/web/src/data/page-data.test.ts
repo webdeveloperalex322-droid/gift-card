@@ -25,6 +25,7 @@
 import type { Card, Collection, SiteSetting } from '@otkritka/cms/types';
 import { describe, expect, it } from 'vitest';
 
+import { parseViewParams, type ViewParams } from '../routing/view-params.js';
 import {
   cardAttributeLinks,
   cardPageContent,
@@ -33,6 +34,7 @@ import {
   catalogSections,
   collectionLinks,
   collectionPageContent,
+  seasonalLinks,
 } from './page-data.js';
 
 const ENV = { SITE_URL: 'https://stranicy.test' } as const;
@@ -315,6 +317,7 @@ function collectionContent(
     readonly related?: readonly Collection[];
     readonly page?: number;
     readonly pageCount?: number;
+    readonly view?: ViewParams;
   } = {},
 ): NonNullable<ReturnType<typeof collectionPageContent>> {
   const content = collectionPageContent({
@@ -326,11 +329,29 @@ function collectionContent(
     pageCount: overrides.pageCount ?? 1,
     parent: overrides.parent ?? null,
     related: overrides.related ?? [],
+    ...(overrides.view === undefined ? {} : { view: overrides.view }),
   });
   if (content === null) {
     throw new Error('Ожидалось содержимое страницы, а получен null.');
   }
   return content;
+}
+
+/**
+ * Разметка страницы списка, когда она обязана быть.
+ *
+ * `jsonLd` у подборки стал допускать `null` на Э3-10: фильтр представления может
+ * не оставить ни одной плитки, и тогда описывать `ItemList` нечего. Во всех
+ * проверках ниже видимый список есть, поэтому отсутствие разметки — ошибка
+ * теста, а не ожидаемое состояние.
+ */
+function listJsonLd(
+  content: NonNullable<ReturnType<typeof collectionPageContent>>,
+): NonNullable<typeof content.jsonLd> {
+  if (content.jsonLd === null) {
+    throw new Error('Ожидалась разметка страницы списка, а её нет.');
+  }
+  return content.jsonLd;
 }
 
 describe('страница подборки: ItemList = видимая сетка', () => {
@@ -342,7 +363,7 @@ describe('страница подборки: ItemList = видимая сетк�
         card({ id: 3, slug: 'tretya', title: 'Третья открытка' }),
       ],
     });
-    const list = content.jsonLd.mainEntity;
+    const list = listJsonLd(content).mainEntity;
 
     expect(list.numberOfItems).toBe(content.tiles.length);
     expect(list.itemListElement.map((element) => element.name)).toEqual(
@@ -366,7 +387,7 @@ describe('страница подборки: ItemList = видимая сетк�
     });
 
     expect(content.tiles).toEqual([]);
-    expect(content.jsonLd.mainEntity.itemListElement.map((element) => element.name)).toEqual([
+    expect(listJsonLd(content).mainEntity.itemListElement.map((element) => element.name)).toEqual([
       'Открытки на 8 Марта',
       'Открытки на 9 Мая',
     ]);
@@ -440,14 +461,14 @@ describe('страница подборки: перелинковка и дат�
     });
 
     expect(content.updatedContentAt).toBe('2026-02-14T10:00:00.000Z');
-    expect(content.jsonLd.dateModified).toBe('2026-02-14T10:00:00.000Z');
+    expect(listJsonLd(content).dateModified).toBe('2026-02-14T10:00:00.000Z');
   });
 
   it('без даты содержательного обновления нет ни текста, ни dateModified', () => {
     const content = collectionContent({ node: collection({ updatedContentAt: null }) });
 
     expect(content.updatedContentAt).toBeNull();
-    expect('dateModified' in content.jsonLd).toBe(false);
+    expect('dateModified' in listJsonLd(content)).toBe(false);
   });
 
   it('подборка без сохранённого пути — отказ, а не страница по выдуманному адресу', () => {
@@ -485,7 +506,7 @@ describe('страница подборки: пагинация сегменто
     const content = collectionContent({ node: NODE, page: 2, pageCount: 3 });
 
     expect(content.canonicalPath).toBe('/podborki/prazdniki/8-marta/page/2');
-    expect(content.jsonLd.url).toBe(`${ENV.SITE_URL}/podborki/prazdniki/8-marta/page/2`);
+    expect(listJsonLd(content).url).toBe(`${ENV.SITE_URL}/podborki/prazdniki/8-marta/page/2`);
   });
 
   it('страница 2 отдаёт noindex,follow даже у записи, открытой человеком в индекс', () => {
@@ -499,7 +520,7 @@ describe('страница подборки: пагинация сегменто
     expect(content.title).toBe('Открытки на 8 Марта — страница 3');
     expect(content.heading).toBe('Открытки на 8 Марта — страница 3');
     expect(content.metaDescription).toBeNull();
-    expect('description' in content.jsonLd).toBe(false);
+    expect('description' in listJsonLd(content)).toBe(false);
   });
 
   it('вводный текст принадлежит посадочной странице и на страницах 2+ не повторяется', () => {
@@ -541,7 +562,7 @@ describe('страница подборки: пагинация сегменто
       pageCount: 2,
     });
 
-    expect(content.jsonLd.mainEntity.itemListElement.map((element) => element.url)).toEqual([
+    expect(listJsonLd(content).mainEntity.itemListElement.map((element) => element.url)).toEqual([
       `${ENV.SITE_URL}/otkrytki/dvadcat-pyataya`,
     ]);
   });
@@ -600,5 +621,164 @@ describe('каталог подборок: разделы верхнего ур�
 
   it('пустой каталог даёт пустой список: маршрут ответит 404, а не 200 с пустой страницей', () => {
     expect(catalogSectionItems(catalogSections([]))).toEqual([]);
+  });
+});
+
+describe('сезонный блок главной (задача Э3-09, ТЗ §5.2)', () => {
+  const DAY = new Date('2026-02-20T12:00:00.000Z');
+
+  const seasonalNode = (
+    overrides: Partial<Collection>,
+    seasonal: NonNullable<Collection['seasonal']>,
+  ): Collection => collection({ ...overrides, seasonal });
+
+  it('в блок попадают только узлы, чьё окно показа накрывает день', () => {
+    const inWindow = seasonalNode(
+      { id: 91, path: '/podborki/prazdniki/8-marta', title: 'Открытки на 8 Марта' },
+      { showFrom: '2026-02-01T00:00:00.000Z', showUntil: '2026-03-09T00:00:00.000Z' },
+    );
+    const later = seasonalNode(
+      { id: 92, path: '/podborki/prazdniki/9-maya', title: 'Открытки на 9 Мая' },
+      { showFrom: '2026-04-01T00:00:00.000Z', showUntil: '2026-05-10T00:00:00.000Z' },
+    );
+
+    expect(seasonalLinks([inWindow, later], DAY)).toEqual([
+      { name: 'Открытки на 8 Марта', path: '/podborki/prazdniki/8-marta' },
+    ]);
+  });
+
+  it('узел с одной заполненной границей в блок не попадает', () => {
+    // Пустое поле означает «показывать не по календарю»: догадываться за
+    // редактора нельзя, иначе подборка появится в день, которого он не назначал.
+    const halfOpen = seasonalNode(
+      { id: 93, path: '/podborki/prazdniki/paskha', title: 'Открытки на Пасху' },
+      { showFrom: '2026-02-01T00:00:00.000Z' },
+    );
+
+    expect(seasonalLinks([halfOpen], DAY)).toEqual([]);
+  });
+
+  it('узел без сохранённого пути ссылкой не становится', () => {
+    const pathless = seasonalNode(
+      { id: 94, path: null, title: 'Узел без пути' },
+      { showFrom: '2026-02-01T00:00:00.000Z', showUntil: '2026-03-09T00:00:00.000Z' },
+    );
+
+    expect(seasonalLinks([pathless], DAY)).toEqual([]);
+  });
+
+  it('порядок записей сохраняется — его задаёт запрос по дате праздника', () => {
+    const window = {
+      showFrom: '2026-02-01T00:00:00.000Z',
+      showUntil: '2026-03-09T00:00:00.000Z',
+    } as const;
+    const first = seasonalNode(
+      { id: 95, path: '/podborki/prazdniki/14-fevralya', title: '14 февраля' },
+      window,
+    );
+    const second = seasonalNode(
+      { id: 96, path: '/podborki/prazdniki/23-fevralya', title: '23 февраля' },
+      window,
+    );
+
+    expect(seasonalLinks([second, first], DAY).map((link) => link.path)).toEqual([
+      '/podborki/prazdniki/23-fevralya',
+      '/podborki/prazdniki/14-fevralya',
+    ]);
+  });
+});
+
+describe('фильтр представления на странице подборки (задача Э3-10, ТЗ §5.5)', () => {
+  const VERTICAL = [
+    { key: 'cards/v/vert-640.avif', format: 'avif' as const, width: 640, height: 800 },
+    { key: 'cards/v/vert-640.jpg', format: 'jpeg' as const, width: 640, height: 800 },
+  ];
+  const HORIZONTAL = [
+    { key: 'cards/h/gor-640.avif', format: 'avif' as const, width: 800, height: 500 },
+    { key: 'cards/h/gor-640.jpg', format: 'jpeg' as const, width: 800, height: 500 },
+  ];
+
+  const vertical = card({ derivative: { variants: VERTICAL }, id: 1, slug: 'vertikalnaya', title: 'Вертикальная открытка' });
+  const horizontal = card({ derivative: { variants: HORIZONTAL }, id: 2, slug: 'gorizontalnaya', title: 'Горизонтальная открытка' });
+  const FILTER: ViewParams = parseViewParams('?format=vertical');
+
+  it('фильтр прячет плитки, но не меняет адрес страницы', () => {
+    const clean = collectionContent({ cards: [vertical, horizontal] });
+    const filtered = collectionContent({ cards: [vertical, horizontal], view: FILTER });
+
+    expect(clean.tiles).toHaveLength(2);
+    expect(filtered.tiles.map((tile) => tile.path)).toEqual(['/otkrytki/vertikalnaya']);
+    // Главное свойство: набор параметров на canonical не влияет вовсе.
+    expect(filtered.canonicalPath).toBe(clean.canonicalPath);
+    expect(filtered.tilesOnPage).toBe(2);
+  });
+
+  it('ItemList следует за видимой сеткой, а не за полным списком', () => {
+    const filtered = collectionContent({ cards: [vertical, horizontal], view: FILTER });
+    const list = listJsonLd(filtered).mainEntity;
+
+    expect(list.numberOfItems).toBe(1);
+    expect(list.itemListElement.map((element) => element.name)).toEqual(
+      filtered.tiles.map((tile) => tile.name),
+    );
+  });
+
+  it('отфильтрованное представление закрыто от индексации', () => {
+    const node = collection({ robots: 'index,follow' });
+
+    expect(collectionContent({ cards: [vertical], node }).robots).toBe('index,follow');
+    expect(collectionContent({ cards: [vertical], node, view: FILTER }).robots).toBe(
+      'noindex,follow',
+    );
+  });
+
+  it('фильтр не пересобирает пагинацию: адреса страниц те же', () => {
+    const clean = collectionContent({ cards: [vertical, horizontal], pageCount: 3 });
+    const filtered = collectionContent({
+      cards: [vertical, horizontal],
+      pageCount: 3,
+      view: FILTER,
+    });
+
+    expect(filtered.pagination).toEqual(clean.pagination);
+    expect(JSON.stringify(filtered.pagination)).not.toContain('/page/1');
+  });
+
+  it('пустая выдача фильтра не превращает страницу в 404 и не даёт пустой ItemList', () => {
+    // Статус ответа обязан зависеть от записи, а не от хвоста ссылки: страница
+    // существует, просто выбранного формата на ней нет.
+    const filtered = collectionContent({ cards: [horizontal], view: FILTER });
+
+    expect(filtered.tiles).toEqual([]);
+    expect(filtered.tilesOnPage).toBe(1);
+    // Описывать нечего — разметки списка нет вовсе, а не пустая.
+    expect(filtered.jsonLd).toBeNull();
+  });
+
+  it('ряд ссылок фильтра строится от canonical страницы, сброс ведёт на чистый путь', () => {
+    const filtered = collectionContent({
+      cards: [vertical, horizontal],
+      page: 2,
+      pageCount: 2,
+      view: FILTER,
+    });
+
+    expect(filtered.filterOptions[0]?.href).toBe(filtered.canonicalPath);
+    expect(filtered.filterOptions[0]?.href).toBe('/podborki/prazdniki/8-marta/page/2');
+    for (const option of filtered.filterOptions) {
+      expect(option.href.startsWith(filtered.canonicalPath)).toBe(true);
+    }
+  });
+
+  it('чужие параметры страницу не меняют вовсе', () => {
+    const clean = collectionContent({ cards: [vertical, horizontal] });
+    const withUtm = collectionContent({
+      cards: [vertical, horizontal],
+      view: parseViewParams('?utm_source=vk'),
+    });
+
+    expect(withUtm.tiles).toHaveLength(clean.tiles.length);
+    expect(withUtm.canonicalPath).toBe(clean.canonicalPath);
+    expect(withUtm.robots).toBe(clean.robots);
   });
 });

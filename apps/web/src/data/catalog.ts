@@ -47,6 +47,7 @@ import {
   type PageParamDecision,
   decidePageParam,
 } from '../routing/pagination.js';
+import { type AdRows, adRows } from '../seo/ad-slots.js';
 import type { BreadcrumbTrail } from '../seo/breadcrumbs.js';
 import {
   CATALOGS,
@@ -55,7 +56,12 @@ import {
   catalogPageView,
 } from '../seo/catalog-pages.js';
 import { type CollectionPageJsonLd, collectionPageJsonLd } from '../seo/collection-page.js';
-import { listCatalogCards, listChildCollections, listRootCollections } from './content.js';
+import {
+  listCatalogCards,
+  listChildCollections,
+  listRootCollections,
+  readSiteSettings,
+} from './content.js';
 import {
   type CardTile,
   cardTiles,
@@ -84,6 +90,12 @@ export interface CardCatalogBody extends CatalogPageHead {
   /** Плитки ЭТОЙ страницы. Из этого же массива собран `ItemList`. */
   readonly tiles: readonly CardTile[];
   readonly pagination: PaginationModel | null;
+  /**
+   * Рекламные ряды из настроек сайта (задача Э3-12, решение Ч-11): под H1 над
+   * сеткой и после пагинации. Пустые ряды означают, что мест не настроено, — и
+   * тогда шаблон не печатает ни контейнера, ни подписи.
+   */
+  readonly ads: AdRows;
 }
 
 export interface CollectionCatalogBody extends CatalogPageHead {
@@ -131,7 +143,11 @@ export async function cardCatalogPage(
 
   const tiles = cardTiles(cardsPage.cards);
   const view = catalogPageView('cards', requested);
+  // Настройки читаются ПОСЛЕ решения о статусе: рекламные места на ответ 200,
+  // 301 или 404 не влияют, а лишний запрос к глобалу на 404 не нужен.
+  const settings = await readSiteSettings();
   return {
+    ads: adRows(settings.adSlots),
     jsonLd: collectionPageJsonLd(
       {
         canonicalPath: view.canonicalPath,

@@ -93,6 +93,8 @@ export {
   listSeasonalCollections,
   listSimilarCards,
   readSiteSettings,
+  searchCards,
+  searchCollections,
   relationId,
   relationIds,
 } from './content.js';
@@ -121,6 +123,25 @@ export {
  */
 export { infoPage, infoPageFacts } from './info-pages.js';
 
+/**
+ * Внутренний поиск (Э3-10). Страница отвечает 200 всегда и всегда `noindex`:
+ * обоснование в шапке `./search.ts`.
+ */
+export { searchPage, type SearchPageContent } from './search.js';
+
+/**
+ * Главная (Э3-09). Исхода «страницы нет» у неё тоже нет: она существует всегда,
+ * а блоки, для которых нет данных, не печатаются вовсе — обоснование в шапке
+ * `./home.ts`.
+ */
+export {
+  HOME_RECENT_CARDS,
+  HOME_SECTION_CHILDREN,
+  homePage,
+  type HomePageContent,
+  type HomePageView,
+} from './home.js';
+
 export {
   type CardAttributeLink,
   cardAttributeLinks,
@@ -134,6 +155,7 @@ export {
   collectionLinks,
   type CollectionPageContent,
   collectionPageContent,
+  seasonalLinks,
 } from './page-data.js';
 
 export {

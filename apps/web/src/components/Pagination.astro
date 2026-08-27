@@ -30,9 +30,19 @@ interface Props {
   model: PaginationModel;
   /** Подпись блока: на странице больше одного навигационного блока. */
   ariaLabel?: string;
+  /**
+   * Строка запроса активного представления (`?format=…`), задача Э3-10.
+   *
+   * Приписывается к адресам ссылок, чтобы выбранный фильтр пережил переход на
+   * соседнюю страницу. Адресов это не создаёт: модель считает пути по ПОЛНОМУ
+   * списку, фильтр их не пересобирает, а `/page/1` не появляется, потому что
+   * первая страница в модели — базовый путь (см. `../routing/pagination.ts` и
+   * `../routing/view-params.ts`).
+   */
+  query?: string;
 }
 
-const { ariaLabel = 'Страницы списка', model } = Astro.props;
+const { ariaLabel = 'Страницы списка', model, query = '' } = Astro.props;
 ---
 
 <nav class="pagination" aria-label={ariaLabel}>
@@ -40,7 +50,7 @@ const { ariaLabel = 'Страницы списка', model } = Astro.props;
     {
       model.previousPath === null ? null : (
         <li>
-          <a class="pagination__step" href={model.previousPath}>Предыдущая</a>
+          <a class="pagination__step" href={`${model.previousPath}${query}`}>Предыдущая</a>
         </li>
       )
     }
@@ -54,7 +64,7 @@ const { ariaLabel = 'Страницы списка', model } = Astro.props;
           </li>
         ) : (
           <li>
-            <a class="pagination__page" href={entry.path}>{entry.page}</a>
+            <a class="pagination__page" href={`${entry.path}${query}`}>{entry.page}</a>
           </li>
         ),
       )
@@ -62,7 +72,7 @@ const { ariaLabel = 'Страницы списка', model } = Astro.props;
     {
       model.nextPath === null ? null : (
         <li>
-          <a class="pagination__step" href={model.nextPath}>Следующая</a>
+          <a class="pagination__step" href={`${model.nextPath}${query}`}>Следующая</a>
         </li>
       )
     }

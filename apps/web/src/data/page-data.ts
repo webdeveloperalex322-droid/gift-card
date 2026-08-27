@@ -59,6 +59,15 @@ import {
 import { pickFallbackVariant, variantPath } from '../images/card-image.js';
 import { canonicalPathFor } from '../routing/canonical.js';
 import {
+  type CardFormat,
+  cardFormatOf,
+  type FilterOption,
+  filterOptions,
+  NO_VIEW_PARAMS,
+  robotsForFilteredView,
+  type ViewParams,
+} from '../routing/view-params.js';
+import {
   type PaginationModel,
   paginationModel,
   paginationPathFor,
@@ -72,6 +81,7 @@ import {
   type ListItemFacts,
 } from '../seo/collection-page.js';
 import { recordHeading } from '../seo/headings.js';
+import { seasonalWindowContains } from '../seo/home-page.js';
 import { type CardImageSource, cardImageAlt, cardImageVariants } from './card-image.js';
 
 /**
@@ -96,6 +106,15 @@ function cardPathOf(card: Pick<Card, 'slug'>): string {
 export interface CardTile extends ListItemFacts {
   /** Поля записи для компонента изображения: `alt` и зеркало производных. */
   readonly image: CardImageSource;
+  /**
+   * Формат открытки, посчитанный по фактическим размерам файла (задача Э3-10).
+   *
+   * `null` — у записи нет ни одной производной, то есть показывать нечего;
+   * такая плитка не попадает ни в один фильтр. Значение считается ЗДЕСЬ, а не в
+   * шаблоне, потому что фильтр обязан прятать ровно ту плитку, которую видно, —
+   * а видно то, что описывает зеркало производных.
+   */
+  readonly format: CardFormat | null;
 }
 
 /** Заполненное текстовое поле записи либо `null` — «редактор не заполнил». */
@@ -107,10 +126,42 @@ function filled(value: string | null | undefined): string | null {
 /** Плитки для сетки в порядке, в котором их вернул запрос. */
 export function cardTiles(cards: readonly Card[]): readonly CardTile[] {
   return cards.map((card) => ({
+    format: tileFormat(card),
     image: card,
     name: recordHeading(card),
     path: cardPathOf(card),
   }));
+}
+
+/**
+ * Формат плитки по зеркалу производных.
+ *
+ * Берётся ЛЮБОЙ вариант: производные — это одно изображение в разных ширинах,
+ * поэтому пропорция у них общая, а резервный JPEG для такого вопроса искать
+ * незачем (его отсутствие — повреждённое зеркало, и отвечает на это страница
+ * карточки отказом, а не сетка). Пустое зеркало даёт `null`: плитка без
+ * изображения не принадлежит ни одному формату.
+ */
+function tileFormat(card: Card): CardFormat | null {
+  const variant = cardImageVariants(card).at(0);
+  return variant === undefined ? null : cardFormatOf(variant);
+}
+
+/**
+ * Плитки, оставшиеся видимыми при активном фильтре (задача Э3-10).
+ *
+ * Фильтр ПРЯЧЕТ плитки на страницах канонического списка и ничего не
+ * пересобирает: ни числа страниц, ни их состава, ни адресов. Обоснование — в
+ * шапке `../routing/view-params.ts`; здесь только применение правила к плиткам.
+ */
+export function filterTiles(
+  tiles: readonly CardTile[],
+  params: ViewParams,
+): readonly CardTile[] {
+  if (params.format === null) {
+    return tiles;
+  }
+  return tiles.filter((tile) => tile.format === params.format);
 }
 
 /* ------------------------------------------------------------------ */
@@ -306,15 +357,41 @@ export interface CollectionPageContent {
    * неё `updatedAt` запрещено — техническая правка обновлением не является.
    */
   readonly updatedContentAt: string | null;
-  /** Плитки сетки. РОВНО этот массив обязан отрендерить шаблон. */
+  /**
+   * Плитки сетки — уже с учётом фильтра представления. РОВНО этот массив обязан
+   * отрендерить шаблон, и ровно из него собран `ItemList`.
+   */
   readonly tiles: readonly CardTile[];
+  /**
+   * Сколько плиток на этой странице списка ВСЕГО, без учёта фильтра.
+   *
+   * Нужно видимой подписи «показано N из M»: фильтр прячет часть плиток
+   * канонической страницы, и посетитель обязан видеть, что список не кончился.
+   */
+  readonly tilesOnPage: number;
+  /** Активные параметры представления (Э3-10). */
+  readonly filter: ViewParams;
+  /**
+   * Ряд ссылок фильтра. Первая ведёт на ЧИСТЫЙ адрес текущей страницы, то есть
+   * на её canonical, — сброс фильтра всегда в один клик.
+   */
+  readonly filterOptions: readonly FilterOption[];
   /** Ссылки вниз — на дочерние узлы. */
   readonly children: readonly ListItemFacts[];
   /** Ссылка вверх — на родителя. `null` у узла верхнего уровня. */
   readonly parent: ListItemFacts | null;
   /** Смежные узлы вбок (3–6 по ТЗ §5.3; предел ставит запрос). */
   readonly related: readonly ListItemFacts[];
-  readonly jsonLd: CollectionPageJsonLd;
+  /**
+   * Разметка страницы либо `null` — когда видимого списка нет вовсе.
+   *
+   * `null` возможен ровно в одном состоянии: фильтр представления не оставил ни
+   * одной плитки, а дочерних узлов у подборки нет. Описывать пустой список
+   * `ItemList` нельзя (разметка обязана соответствовать видимому содержимому),
+   * а страница при этом законно отвечает 200: её статус определяется записью, а
+   * не набором параметров.
+   */
+  readonly jsonLd: CollectionPageJsonLd | null;
 }
 
 export interface CollectionPageInput {
@@ -340,6 +417,15 @@ export interface CollectionPageInput {
    * за первой страницей станут недостижимыми — а это уже страницы-сироты.
    */
   readonly pageCount: number;
+  /**
+   * Параметры представления из строки запроса (Э3-10). Не переданы — фильтра
+   * нет.
+   *
+   * На РЕШЕНИЕ «страница существует» они не влияют вовсе: статус ответа обязан
+   * зависеть от записи, а не от набора параметров, иначе один и тот же адрес
+   * отдавал бы то 200, то 404 в зависимости от хвоста ссылки.
+   */
+  readonly view?: ViewParams;
   readonly env?: SharedEnv;
 }
 
@@ -351,11 +437,17 @@ export interface CollectionPageInput {
  *   адрес.
  */
 export function collectionPageContent(input: CollectionPageInput): CollectionPageContent | null {
-  const tiles = cardTiles(input.cards);
+  const allTiles = cardTiles(input.cards);
   const children = collectionLinks(input.children);
-  if (tiles.length === 0 && children.length === 0) {
+  // Решение «страница существует» принимается по ЗАПИСИ и до применения фильтра:
+  // адрес, отдающий 200 без параметров и 404 с ними, — это два разных ответа
+  // одной страницы, то есть ровно тот дубль-наоборот, которого ТЗ §6.5 велит
+  // избегать.
+  if (allTiles.length === 0 && children.length === 0) {
     return null;
   }
+  const view = input.view ?? NO_VIEW_PARAMS;
+  const tiles = filterTiles(allTiles, view);
 
   const path = filled(input.node.path);
   if (path === null) {
@@ -391,24 +483,34 @@ export function collectionPageContent(input: CollectionPageInput): CollectionPag
   const parent = collectionLinks([input.parent]).at(0) ?? null;
   // Видимый список страницы: сетка открыток, а у узла без своих открыток — список
   // дочерних узлов. Из ЭТОГО значения собирается ItemList, и другого источника у
-  // него нет (обоснование — шапка ../seo/collection-page.ts).
+  // него нет (обоснование — шапка ../seo/collection-page.ts). С активным фильтром
+  // видимой считается ОТФИЛЬТРОВАННАЯ сетка: разметка описывает то, что на
+  // экране, а не то, что лежит в базе.
   const items: readonly ListItemFacts[] = tiles.length > 0 ? tiles : children;
 
   return {
     canonicalPath,
     children,
+    filter: view,
+    // Ряд ссылок строится от canonical ЭТОЙ страницы: на второй странице списка
+    // фильтр остаётся на второй странице, а сброс ведёт на её чистый адрес.
+    // `/page/1` при этом не возникает — путь берётся готовым, а не собирается.
+    filterOptions: filterOptions(canonicalPath, view),
     heading,
     intro: isFirstPage ? input.node.intro : null,
-    jsonLd: collectionPageJsonLd(
-      {
-        canonicalPath,
-        dateModified: updatedContentAt,
-        description: metaDescription,
-        heading,
-        items,
-      },
-      input.env,
-    ),
+    jsonLd:
+      items.length === 0
+        ? null
+        : collectionPageJsonLd(
+            {
+              canonicalPath,
+              dateModified: updatedContentAt,
+              description: metaDescription,
+              heading,
+              items,
+            },
+            input.env,
+          ),
     metaDescription,
     page,
     pagination: paginationModel({ basePath: path, page, pageCount: input.pageCount }),
@@ -427,12 +529,42 @@ export function collectionPageContent(input: CollectionPageInput): CollectionPag
     ]),
     // Директива робота: на первой странице — значение ЗАПИСИ (решение человека),
     // на страницах 2+ — noindex,follow (решение Ч-01b). Страница пагинации не
-    // бывает открытее базовой — правило в `robotsForPage`.
-    robots: robotsForPage(input.node.robots, page),
+    // бывает открытее базовой — правило в `robotsForPage`. Отфильтрованное
+    // представление закрывается ещё раз (ТЗ §5.2: фильтры — всегда noindex), и
+    // тоже только в сторону закрытия — правило в `robotsForFilteredView`.
+    robots: robotsForFilteredView(robotsForPage(input.node.robots, page), view),
     tiles,
+    tilesOnPage: allTiles.length,
     title,
     updatedContentAt,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Главная (задача Э3-09)                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Ссылки сезонного блока главной: подборки, чьё окно показа накрывает день.
+ *
+ * ПОЧЕМУ ОКНО ПРОВЕРЯЕТСЯ ЗДЕСЬ, если его же проверяет запрос
+ * (`./queries.ts`, `seasonalCollectionsQuery`). Запрос отвечает на вопрос «какие
+ * записи читать», и без него главная тянула бы всю таксономию. Видимый блок
+ * собирается ПО ПОЛЯМ САМОЙ ЗАПИСИ: `showFrom` и `showUntil` приходят в
+ * документе, и решение «показывать ли» становится проверяемым без базы —
+ * `tests/unit/web-home-page.test.ts` разбирает случай «одна граница пуста», из-за
+ * которого блок и мог бы показать подборку в день, которого редактор не
+ * назначал. Правило при этом ОДНО и живёт в `../seo/home-page.ts`; здесь только
+ * чтение записи.
+ *
+ * Порядок сохраняется тот, в котором записи вернул запрос (по дате праздника):
+ * пересортировки здесь нет — иначе видимый порядок зависел бы от двух мест.
+ */
+export function seasonalLinks(
+  nodes: readonly Collection[],
+  today: Date,
+): readonly ListItemFacts[] {
+  return collectionLinks(nodes.filter((node) => seasonalWindowContains(node.seasonal, today)));
 }
 
 /* ------------------------------------------------------------------ */

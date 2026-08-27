@@ -542,6 +542,72 @@ export function similarCardsWindow<TItem>(input: {
   return [...newerTaken].reverse().concat(input.older.slice(0, fromOlder));
 }
 
+/**
+ * Внутренний поиск: открытки по названию, подписи и описанию (ТЗ §5.5).
+ *
+ * Оператор `like` — это подстрока без учёта регистра. Морфологии у него нет, и
+ * подменять её здесь нечем: полнотекстовый индекс со словарём — отдельная работа
+ * с миграцией схемы (этап 7), а самодельная «нормализация окончаний» ошибалась бы
+ * молча. Поэтому поиск честно ищет вхождение строки, а страница результатов
+ * прямо предлагает уточнить запрос.
+ *
+ * Значение уходит ПАРАМЕТРОМ запроса — подстановки строк в SQL здесь нет.
+ * Подстановочные символы `%` и `_` внутри запроса не вычищаются: они расширяют
+ * поиск, а не выходят за его пределы.
+ *
+ * Предел стоит на запросе: страницы результатов у поиска нет намеренно
+ * (`../seo/search-page.ts`, `SEARCH_RESULTS_LIMIT`), поэтому лишние строки не
+ * читаются вовсе. Порядок — общий порядок списков: свежие первыми.
+ */
+export function searchCardsQuery(input: {
+  readonly query: string;
+  readonly limit: number;
+}): PublicFindQuery<'cards'> {
+  return {
+    ...PUBLIC_READ_SCOPE,
+    collection: 'cards',
+    limit: input.limit,
+    pagination: false,
+    sort: [...CARD_ORDER],
+    where: {
+      or: [
+        { title: { like: input.query } },
+        { h1: { like: input.query } },
+        { caption: { like: input.query } },
+        { description: { like: input.query } },
+      ],
+    },
+  };
+}
+
+/**
+ * Внутренний поиск: подборки по заголовку (ТЗ §5.5 — «поиск по … атрибутам»).
+ *
+ * Атрибут открытки в этой модели данных — это её узел таксономии (повод,
+ * адресат): отдельных полей `occasion`/`recipient` у карточки нет намеренно
+ * (см. шапку `apps/cms/src/collections/cards.ts`). Поэтому поиск по атрибуту —
+ * это поиск по подборкам, и найденная подборка ведёт на свою обычную страницу.
+ */
+export function searchCollectionsQuery(input: {
+  readonly query: string;
+  readonly limit: number;
+}): PublicFindQuery<'collections'> {
+  return {
+    ...PUBLIC_READ_SCOPE,
+    collection: 'collections',
+    limit: input.limit,
+    pagination: false,
+    sort: [...COLLECTION_ORDER],
+    where: {
+      or: [
+        { title: { like: input.query } },
+        { h1: { like: input.query } },
+        { metaDescription: { like: input.query } },
+      ],
+    },
+  };
+}
+
 /** Свежие карточки: блок главной и перелинковка. Порядок тот же, что в списках. */
 export function recentCardsQuery(limit: number): PublicFindQuery<'cards'> {
   return {

@@ -1,0 +1,118 @@
+---
+/**
+ * Внутренний поиск — `/search` (задача Э3-10).
+ *
+ * Норма: ТЗ §5.5 («поиск по названию, подписи, атрибутам; страница результатов:
+ * `noindex`, закрыта в robots.txt, вне sitemap»), ТЗ §5.6 (ссылка на поиск на
+ * странице 404), ТЗ §6.5 (URL с параметрами отдаёт canonical на базовый путь),
+ * `CLAUDE.md` — «Правила индексации» и «Рендеринг».
+ *
+ * ## Что здесь закодировано
+ *
+ *   - **`noindex` ВСЕГДА.** Директива приходит константой из
+ *     `../seo/search-page.ts` и от запроса не зависит: страница результатов
+ *     внутреннего поиска не индексируется никогда. Это безусловное требование
+ *     ТЗ, а не решение, которое человек мог бы поменять в админке;
+ *   - **canonical — чистый `/search`.** Ни `?q=`, ни любой другой параметр в
+ *     него не попадает: адрес у страницы один, параметр меняет представление;
+ *   - **поиск серверный.** Ни одного `<script>`, ни одной директивы `client:*`:
+ *     форма обычная, `method="get"`, результаты печатает сервер ссылками
+ *     `<a href>`. При отключённом JS страница работает полностью;
+ *   - **страница отвечает 200 всегда** — и без запроса, и с пустой выдачей
+ *     (обоснование в шапке `../data/search.ts`);
+ *   - **пагинации нет.** `/search/page/N` не существует: семейство адресов у
+ *     неиндексируемой страницы не нужно, а признак «результатов больше»
+ *     показывается видимым текстом.
+ *
+ * Про параметры в адресе: сегмент пути `/search` зарезервирован реестром ЦЕЛИКОМ
+ * (`packages/shared/src/reserved-routes.ts`), поэтому записи CMS ни с этим путём,
+ * ни под ним не бывает, а `Disallow: /search` без завершающего слеша (решение
+ * Ч-22) закроет его в robots.txt на этапе 4.
+ */
+import Breadcrumbs from '../components/Breadcrumbs.astro';
+import CardGrid from '../components/CardGrid.astro';
+import SearchForm from '../components/SearchForm.astro';
+import { searchPage } from '../data';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { SEARCH_PAGE, SEARCH_QUERY_PARAM, searchBreadcrumbTrail } from '../seo/search-page';
+
+export const prerender = false;
+
+// Значение параметра берётся из адреса как есть: нормализация — правило, и живёт
+// она в `../seo/search-page.ts`, а не в маршруте.
+const content = await searchPage(Astro.url.searchParams.get(SEARCH_QUERY_PARAM));
+const trail = searchBreadcrumbTrail();
+const query = content.view.query;
+---
+
+<BaseLayout
+  title={content.view.title}
+  description={content.view.metaDescription}
+  canonicalPath={content.view.canonicalPath}
+  robots={content.view.robots}
+>
+  <Breadcrumbs trail={trail} />
+
+  <h1>{content.view.heading}</h1>
+
+  <p class="search__lead">{SEARCH_PAGE.lead}</p>
+
+  <SearchForm query={query} />
+
+  {
+    query === null ? null : (
+      <p class="search__summary">
+        Запрос: <strong>{query}</strong>. Найдено открыток — {content.cards.length}, подборок —{' '}
+        {content.collections.length}.
+      </p>
+    )
+  }
+
+  {content.nothingFound ? <p class="search__notice">{SEARCH_PAGE.nothingFound}</p> : null}
+
+  {
+    content.collections.length === 0 ? null : (
+      <nav class="page-section" aria-label={SEARCH_PAGE.collectionsLabel}>
+        <h2>{SEARCH_PAGE.collectionsLabel}</h2>
+        <ul class="link-row">
+          {
+            content.collections.map((link) => (
+              <li>
+                <a href={link.path}>{link.name}</a>
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
+    )
+  }
+
+  {
+    content.cards.length === 0 ? null : (
+      <section class="page-section">
+        <h2>{SEARCH_PAGE.cardsLabel}</h2>
+        <CardGrid tiles={content.cards} prioritizeFirst ariaLabel={SEARCH_PAGE.cardsLabel} />
+      </section>
+    )
+  }
+
+  {content.truncated ? <p class="search__notice">{SEARCH_PAGE.tooMany}</p> : null}
+</BaseLayout>
+
+<style>
+  .search__lead {
+    max-width: 45rem;
+    margin-block: 0 0.5rem;
+  }
+
+  .search__summary {
+    margin-block: 1rem 0;
+  }
+
+  .search__notice {
+    max-width: 45rem;
+    margin-block: 1rem 0;
+    font-size: 0.9375rem;
+    opacity: 0.85;
+  }
+</style>

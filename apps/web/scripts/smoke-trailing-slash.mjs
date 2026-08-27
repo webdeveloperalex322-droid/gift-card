@@ -39,6 +39,8 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { serverChildEnv } from './server-child-env.mjs';
+
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const serverEntry = path.join(appDir, 'dist', 'server', 'entry.mjs');
 
@@ -286,7 +288,11 @@ async function main() {
     }
     server = spawn(process.execPath, [serverEntry], {
       cwd: appDir,
-      env: { ...process.env, HOST: host, PORT: String(port) },
+      // Окружение собирает `./server-child-env.mjs`: он добавляет виртуальное
+      // хранилище pnpm в NODE_PATH. Без этого собранный сервер падает на
+      // динамическом импорте `drizzle-kit/api` при первом обращении к базе, и
+      // выглядит это как «страница отдаёт 500» — симптом вместо причины.
+      env: serverChildEnv(appDir, { HOST: host, PORT: String(port) }),
       stdio: ['ignore', 'inherit', 'inherit'],
     });
   }
