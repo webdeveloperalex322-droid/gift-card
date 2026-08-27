@@ -36,6 +36,28 @@
  * обратным утверждением — что блоков нет. Иначе на странице без разметки spec
  * «проходил» бы, не встретив ни одного узла, и зелёный отчёт означал бы
  * выполненное требование там, где проверять было нечего.
+ *
+ * ## Три вида разметки — три ветви утверждений
+ *
+ * Вид объявляется в инвентаре (`support/pages.ts`, тип
+ * `StructuredDataExpectation`), и ни одна ветвь не является пропуском:
+ *
+ *   - `none` — блоков нет; появление блока валит spec;
+ *   - `site` — документ описывает САЙТ: узел `WebSite`, при заполненном глобале
+ *     рядом `Organization` (Ч-17). Проверяется, что `WebSite.url` совпадает с
+ *     self-canonical символ в символ, что `name` присутствует в видимом тексте
+ *     (у главной это её H1), и что элементов списка в документе НЕТ — крошек у
+ *     главной нет по ТЗ §7.6, а `ItemList` §5.2 от неё не требует;
+ *   - `list` — документ описывает видимый список (`BreadcrumbList` и/или
+ *     `ItemList`): обязателен хотя бы один `ListItem`, и каждый сверяется с
+ *     видимым текстом и ссылками страницы.
+ *
+ * Почему `site` — отдельное объявление, а не условие «`ListItem` обязателен,
+ * когда в документе есть `WebPage`/`CollectionPage`»: разбор в шапке
+ * `StructuredDataExpectation` в `support/pages.ts`. Коротко — условие ослабляет
+ * проверку молча:
+ * страница, у которой разметка деградировала до одного `WebSite`, проходила бы
+ * приёмку, потому что узла `WebPage` в документе уже нет.
  */
 
 import { expect, test } from '@playwright/test';
@@ -115,8 +137,9 @@ for (const page of ACCEPTANCE_PAGES) {
         `Инвентарь приёмки объявляет страницу ${page.path} без структурированных данных, а в ` +
           'ответе они есть. Проверка соответствия разметки видимому содержимому для этой ' +
           'страницы ВЫКЛЮЧЕНА, пока она объявлена как `structuredData: none`. Объявите её ' +
-          '`structuredData: required` в tests/seo/support/pages.ts тем же коммитом, которым ' +
-          'добавили разметку.',
+          '`structuredData: site` (разметка описывает сайт) или `structuredData: list` ' +
+          '(разметка описывает видимый список) в tests/seo/support/pages.ts тем же коммитом, ' +
+          'которым добавили разметку.',
       ).toEqual([]);
       return;
     }
@@ -177,14 +200,71 @@ for (const page of ACCEPTANCE_PAGES) {
       ).toBe(canonical);
     }
 
-    /* --- Элементы списков против видимого списка --------------------- */
+    /* --- Разметка сайта: WebSite и, при заполненном глобале, Organization --- */
 
     const listItems = jsonLdNodes(values, 'ListItem');
-    expect(
-      listItems.length,
-      'Ни одного ListItem: у страницы с разметкой обязан быть либо BreadcrumbList, либо ' +
-        'ItemList — оба описывают видимые списки.',
-    ).toBeGreaterThan(0);
+
+    if (page.structuredData === 'site') {
+      const sites = jsonLdNodes(values, 'WebSite');
+      expect(
+        sites.length,
+        'Инвентарь объявляет страницу как описывающую САЙТ, а узла WebSite в разметке нет. ' +
+          'ТЗ §5.2 требует WebSite на главной всегда — от данных он не зависит.',
+      ).toBe(1);
+
+      const site = sites[0] ?? {};
+      expect(
+        text(site, 'url'),
+        'WebSite.url обязан совпадать с self-canonical символ в символ: два разных адреса ' +
+          'одной страницы в одном ответе — это заявка на дубль.',
+      ).toBe(canonical);
+
+      const siteName = (text(site, 'name') ?? '').trim();
+      expect(siteName.length, 'WebSite.name пуст: разметке нечего описывать.').toBeGreaterThan(0);
+      expect(
+        visible.includes(siteName),
+        `WebSite.name «${siteName}» не найден в видимом тексте страницы. Разметка обязана ` +
+          'описывать то, что посетитель видит, а не отдельно выдуманное название.',
+      ).toBe(true);
+
+      // Organization выводится только при заполненном глобале (Ч-17), поэтому его
+      // отсутствие законно, а вот его содержимое — нет: адреса обязаны быть
+      // абсолютными и на нашем хосте, иначе логотип и сайт организации указывают
+      // в пустоту.
+      for (const organization of jsonLdNodes(values, 'Organization')) {
+        expect(
+          (text(organization, 'name') ?? '').trim().length,
+          'Organization.name пуст. Незаполненный глобал обязан давать ОТСУТСТВИЕ блока ' +
+            '(Ч-17), а не блок с пустыми значениями.',
+        ).toBeGreaterThan(0);
+        for (const property of ['url', 'logo'] as const) {
+          const value = (text(organization, property) ?? '').trim();
+          expect(
+            ownPath(value, target.origin),
+            `Organization.${property} «${value}» обязан быть абсолютным адресом на хосте ` +
+              'приёмки: абсолютные URL собираются из SITE_URL единственным хелпером.',
+          ).not.toBeNull();
+        }
+      }
+
+      expect(
+        listItems.map((item) => `${String(text(item, 'name'))} → ${String(text(item, 'item'))}`),
+        'На странице, объявленной как описывающая САЙТ, элементов списка (ListItem) быть не ' +
+          'должно: крошек у главной нет по ТЗ §7.6, а ItemList §5.2 от неё не требует. ' +
+          'Появился список — объявите страницу `structuredData: list` в ' +
+          'tests/seo/support/pages.ts тем же коммитом, которым добавили разметку.',
+      ).toEqual([]);
+    }
+
+    /* --- Элементы списков против видимого списка --------------------- */
+
+    if (page.structuredData === 'list') {
+      expect(
+        listItems.length,
+        'Ни одного ListItem: у страницы, объявленной как описывающая СПИСОК, обязан быть либо ' +
+          'BreadcrumbList, либо ItemList — оба описывают видимые списки.',
+      ).toBeGreaterThan(0);
+    }
 
     for (const item of listItems) {
       const name = (text(item, 'name') ?? '').trim();

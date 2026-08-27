@@ -22,6 +22,16 @@ export interface RawResponse {
   /** `Location`, приведённый к абсолютному виду, либо `null`. */
   readonly resolvedLocation: string | null;
   readonly contentType: string | null;
+  /**
+   * Все заголовки ответа, имена в нижнем регистре.
+   *
+   * Нужны, потому что часть требований — про ЗАГОЛОВОК, а не про тело:
+   * `Retry-After` при 503 (таблица «HTTP-статусы»), `Cache-Control` у производных
+   * изображений (решение Ч-03), `X-Robots-Tag` у админки и стенда (Ч-18, Ч-22).
+   * Отдельного примитива под каждый заголовок здесь нет намеренно: это один и тот
+   * же ответ, и spec обязан читать его целиком.
+   */
+  readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
 }
 
@@ -49,6 +59,7 @@ export async function fetchRaw(
   return {
     requestedUrl: absoluteUrl,
     status: response.status(),
+    headers,
     location,
     resolvedLocation: location === null ? null : new URL(location, absoluteUrl).toString(),
     contentType: headers['content-type'] ?? null,
