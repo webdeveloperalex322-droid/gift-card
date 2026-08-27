@@ -43,7 +43,12 @@
  *     утверждение, которому нечего соответствовать.
  */
 
-import { buildAbsoluteUrl, type ImageLicenseJsonLd, type SharedEnv } from '@otkritka/shared';
+import {
+  buildAbsoluteUrl,
+  type ImageCreatorJsonLd,
+  type ImageLicenseJsonLd,
+  type SharedEnv,
+} from '@otkritka/shared';
 
 import { type ImageVariant, variantAbsoluteUrl } from '../images/card-image.js';
 import { canonicalUrlFor } from '../routing/canonical.js';
@@ -90,6 +95,20 @@ export interface CardPageJsonLdInput {
    * юридически значимой, не будучи ею.
    */
   readonly license: ImageLicenseJsonLd | null;
+  /**
+   * Узел `creator`: вид правообладателя и имя, либо `null` — свойства не будет
+   * вовсе (предикат `imageCreatorJsonLd` из `@otkritka/shared`).
+   *
+   * ОТДЕЛЬНЫМ полем от {@link CardPageJsonLdInput.license}, хотя имя лежит в том
+   * же лицензионном наборе. Причина в диапазоне свойства: `creator` в schema.org
+   * — это `Person | Organization`, то есть УЗЕЛ со своим типом, и значение типа
+   * Text потребитель разметки игнорирует — свойство фактически отсутствует, хотя
+   * код считает его выведенным (находка ревизии Э3-05/Э3-06). Вид правообладателя
+   * выбирает человек полем `creatorKind` глобала; пока не выбрал — узла нет.
+   * Плоская строка `license.creator` в разметку не попадает вовсе и остаётся
+   * только источником имени для предиката.
+   */
+  readonly creator: ImageCreatorJsonLd | null;
 }
 
 export interface ImageObjectJsonLd {
@@ -103,7 +122,12 @@ export interface ImageObjectJsonLd {
   readonly width: number;
   readonly height: number;
   readonly caption?: string;
-  readonly creator?: string;
+  /**
+   * Правообладатель УЗЛОМ, а не строкой: диапазон свойства в schema.org —
+   * `Person | Organization`. Строка допустима синтаксически и бесполезна
+   * фактически — потребитель её игнорирует.
+   */
+  readonly creator?: { readonly '@type': 'Organization' | 'Person'; readonly name: string };
   readonly creditText?: string;
   readonly copyrightNotice?: string;
   /** Абсолютный адрес страницы лицензии. */
@@ -160,6 +184,7 @@ function required(value: string, property: string): string {
  */
 function licenseProperties(
   license: ImageLicenseJsonLd,
+  creator: ImageCreatorJsonLd | null,
   env?: SharedEnv,
 ): Pick<
   ImageObjectJsonLd,
@@ -171,7 +196,11 @@ function licenseProperties(
   return {
     acquireLicensePage: absolute(license.acquireLicensePage),
     copyrightNotice: license.copyrightNotice,
-    creator: license.creator,
+    // Имя правообладателя приходит УЗЛОМ и только из предиката: `license.creator`
+    // здесь не читается вовсе. Пока человек не выбрал вид правообладателя,
+    // предикат отдаёт `null`, и свойства нет — пустое место видно, а
+    // проигнорированная потребителем строка нет.
+    ...(creator === null ? {} : { creator: { '@type': creator.kind, name: creator.name } }),
     creditText: license.creditText,
     license: absolute(license.license),
   };
@@ -215,7 +244,9 @@ export function cardPageJsonLd(input: CardPageJsonLdInput, env?: SharedEnv): Car
         width: input.image.variant.width,
         height: input.image.variant.height,
         ...(caption === undefined ? {} : { caption }),
-        ...(input.license === null ? {} : licenseProperties(input.license, env)),
+        ...(input.license === null
+          ? {}
+          : licenseProperties(input.license, input.creator, env)),
       },
     ],
   };

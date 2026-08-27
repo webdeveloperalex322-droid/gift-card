@@ -49,7 +49,12 @@
 
 import type { Card, Collection, SiteSetting } from '@otkritka/cms/types';
 import { buildCardPath } from '@otkritka/cms/seo/paths';
-import { aiDisclosureText, imageLicenseJsonLd, type SharedEnv } from '@otkritka/shared';
+import {
+  aiDisclosureText,
+  imageCreatorJsonLd,
+  imageLicenseJsonLd,
+  type SharedEnv,
+} from '@otkritka/shared';
 
 import { pickFallbackVariant, variantPath } from '../images/card-image.js';
 import { canonicalPathFor } from '../routing/canonical.js';
@@ -231,6 +236,11 @@ export function cardPageContent(input: CardPageInput): CardPageContent | null {
         // Лицензионная часть — целиком или никак (решение Ч-10). Предикат живёт
         // в `@otkritka/shared`; своей трактовки «заполнено ли» здесь нет.
         license: imageLicenseJsonLd(input.settings.imageLicense),
+        // Правообладатель — ОТДЕЛЬНЫЙ предикат и отдельное свойство разметки:
+        // `creator` в schema.org это узел `Person | Organization`, и строку без
+        // типа потребитель игнорирует. Вид выбирает человек полем `creatorKind`;
+        // пока не выбрал, узла нет вовсе — как у любого пустого значения по Ч-10.
+        creator: imageCreatorJsonLd(input.settings.imageLicense),
       },
       input.env,
     ),

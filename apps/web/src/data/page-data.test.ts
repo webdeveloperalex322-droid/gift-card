@@ -230,6 +230,10 @@ describe('лицензия и указание на ИИ (решение Ч-10)'
 
     expect(image.license).toBe(`${ENV.SITE_URL}/usloviya`);
     expect(image.acquireLicensePage).toBe(`${ENV.SITE_URL}/usloviya`);
+    // `creator` приходит УЗЛОМ с типом из предиката `imageCreatorJsonLd`: строку
+    // без типа потребитель разметки игнорирует, то есть свойство фактически
+    // отсутствовало бы, хотя код считал бы его выведенным.
+    expect(image.creator).toEqual({ '@type': 'Organization', name: 'Проект «Открытки»' });
     expect(content.aiDisclosure).toBe('Изображение создано нейросетью и проверено редактором.');
     // Свойства с таким смыслом в schema.org нет: указание живёт на экране.
     expect(JSON.stringify(content.jsonLd)).not.toContain('нейросет');

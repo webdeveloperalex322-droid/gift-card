@@ -55,12 +55,24 @@ const LICENSE = {
   acquireLicensePage: '/usloviya',
 } as const;
 
+/**
+ * Узел `creator` — тот, что отдаёт предикат `imageCreatorJsonLd` из
+ * `@otkritka/shared` по полям `creator` + `creatorKind` глобала.
+ *
+ * Отдельно от {@link LICENSE} намеренно: диапазон свойства `creator` в
+ * schema.org — `Person | Organization`, то есть УЗЕЛ со своим типом, а плоская
+ * строка из лицензионного набора для потребителя разметки равна отсутствию
+ * свойства (находка ревизии Э3-05/Э3-06, закрыта на Э3-09…Э3-12).
+ */
+const CREATOR = { kind: 'Organization' as const, name: 'Проект «Открытки»' };
+
 const INPUT: CardPageJsonLdInput = {
   canonicalPath: '/otkrytki/otkrytka-mame-na-8-marta',
   heading: HEADING,
   description: 'Открытка маме на 8 Марта: тюльпаны и тёплое поздравление.',
   image: IMAGE,
   license: null,
+  creator: null,
 };
 
 function graphOf(input: CardPageJsonLdInput): {
@@ -195,13 +207,40 @@ describe('лицензионная часть ImageObject (решение Ч-10)
   });
 
   it('заполненный набор выводится целиком, а пути становятся абсолютными', () => {
-    const { image } = graphOf({ ...INPUT, license: LICENSE });
+    const { image } = graphOf({ ...INPUT, creator: CREATOR, license: LICENSE });
 
-    expect(image.creator).toBe(LICENSE.creator);
+    // `creator` — УЗЕЛ с типом, а не строка: значение типа Text потребитель
+    // разметки игнорирует, и свойство фактически отсутствует, хотя код считает
+    // его выведенным.
+    expect(image.creator).toEqual({ '@type': 'Organization', name: 'Проект «Открытки»' });
     expect(image.creditText).toBe(LICENSE.creditText);
     expect(image.copyrightNotice).toBe(LICENSE.copyrightNotice);
     expect(image.license).toBe(`${ENV.SITE_URL}/usloviya`);
     expect(image.acquireLicensePage).toBe(`${ENV.SITE_URL}/usloviya`);
+  });
+
+  it('вид правообладателя не выбран — свойства creator нет, остальные четыре есть', () => {
+    // Обратное направление того же правила: лицензионный набор заполнен, но
+    // человек не выбрал вид правообладателя. Строку без типа выводить нельзя,
+    // поэтому свойства нет вовсе — пустое место видно, молчаливо
+    // проигнорированное значение нет.
+    const { image } = graphOf({ ...INPUT, creator: null, license: LICENSE });
+
+    expect('creator' in image).toBe(false);
+    expect(image.creditText).toBe(LICENSE.creditText);
+    expect(image.copyrightNotice).toBe(LICENSE.copyrightNotice);
+    expect(image.license).toBe(`${ENV.SITE_URL}/usloviya`);
+    expect(image.acquireLicensePage).toBe(`${ENV.SITE_URL}/usloviya`);
+  });
+
+  it('имя правообладателя не попадает в разметку плоской строкой', () => {
+    // Страховка от возврата прежнего поведения: узел выводится объектом, и
+    // сериализованная разметка обязана содержать «"creator":{», а не
+    // «"creator":"…».
+    const text = jsonLdScriptText(cardPageJsonLd({ ...INPUT, creator: CREATOR, license: LICENSE }, ENV));
+
+    expect(text).toContain('"creator":{');
+    expect(text).not.toContain(`"creator":"${CREATOR.name}"`);
   });
 
   it('свойства с придуманным смыслом в разметке отсутствуют', () => {
