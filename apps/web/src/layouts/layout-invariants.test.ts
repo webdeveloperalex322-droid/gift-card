@@ -64,9 +64,16 @@ const PAGE_TEMPLATES = filesUnder(join(WEB_SRC, 'pages'), '.astro');
  * Нужна там, где проверяется ОТСУТСТВИЕ конструкции. Комментарий во frontmatter
  * законно перечисляет запрещённое (`href="#"`, `client:*`), и поиск по всему
  * файлу падал бы на объяснении правила, а не на его нарушении.
+ *
+ * Перевод строки распознаётся в обеих формах (`\n` и `\r\n`). Это не
+ * придирка: при `core.autocrlf=true` (по умолчанию на Windows) рабочая копия
+ * получает CRLF, граница frontmatter не находилась, функция возвращала ВЕСЬ файл
+ * — и проверка падала на собственном объяснении правила. То есть результат теста
+ * зависел от настроек checkout'а, а не от кода. Найдено на задаче Э4-01 в
+ * worktree с CRLF.
  */
 function markupOf(source: string): string {
-  const fenced = /^---[\s\S]*?\n---\n([\s\S]*)$/.exec(source);
+  const fenced = /^---[\s\S]*?\r?\n---\r?\n([\s\S]*)$/.exec(source);
   return fenced?.[1] ?? source;
 }
 
@@ -160,6 +167,33 @@ describe('инварианты всех шаблонов страниц', () => 
       '/usloviya',
       '/kontakty',
     ]);
+  });
+
+  it('директиву robots не пишет строкой ни один шаблон и ни один модуль', () => {
+    // Задача Э4-01: значение `<meta name="robots">` вычисляет РОВНО один модуль
+    // (`src/seo/robots-directive.ts`). Основная защита — типовая: проп `robots`
+    // у BaseLayout принимает только `PageRobots`, а собрать такое значение вне
+    // разрешателя нельзя. Эта проверка закрывает два обхода типа: приведение к
+    // нему через `as` и директиву, вписанную в разметку атрибутом.
+    const resolver = resolve(WEB_SRC, 'seo', 'robots-directive.ts');
+    const sources = [...filesUnder(WEB_SRC, '.astro'), ...filesUnder(WEB_SRC, '.ts')].filter(
+      (file) => resolve(file) !== resolver,
+    );
+
+    // Искомая строка собирается из кусков намеренно: иначе ЭТОТ файл содержал бы
+    // её сам и проверку пришлось бы исключать из собственной выборки — то есть
+    // ослаблять её ради того, чтобы она проходила.
+    const cast = `as ${'Page'}${'Robots'}`;
+
+    expect(sources.length).toBeGreaterThan(20);
+    for (const file of sources) {
+      const source = readFileSync(file, 'utf8');
+
+      // Единственное место приведения к номинальному типу — сам разрешатель.
+      expect(source, file).not.toContain(cast);
+      // Директива, вписанная в шаблон атрибутом строкой, а не выражением.
+      expect(markupOf(source), file).not.toMatch(/robots\s*=\s*["'](?:no)?index/u);
+    }
   });
 
   it('страница 404 ПРЕРЕНДЕРЕНА — иначе у сайта две разные страницы 404', () => {

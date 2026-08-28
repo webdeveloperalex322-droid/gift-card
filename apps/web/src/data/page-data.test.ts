@@ -724,12 +724,29 @@ describe('фильтр представления на странице подб
   });
 
   it('отфильтрованное представление закрыто от индексации', () => {
-    const node = collection({ robots: 'index,follow' });
+    // Описание в фикстуре обязательно: с задачи Э4-01 индексируемой страницы без
+    // непустого description не бывает (п. 22.1), и без него проверка про фильтр
+    // проверяла бы не фильтр.
+    const node = collection({
+      metaDescription: 'Открытки к 8 Марта: маме, бабушке, коллеге.',
+      robots: 'index,follow',
+    });
 
     expect(collectionContent({ cards: [vertical], node }).robots).toBe('index,follow');
     expect(collectionContent({ cards: [vertical], node, view: FILTER }).robots).toBe(
       'noindex,follow',
     );
+  });
+
+  it('индексируемая страница без описания закрывается, а описание не сочиняется', () => {
+    // Единственный разрешатель (задача Э4-01): пустой description означает, что
+    // тега не будет вовсе, а страница без него в индекс не идёт. Собрать
+    // описание по шаблону запрещает п. 23.4, поэтому закрывается страница.
+    const node = collection({ robots: 'index,follow' });
+    const content = collectionContent({ cards: [vertical], node });
+
+    expect(content.metaDescription).toBeNull();
+    expect(content.robots).toBe('noindex,follow');
   });
 
   it('фильтр не пересобирает пагинацию: адреса страниц те же', () => {

@@ -27,7 +27,6 @@ import {
   hasActiveFilter,
   NO_VIEW_PARAMS,
   parseViewParams,
-  robotsForFilteredView,
   viewParamsQuery,
   withViewParams,
 } from '../../apps/web/src/routing/view-params.js';
@@ -113,24 +112,6 @@ describe('ссылки фильтра: второго адреса у стран
 
     expect(options[0]?.active).toBe(true);
     expect(options.filter((option) => option.active)).toHaveLength(1);
-  });
-});
-
-describe('директива робота отфильтрованного представления', () => {
-  const FILTERED = parseViewParams(`?${CARD_FORMAT_PARAM}=vertical`);
-
-  it('фильтр закрывает представление от индексации (ТЗ §5.2, §5.5)', () => {
-    expect(robotsForFilteredView('index,follow', FILTERED)).toBe('noindex,follow');
-    expect(robotsForFilteredView('noindex,follow', FILTERED)).toBe('noindex,follow');
-  });
-
-  it('без фильтра директива страницы не меняется', () => {
-    expect(robotsForFilteredView('index,follow', NO_VIEW_PARAMS)).toBe('index,follow');
-    expect(robotsForFilteredView('noindex,follow', NO_VIEW_PARAMS)).toBe('noindex,follow');
-  });
-
-  it('отфильтрованное представление не бывает открытее самой страницы', () => {
-    expect(robotsForFilteredView('noindex,nofollow', FILTERED)).toBe('noindex,nofollow');
   });
 });
 

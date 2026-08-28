@@ -63,9 +63,9 @@ import {
   type InfoPageKey,
 } from '@otkritka/shared';
 
-import type { RobotsDirective } from '../routing/pagination.js';
 import { type BreadcrumbTrail, buildBreadcrumbTrail } from './breadcrumbs.js';
 import type { NavLink } from './catalog-pages.js';
+import { type PageRobots, resolvePageRobots } from './robots-directive.js';
 
 /**
  * Названия страниц — резерв для `<title>` и `<h1>`, когда поля глобала пусты, и
@@ -108,7 +108,7 @@ export interface InfoPageView {
   /** `<meta name="description">`. `null` — тега нет вовсе, а не пустой тег. */
   readonly metaDescription: string | null;
   /** Директива робота: результат конъюнкции Ч-23, а не литерал (см. шапку). */
-  readonly robots: RobotsDirective;
+  readonly robots: PageRobots;
   /** Тело страницы: lexical-документ из глобала. Разбирает `../seo/rich-text.ts`. */
   readonly body: unknown;
   /**
@@ -146,16 +146,25 @@ export function infoPageView(key: InfoPageKey, facts: InfoPageFacts): InfoPageVi
   // Заглушка — это отсутствие ТЕЛА, а не отсутствие решения об индексации:
   // страница с текстом и выключенным выключателем печатает свой текст.
   const stub = indexation.gaps.includes('body');
+  const metaDescription = filled(facts.metaDescription);
 
   return {
     body: facts.body,
     heading,
     indexation,
-    // Директива — результат предиката Ч-23. Литерала `index,follow` в этом файле
-    // нет: значение приходит из решения человека (выключатель `allowIndexing`) в
-    // конъюнкции с наполненностью.
-    robots: indexation.indexable ? 'index,follow' : 'noindex,follow',
-    metaDescription: filled(facts.metaDescription),
+    // Директива — результат предиката Ч-23, пропущенный через единственный
+    // разрешатель (задача Э4-01). Литерала `index,follow` в этом файле нет:
+    // значение приходит из решения человека (выключатель `allowIndexing`) в
+    // конъюнкции с наполненностью текста, а разрешатель добавляет условие,
+    // общее для всех страниц сайта: индексируемая страница без непустого
+    // description не бывает (п. 22.1). Заполнять описание вместо редактора
+    // нельзя — это шаблонный SEO-текст (запрет п. 23.4), поэтому страница
+    // остаётся закрытой, пока описания нет.
+    robots: resolvePageRobots({
+      declared: indexation.indexable ? 'index,follow' : 'noindex,follow',
+      description: metaDescription,
+    }).robots,
+    metaDescription,
     path: INFO_PAGE_PATHS[key],
     stub,
     title,

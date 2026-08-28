@@ -59,14 +59,21 @@
  */
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { CATALOGS } from '../seo/catalog-pages';
+import { errorPageRobots } from '../seo/robots-directive';
 import { SEARCH_PAGE, SEARCH_PATH } from '../seo/search-page';
+
+// Директива приходит из единственного разрешателя (задача Э4-01), а не строкой:
+// значение типа `PageRobots` создаётся только там. Литерал раньше стоял здесь и
+// был законным — но именно из таких «очевидных» литералов и получается вторая
+// трактовка, из-за которой sitemap и разметка расходятся.
+const robots = errorPageRobots().robots;
 ---
 
 <BaseLayout
   title="Страница не найдена"
   description="Такого адреса на сайте нет. Перейдите в каталог открыток или в подборки."
   canonicalPath={null}
-  robots="noindex,follow"
+  robots={robots}
 >
   <h1>Страница не найдена</h1>
 

@@ -30,7 +30,6 @@ import {
   paginationModel,
   paginationPathFor,
   paginationTitle,
-  robotsForPage,
   splitPaginatedPath,
 } from '../../apps/web/src/routing/pagination.js';
 
@@ -136,23 +135,6 @@ describe('расчёт числа страниц', () => {
   it('некорректный размер страницы — отказ, а не деление на ноль', () => {
     expect(() => pageCountFor(10, 0)).toThrow();
     expect(() => pageCountFor(-1, 24)).toThrow();
-  });
-});
-
-describe('директива робота на страницах пагинации', () => {
-  it('первая страница сохраняет директиву записи: решение об индексации — человека', () => {
-    expect(robotsForPage('index,follow', 1)).toBe('index,follow');
-    expect(robotsForPage('noindex,follow', 1)).toBe('noindex,follow');
-    expect(robotsForPage('noindex,nofollow', 1)).toBe('noindex,nofollow');
-  });
-
-  it('страницы 2+ — noindex,follow: ссылки обходятся, страницы в индекс не идут', () => {
-    expect(robotsForPage('index,follow', 2)).toBe('noindex,follow');
-    expect(robotsForPage('noindex,follow', 5)).toBe('noindex,follow');
-  });
-
-  it('страница пагинации не бывает ОТКРЫТЕЕ базовой: nofollow не превращается в follow', () => {
-    expect(robotsForPage('noindex,nofollow', 2)).toBe('noindex,nofollow');
   });
 });
 

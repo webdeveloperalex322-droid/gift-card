@@ -43,10 +43,13 @@ import {
   paginationCrumbLabel,
   paginationPathFor,
   paginationTitle,
-  robotsForPage,
-  type RobotsDirective,
 } from '../routing/pagination.js';
 import { type BreadcrumbTrail, buildBreadcrumbTrail } from './breadcrumbs.js';
+import {
+  type PageRobots,
+  resolvePageRobots,
+  type RobotsDirective,
+} from './robots-directive.js';
 import { SEARCH_PAGE, SEARCH_PATH } from './search-page.js';
 
 /**
@@ -150,7 +153,8 @@ export interface CatalogPageView {
   readonly title: string;
   /** `null` — тега description нет вовсе, а не пустой тег. */
   readonly metaDescription: string | null;
-  readonly robots: RobotsDirective;
+  /** Директива робота, посчитанная единственным разрешателем (задача Э4-01). */
+  readonly robots: PageRobots;
 }
 
 /**
@@ -172,20 +176,29 @@ const CATALOG_ROBOTS: RobotsDirective = 'noindex,follow';
  *     означал бы «этой страницы не существует», тогда как она отвечает 200 и
  *     содержит другие открытки;
  *   - **`noindex,follow` на страницах 2+** (решение Ч-01b) — через
- *     `robotsForPage`, то есть тем же правилом, что у списка подборки;
+ *     `resolvePageRobots`, то есть тем же правилом и тем же кодом, что у списка
+ *     подборки, карточки и служебной страницы (задача Э4-01);
  *   - **описание только на первой странице.** Повторить его на всех страницах
  *     значило бы выдать одинаковый description на разных адресах (п. 22.1), а
  *     дописать в него номер — сочинить шаблонный текст. Пусто → тега нет.
+ *     Разрешателю передаётся ТО ЖЕ значение, которое пойдёт в тег: отсутствие
+ *     описания закрывает страницу от индексации, и расхождение здесь означало бы
+ *     индексируемую страницу без description.
  *
  * @throws Error если номер страницы не целое ≥ 1.
  */
 export function catalogPageView(key: CatalogKey, page: number): CatalogPageView {
   const facts = CATALOGS[key];
+  const metaDescription = page === 1 ? facts.description : null;
   return {
     canonicalPath: paginationPathFor(facts.path, page),
     heading: paginationTitle(facts.heading, page),
-    metaDescription: page === 1 ? facts.description : null,
-    robots: robotsForPage(CATALOG_ROBOTS, page),
+    metaDescription,
+    robots: resolvePageRobots({
+      declared: CATALOG_ROBOTS,
+      description: metaDescription,
+      listPage: page,
+    }).robots,
     title: paginationTitle(facts.title, page),
   };
 }

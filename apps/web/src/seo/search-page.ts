@@ -39,7 +39,11 @@
  */
 
 import { type BreadcrumbTrail, buildBreadcrumbTrail } from './breadcrumbs.js';
-import type { RobotsDirective } from '../routing/pagination.js';
+import {
+  type PageRobots,
+  resolvePageRobots,
+  type RobotsDirective,
+} from './robots-directive.js';
 
 /** Канонический путь страницы поиска — без завершающего слеша (решение Ч-21). */
 export const SEARCH_PATH = '/search';
@@ -142,7 +146,8 @@ export interface SearchPageView {
   readonly heading: string;
   readonly title: string;
   readonly metaDescription: string;
-  readonly robots: RobotsDirective;
+  /** Директива робота, посчитанная единственным разрешателем (задача Э4-01). */
+  readonly robots: PageRobots;
   /** Нормализованный запрос либо `null` — форма показана, поиск не выполнялся. */
   readonly query: string | null;
 }
@@ -160,7 +165,14 @@ export function searchPageView(query: string | null): SearchPageView {
     heading: SEARCH_PAGE.heading,
     metaDescription: SEARCH_PAGE.description,
     query,
-    robots: SEARCH_ROBOTS,
+    // Директива проходит через единственный разрешатель, хотя закрыта уже в
+    // объявлении: так у страницы поиска нет СВОЕГО пути к тегу robots. Иначе
+    // «источник директивы один» держалось бы на том, что здесь стоит правильная
+    // константа, — а это снова дисциплина, а не построение.
+    robots: resolvePageRobots({
+      declared: SEARCH_ROBOTS,
+      description: SEARCH_PAGE.description,
+    }).robots,
     title: SEARCH_PAGE.title,
   };
 }

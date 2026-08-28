@@ -36,7 +36,7 @@ import {
   homePageJsonLd,
 } from '../seo/home-page.js';
 import type { ListItemFacts } from '../seo/collection-page.js';
-import type { RobotsDirective } from '../routing/pagination.js';
+import { type PageRobots, resolvePageRobots } from '../seo/robots-directive.js';
 import {
   listChildCollections,
   listRecentCards,
@@ -80,7 +80,8 @@ export interface HomePageView {
   readonly heading: string;
   readonly title: string;
   readonly metaDescription: string;
-  readonly robots: RobotsDirective;
+  /** Директива робота, посчитанная единственным разрешателем (задача Э4-01). */
+  readonly robots: PageRobots;
 }
 
 export interface HomePageContent {
@@ -148,7 +149,12 @@ export async function homePage(today: Date, env?: SharedEnv): Promise<HomePageCo
       canonicalPath: HOME_PATH,
       heading: HOME_PAGE.heading,
       metaDescription: HOME_PAGE.description,
-      robots: HOME_ROBOTS,
+      // Через единственный разрешатель (задача Э4-01), хотя главная закрыта уже
+      // объявлением: своего пути к тегу robots нет ни у одной страницы сайта.
+      robots: resolvePageRobots({
+        declared: HOME_ROBOTS,
+        description: HOME_PAGE.description,
+      }).robots,
       title: HOME_PAGE.title,
     },
   };

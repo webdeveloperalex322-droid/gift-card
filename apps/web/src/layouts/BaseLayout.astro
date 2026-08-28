@@ -34,6 +34,7 @@
 import SiteFooter from '../components/SiteFooter.astro';
 import SiteNav from '../components/SiteNav.astro';
 import { canonicalUrlFor } from '../routing/canonical';
+import type { PageRobots } from '../seo/robots-directive';
 import { serverEnv } from '../server-env';
 
 interface Props {
@@ -87,8 +88,16 @@ interface Props {
   /**
    * Директива для поисковых роботов. `index,follow` допустим только по решению
    * человека и только при выполнении условий п. 5.1 ТЗ.
+   *
+   * Тип НЕ строковый союз, и это главное изменение задачи Э4-01: значение
+   * принимается только из `resolvePageRobots` (`../seo/robots-directive.ts`) —
+   * единственного места, где директива страницы вычисляется. Литерал сюда не
+   * подставить, потому что тип {@link PageRobots} несёт недостижимое извне
+   * свойство. Раньше здесь стоял союз литералов, и любой шаблон мог написать
+   * директиву руками — `astro check` не возражал бы, а sitemap (Э4-04) отбирает
+   * страницы именно по этому значению.
    */
-  robots: 'index,follow' | 'noindex,follow' | 'noindex,nofollow';
+  robots: PageRobots;
 }
 
 const { canonicalPath, description, robots, title } = Astro.props;

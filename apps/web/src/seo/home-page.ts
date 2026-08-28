@@ -52,8 +52,8 @@ import {
 } from '@otkritka/shared';
 
 import { canonicalUrlFor } from '../routing/canonical.js';
-import type { RobotsDirective } from '../routing/pagination.js';
 import type { JsonLdDocument } from './json-ld.js';
+import type { RobotsDirective } from './robots-directive.js';
 
 /**
  * Канонический путь главной — корень сайта.

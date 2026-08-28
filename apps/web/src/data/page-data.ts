@@ -64,7 +64,6 @@ import {
   type FilterOption,
   filterOptions,
   NO_VIEW_PARAMS,
-  robotsForFilteredView,
   type ViewParams,
 } from '../routing/view-params.js';
 import {
@@ -72,8 +71,8 @@ import {
   paginationModel,
   paginationPathFor,
   paginationTitle,
-  robotsForPage,
 } from '../routing/pagination.js';
+import { type PageRobots, resolvePageRobots } from '../seo/robots-directive.js';
 import { type CardPageJsonLd, cardPageJsonLd } from '../seo/card-page.js';
 import {
   type CollectionPageJsonLd,
@@ -196,8 +195,12 @@ export interface CardPageContent {
   readonly title: string;
   /** `<meta name="description">`. `null` — тега нет вовсе, а не пустой тег. */
   readonly metaDescription: string | null;
-  /** Директива робота из записи. Догадок здесь нет: значение задаёт человек. */
-  readonly robots: Card['robots'];
+  /**
+   * Директива робота: объявленное человеком поле записи, пропущенное через
+   * единственный разрешатель (задача Э4-01). Догадок здесь нет — разрешатель
+   * умеет только закрывать.
+   */
+  readonly robots: PageRobots;
   /** Видимая подпись или текст поздравления. */
   readonly caption: string | null;
   /** Видимое описание открытки. */
@@ -296,7 +299,19 @@ export function cardPageContent(input: CardPageInput): CardPageContent | null {
       input.env,
     ),
     metaDescription: filled(input.card.metaDescription),
-    robots: input.card.robots,
+    // Директива считается ОДНИМ разрешателем на все типы страниц (задача Э4-01).
+    // Карточке он добавляет два условия, которых у неё раньше не было: пустое
+    // описание закрывает страницу от индексации (индексируемая страница без
+    // description не проходит п. 22.1, а сочинить его вместо редактора запрещает
+    // п. 23.4), и неопубликованный статус закрывает её независимо от поля
+    // `robots`, оставшегося с прошлой публикации. Второе недостижимо — черновик
+    // до шаблона не доходит (`./read-scope.ts`), — и стоит здесь именно потому,
+    // что цена ошибки в этом месте выше цены двойной проверки.
+    robots: resolvePageRobots({
+      declared: input.card.robots,
+      description: input.card.metaDescription,
+      status: input.card.status,
+    }).robots,
     similar: cardTiles(input.similar),
     title: input.card.title,
     usageTerms: filled(input.card.usageTerms),
@@ -332,7 +347,8 @@ export interface CollectionPageContent {
   readonly heading: string;
   readonly title: string;
   readonly metaDescription: string | null;
-  readonly robots: Collection['robots'];
+  /** Директива робота, посчитанная единственным разрешателем (задача Э4-01). */
+  readonly robots: PageRobots;
   /**
    * Номер показанной страницы списка, начиная с 1. Первая страница живёт по
    * базовому URL (решение Ч-05).
@@ -535,12 +551,19 @@ export function collectionPageContent(input: CollectionPageInput): CollectionPag
       ...(parent === null ? [] : [parent.path]),
       ...children.map((child) => child.path),
     ]),
-    // Директива робота: на первой странице — значение ЗАПИСИ (решение человека),
-    // на страницах 2+ — noindex,follow (решение Ч-01b). Страница пагинации не
-    // бывает открытее базовой — правило в `robotsForPage`. Отфильтрованное
-    // представление закрывается ещё раз (ТЗ §5.2: фильтры — всегда noindex), и
-    // тоже только в сторону закрытия — правило в `robotsForFilteredView`.
-    robots: robotsForFilteredView(robotsForPage(input.node.robots, page), view),
+    // Директива робота: ОДИН разрешатель на все условия (задача Э4-01). До него
+    // это была композиция двух функций из двух модулей, и каждый шаблон складывал
+    // её сам. Здесь ему передаются только ФАКТЫ: объявленная человеком директива
+    // записи, номер страницы (2+ → noindex,follow, решение Ч-01b), активный
+    // фильтр (ТЗ §5.2), фактическое описание (его отсутствие закрывает страницу)
+    // и статус записи. Открыть страницу разрешатель не может ни по одному факту.
+    robots: resolvePageRobots({
+      declared: input.node.robots,
+      description: metaDescription,
+      listPage: page,
+      status: input.node.status,
+      view,
+    }).robots,
     tiles,
     tilesOnPage: allTiles.length,
     title,
