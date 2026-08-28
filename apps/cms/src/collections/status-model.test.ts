@@ -17,6 +17,7 @@ import {
   MAX_BATCH_SELECTION,
   assertBulkChangeAllowed,
   assertCreateStatus,
+  assertDescriptionForIndex,
   assertIncomingChangeAllowed,
   assertUrlShapeChangeAllowed,
   isFilledContentValue,
@@ -888,5 +889,88 @@ describe('пакетная операция (решение Ч-07, точка в
         }),
       'bulk-url-change',
     );
+  });
+});
+
+describe('index,follow без описания: решение человека, которое не применится', () => {
+  const filled = 'Открытки к 8 Марта: тюльпаны, мимоза и тёплые слова.';
+
+  it('индексируемая директива при пустом описании отклоняется', () => {
+    for (const empty of [undefined, null, '', '   ', '\n\t']) {
+      expectRule(
+        () =>
+          assertDescriptionForIndex({
+            metaDescription: empty,
+            path: '/otkrytki/mame',
+            robots: 'index,follow',
+          }),
+        'index-requires-description',
+      );
+    }
+  });
+
+  it('отказ называет ПОСЛЕДСТВИЕ, а не факт пустого поля', () => {
+    try {
+      assertDescriptionForIndex({
+        metaDescription: '',
+        path: '/otkrytki/mame',
+        robots: 'index,follow',
+      });
+    } catch (error) {
+      const { message } = error as ContentRuleError;
+      // Администратор обязан прочитать, ЧТО произойдёт с его решением, а не
+      // «поле обязательно»: правило понижения живёт в шаблоне, и без этой фразы
+      // отказ выглядел бы придиркой к необязательному полю.
+      expect(message).toContain('index,follow');
+      expect(message).toContain('noindex,follow');
+      expect(message).toContain('sitemap');
+      expect(message).toContain('/otkrytki/mame');
+      return;
+    }
+    throw new Error('Ожидался отказ');
+  });
+
+  it('непустое описание пропускается', () => {
+    expect(
+      assertDescriptionForIndex({
+        metaDescription: filled,
+        path: '/otkrytki/mame',
+        robots: 'index,follow',
+      }),
+    ).toBeUndefined();
+  });
+
+  it('неиндексируемая директива без описания — норма: правило только про индекс', () => {
+    for (const robots of ['noindex,follow', 'noindex,nofollow']) {
+      expect(
+        assertDescriptionForIndex({ metaDescription: '', path: '/otkrytki/mame', robots }),
+      ).toBeUndefined();
+    }
+  });
+
+  it('директива вне набора этим правилом не разбирается: у неё свой отказ', () => {
+    // Второй трактовки набора значений здесь нет: неизвестное значение
+    // отклоняет `planStatusTransition`, и подменять его отказом про описание
+    // значило бы назвать неверную причину.
+    expect(
+      assertDescriptionForIndex({ metaDescription: '', path: null, robots: 'index' }),
+    ).toBeUndefined();
+  });
+
+  it('путь неизвестен — отказ всё равно читается', () => {
+    try {
+      assertDescriptionForIndex({ metaDescription: null, path: null, robots: 'index,follow' });
+    } catch (error) {
+      expect((error as ContentRuleError).message).toContain('этой записи');
+      return;
+    }
+    throw new Error('Ожидался отказ');
+  });
+
+  it('пустота понимается ТЕМ ЖЕ предикатом, что и полнота перед review', () => {
+    // Одна трактовка слова «пусто» на всю CMS: иначе строка из одного пробела
+    // проходила бы одну проверку и не проходила другую.
+    expect(isFilledContentValue('   ')).toBe(false);
+    expect(isFilledContentValue(filled)).toBe(true);
   });
 });

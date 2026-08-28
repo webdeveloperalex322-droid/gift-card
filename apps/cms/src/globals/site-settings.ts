@@ -23,6 +23,8 @@ import {
   type ImageLicenseFacts,
   type InfoPageFacts,
   type InfoPageKey,
+  type InfoPageRequirement,
+  infoPageIndexation,
   MAX_AD_SLOTS_PER_POSITION,
   ORGANIZATION_JSON_LD_REQUIRED,
   type OrganizationFacts,
@@ -281,6 +283,71 @@ const imageLicenseGroup: Field = {
 /* Ч-19 + Ч-23: служебные информационные страницы                     */
 /* ------------------------------------------------------------------ */
 
+/** Человеческие названия того, чего не хватает наполнению страницы. */
+const INFO_PAGE_REQUIREMENT_LABELS: Readonly<Record<InfoPageRequirement, string>> = {
+  body: `основной текст (минимум ${String(INFO_PAGE_MIN_TEXT_LENGTH)} символов)`,
+  metaDescription: 'description',
+  title: 'title',
+};
+
+/**
+ * Что сейчас на самом деле происходит с индексацией этой страницы.
+ *
+ * ЗАЧЕМ. Ч-23 — конъюнкция: выключатель человека И наполненность. Пока она не
+ * выполнена целиком, включённый выключатель НЕ действует, и до этой строки
+ * узнать об этом было неоткуда: форма показывала галочку, страница отдавала
+ * `noindex`, и расходились они молча — тот же дефект, что закрывает отказ
+ * `index-requires-description` у карточек и подборок.
+ *
+ * ПОЧЕМУ ЗДЕСЬ НЕ ОТКАЗ, в отличие от контентных коллекций. У выключателя
+ * `allowIndexing` порядок «сначала решение, потом текст» ЗАКОННЫЙ и заявлен
+ * самим полем: «Одного включения мало: пока страница не наполнена, она остаётся
+ * noindex». Отказ на включении выключателя у страницы-заглушки отменил бы смысл
+ * выключателя — отделить решение человека от готовности текста. Поэтому здесь
+ * нужна видимость, а не запрет.
+ *
+ * ПОЧЕМУ ПОЛЕ, А НЕ КОМПОНЕНТ АДМИНКИ. Значение обязано доходить и до REST, и до
+ * GraphQL: правило, видимое только в форме админки, для внешнего клиента не
+ * существует. Поле виртуальное (`virtual: true`) — в базе его нет, оно
+ * вычисляется на чтении, поэтому второго хранимого источника истины о состоянии
+ * индексации не появляется.
+ *
+ * Своей трактовки Ч-23 функция не заводит: она ЗОВЁТ `infoPageIndexation` из
+ * общего пакета — ту же самую, по которой считает директиву публичный шаблон.
+ */
+export function describeInfoPageIndexation(page: InfoPageFacts | null | undefined): string {
+  const indexation = infoPageIndexation(page);
+
+  if (indexation.indexable) {
+    return 'Сейчас: index,follow — страница индексируется и входит в sitemap.';
+  }
+
+  if (!indexation.approved) {
+    return (
+      'Сейчас: noindex,follow, вне sitemap — выключатель «Открыть страницу в index,follow» ' +
+      'выключен. Это решение человека, само оно не включается.'
+    );
+  }
+
+  const gaps = indexation.gaps
+    .map((requirement) =>
+      requirement === 'body'
+        ? `${INFO_PAGE_REQUIREMENT_LABELS.body}, сейчас ${String(indexation.textLength)}`
+        : INFO_PAGE_REQUIREMENT_LABELS[requirement],
+    )
+    .join('; ');
+
+  return (
+    `Сейчас: noindex,follow, вне sitemap — выключатель включён, но решение НЕ применяется, ` +
+    `пока не заполнено: ${gaps}. Условие Ч-23 — конъюнкция: решение человека И наполненная ` +
+    'страница. Дописать текст за редактора нельзя: заглушка на индексируемой странице ' +
+    'запрещена п. 23 ТЗ.'
+  );
+}
+
+const readInfoPageIndexationState: FieldHook = ({ siblingData }) =>
+  describeInfoPageIndexation(siblingData as InfoPageFacts);
+
 function infoPageGroup(key: InfoPageKey): Field {
   return {
     name: key,
@@ -370,6 +437,23 @@ function infoPageGroup(key: InfoPageKey): Field {
             'выравнивание недоступны намеренно. Ссылка внутрь сайта задаётся путём от ' +
             'корня (например /usloviya), внешняя — полным адресом по http или https; ' +
             'mailto: и tel: шаблон ссылкой не печатает, поэтому и сохранить их нельзя.',
+        },
+      },
+      {
+        // Идёт ПОСЛЕДНИМ в группе намеренно: значение считается по соседним
+        // полям, и порядок обхода полей на чтении — их порядок здесь.
+        name: 'indexationState',
+        type: 'text',
+        label: 'Что сейчас с индексацией этой страницы',
+        // Виртуальное: в базе не хранится, вычисляется на чтении. Хранимая копия
+        // состояния устарела бы на первой же правке текста и врала бы уверенно.
+        virtual: true,
+        hooks: { afterRead: [readInfoPageIndexationState] },
+        admin: {
+          description:
+            'Вычисляется при каждом чтении по тому же правилу Ч-23, по которому директиву ' +
+            'считает публичный шаблон. Поле только для чтения и приходит в REST и GraphQL: ' +
+            'иначе состояние индексации было бы известно лишь форме админки.',
         },
       },
     ],

@@ -45,6 +45,7 @@ import { collectFieldNames, contentHooks, rethrow } from './content-hooks';
 import {
   canonicalField,
   headingField,
+  metaDescriptionField,
   publishedAtField,
   robotsField,
   slugField,
@@ -702,15 +703,7 @@ const collectionFields: Field[] = [
         'Ссылка внутрь сайта задаётся путём от корня, например /podborki/prazdniki/8-marta.',
     },
   },
-  {
-    name: 'metaDescription',
-    type: 'textarea',
-    admin: {
-      description:
-        'Meta description. Совпадения по каталогу проверяются при сохранении ' +
-        '(задача Э5-01).',
-    },
-  },
+  metaDescriptionField(),
   statusField(),
   robotsField(),
   canonicalField(),

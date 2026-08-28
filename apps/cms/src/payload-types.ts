@@ -168,7 +168,7 @@ export interface Card {
    */
   description?: string | null;
   /**
-   * Meta description. Задаётся отдельно от описания (ТЗ §8.1); совпадения по каталогу проверяются при сохранении (задача Э5-01).
+   * Meta description. Задаётся отдельно от видимого описания (ТЗ §8.1). Совпадения по каталогу проверяются при сохранении (задача Э5-01). index,follow не применяется, пока пусто meta description: страница без непустого описания понижается до noindex,follow и не попадает в sitemap. Поэтому сохранение с index,follow и пустым описанием отклоняется — иначе решение осталось бы в поле и не действовало на сайте.
    */
   metaDescription?: string | null;
   /**
@@ -184,7 +184,7 @@ export interface Card {
    */
   status: 'draft' | 'review' | 'published';
   /**
-   * index,follow — только для published и только по решению администратора при выполнении условий п. 5.1 SEO ТЗ (подтверждённый спрос, отдельный интент, достаточный объём, уникальные тексты, страница в навигации).
+   * index,follow — только для published и только по решению администратора при выполнении условий п. 5.1 SEO ТЗ (подтверждённый спрос, отдельный интент, достаточный объём, уникальные тексты, страница в навигации). index,follow не применяется, пока пусто meta description: страница без непустого описания понижается до noindex,follow и не попадает в sitemap. Поэтому сохранение с index,follow и пустым описанием отклоняется — иначе решение осталось бы в поле и не действовало на сайте.
    */
   robots: 'index,follow' | 'noindex,follow' | 'noindex,nofollow';
   /**
@@ -454,7 +454,7 @@ export interface Collection {
     [k: string]: unknown;
   } | null;
   /**
-   * Meta description. Совпадения по каталогу проверяются при сохранении (задача Э5-01).
+   * Meta description. Совпадения по каталогу проверяются при сохранении (задача Э5-01). index,follow не применяется, пока пусто meta description: страница без непустого описания понижается до noindex,follow и не попадает в sitemap. Поэтому сохранение с index,follow и пустым описанием отклоняется — иначе решение осталось бы в поле и не действовало на сайте.
    */
   metaDescription?: string | null;
   /**
@@ -462,7 +462,7 @@ export interface Collection {
    */
   status: 'draft' | 'review' | 'published';
   /**
-   * index,follow — только для published и только по решению администратора при выполнении условий п. 5.1 SEO ТЗ (подтверждённый спрос, отдельный интент, достаточный объём, уникальные тексты, страница в навигации).
+   * index,follow — только для published и только по решению администратора при выполнении условий п. 5.1 SEO ТЗ (подтверждённый спрос, отдельный интент, достаточный объём, уникальные тексты, страница в навигации). index,follow не применяется, пока пусто meta description: страница без непустого описания понижается до noindex,follow и не попадает в sitemap. Поэтому сохранение с index,follow и пустым описанием отклоняется — иначе решение осталось бы в поле и не действовало на сайте.
    */
   robots: 'index,follow' | 'noindex,follow' | 'noindex,nofollow';
   /**
@@ -1157,6 +1157,10 @@ export interface SiteSetting {
         };
         [k: string]: unknown;
       } | null;
+      /**
+       * Вычисляется при каждом чтении по тому же правилу Ч-23, по которому директиву считает публичный шаблон. Поле только для чтения и приходит в REST и GraphQL: иначе состояние индексации было бы известно лишь форме админки.
+       */
+      indexationState?: string | null;
     };
     /**
      * Тексты страницы /usloviya и решение об её индексации. В index,follow и в sitemap страница попадает только при ДВУХ условиях сразу: ниже включён выключатель «Открыть в index,follow» И страница наполнена (минимум 400 символов в теле плюс заполненные title и description). Иначе — noindex и вне sitemap, таково условие решения Ч-23. Текст-заглушка на индексируемой странице запрещён п. 23 ТЗ.
@@ -1196,6 +1200,10 @@ export interface SiteSetting {
         };
         [k: string]: unknown;
       } | null;
+      /**
+       * Вычисляется при каждом чтении по тому же правилу Ч-23, по которому директиву считает публичный шаблон. Поле только для чтения и приходит в REST и GraphQL: иначе состояние индексации было бы известно лишь форме админки.
+       */
+      indexationState?: string | null;
     };
     /**
      * Тексты страницы /kontakty и решение об её индексации. В index,follow и в sitemap страница попадает только при ДВУХ условиях сразу: ниже включён выключатель «Открыть в index,follow» И страница наполнена (минимум 400 символов в теле плюс заполненные title и description). Иначе — noindex и вне sitemap, таково условие решения Ч-23. Текст-заглушка на индексируемой странице запрещён п. 23 ТЗ.
@@ -1235,6 +1243,10 @@ export interface SiteSetting {
         };
         [k: string]: unknown;
       } | null;
+      /**
+       * Вычисляется при каждом чтении по тому же правилу Ч-23, по которому директиву считает публичный шаблон. Поле только для чтения и приходит в REST и GraphQL: иначе состояние индексации было бы известно лишь форме админки.
+       */
+      indexationState?: string | null;
     };
   };
   /**
@@ -1327,6 +1339,7 @@ export interface SiteSettingsSelect<T extends boolean = true> {
               h1?: T;
               metaDescription?: T;
               body?: T;
+              indexationState?: T;
             };
         terms?:
           | T
@@ -1336,6 +1349,7 @@ export interface SiteSettingsSelect<T extends boolean = true> {
               h1?: T;
               metaDescription?: T;
               body?: T;
+              indexationState?: T;
             };
         contacts?:
           | T
@@ -1345,6 +1359,7 @@ export interface SiteSettingsSelect<T extends boolean = true> {
               h1?: T;
               metaDescription?: T;
               body?: T;
+              indexationState?: T;
             };
       };
   adSlots?:

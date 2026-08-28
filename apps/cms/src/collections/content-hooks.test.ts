@@ -52,6 +52,18 @@ const CONFIGS: Readonly<Record<string, CollectionConfig>> = {
  * значение явно и возвращает прежнее после прогона: мутация process.env здесь
  * не удобство, а единственный способ проверить хук в том виде, в каком он
  * работает в проде.
+ *
+ * ЭТА МУТАЦИЯ ПОДОЗРЕВАЛАСЬ В НЕВОСПРОИЗВОДИМОСТИ `pnpm test` (замер 2026-08-28)
+ * И ВИНОВНОЙ НЕ ОКАЗАЛАСЬ. Проверено прямым опытом, а не рассуждением: набор
+ * прогнан в самой враждебной для утечки окружения конфигурации —
+ * `--pool=threads --no-isolate --sequence.shuffle`, то есть все файлы в одном
+ * процессе, без сброса состояния между ними и в случайном порядке. Результат тот
+ * же, что и в штатной: 74 файла, 1701 тест, ноль провалов. Значит, значение,
+ * выставленное здесь, до других файлов не доходит и от порядка файлов ничего не
+ * зависит. Настоящей причиной наблюдавшихся провалов был ПАРАЛЛЕЛЬНЫЙ прогон
+ * набора в том же рабочем каталоге, пока файлы этого каталога правились: тест
+ * ловил промежуточное состояние правки. Это дефект процесса, а не кода, и
+ * подгонять под него ожидания тестов нельзя.
  */
 const ADMIN_PATH_KEY = 'PAYLOAD_ADMIN_PATH';
 let savedAdminPath: string | undefined;
@@ -410,6 +422,24 @@ async function expectRejected(run: () => Promise<unknown>, fragment: string): Pr
     return;
   }
   throw new Error(`Ожидался отказ со словами «${fragment}», но операция прошла`);
+}
+
+/**
+ * Отказ по МАШИННОМУ признаку `data.rule`, а не по совпадению подстроки.
+ *
+ * Зелёный негативный тест на подстроке однажды держится на другом отказе —
+ * например, по правам, — и правило, ради которого тест писался, к тому моменту
+ * уже не работает. Признак задаёт `toApiError` и читает внешний клиент.
+ */
+async function expectApiRule(run: () => Promise<unknown>, rule: string): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    const data = (error as { data?: { rule?: unknown } }).data;
+    expect(data?.rule).toBe(rule);
+    return;
+  }
+  throw new Error(`Ожидался отказ с признаком «${rule}», но операция прошла`);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1612,5 +1642,131 @@ describe('наполненность подборки: публикация и �
       admin,
     );
     expect(updated.title).toBe('8 Марта — открытки');
+  });
+
+  it('у подборки индексация без description не открывается тоже', async () => {
+    // Узел уже опубликован, а описание очищено после публикации: пройти в
+    // published с пустым description нельзя вовсе — там стоит гейт полноты
+    // (`incomplete-for-review`). Именно поэтому проверка описания и нужна
+    // отдельно: гейт полноты сторожит переход, а не состояние.
+    const harness = createHarness();
+    const node = seedNode(harness, {
+      metaDescription: '',
+      publishedAt: '2026-01-10T00:00:00.000Z',
+      status: 'published',
+    });
+    seedCards(harness, node.id as number, 2);
+
+    await expectApiRule(
+      () => harness.update('collections', node.id as number, { robots: 'index,follow' }, admin),
+      'index-requires-description',
+    );
+    expect(harness.docs('collections').find((doc) => doc.id === node.id)?.robots).toBe(
+      'noindex,follow',
+    );
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Э4: index,follow при пустом description                             */
+/* ------------------------------------------------------------------ */
+
+describe('Э4: индексируемая директива при пустом description отклоняется', () => {
+  it('admin открывает индексацию карточки без описания — отказ, а не тихое понижение', async () => {
+    const harness = createHarness();
+    harness.seed('cards', { ...publishedCard('mame', 5), metaDescription: '' });
+
+    await expectApiRule(
+      () => harness.update('cards', 5, { robots: 'index,follow' }, admin),
+      'index-requires-description',
+    );
+    expect(harness.docs('cards')[0]?.robots).toBe('noindex,follow');
+  });
+
+  it('отказ отдаётся как 400 с машинным признаком: внешний клиент не угадывает причину', async () => {
+    const harness = createHarness();
+    harness.seed('cards', { ...publishedCard('mame', 5), metaDescription: '   ' });
+
+    try {
+      await harness.update('cards', 5, { robots: 'index,follow' }, admin);
+    } catch (error) {
+      const failure = error as { data?: { rule?: unknown }; status?: unknown };
+      expect(failure.status).toBe(400);
+      expect(failure.data?.rule).toBe('index-requires-description');
+      return;
+    }
+    throw new Error('Ожидался отказ');
+  });
+
+  it('очистка описания у уже индексируемой записи отклоняется', async () => {
+    // Второй, более дорогой случай: страница УЖЕ в индексе и в sitemap, и
+    // молчаливое опустошение описания выводит её оттуда — узнать об этом можно
+    // было бы только по диагностике карты сайта.
+    const harness = createHarness();
+    harness.seed('cards', { ...publishedCard('mame', 5), robots: 'index,follow' });
+
+    await expectApiRule(
+      () => harness.update('cards', 5, { metaDescription: '' }, admin),
+      'index-requires-description',
+    );
+    expect(harness.docs('cards')[0]?.metaDescription).toBe('Открытка с тюльпанами к 8 Марта');
+  });
+
+  it('правило проходит тем же слоем, что REST и GraphQL: сервисный аккаунт получает тот же отказ', async () => {
+    // `ai-editor` директиву не трогает вовсе, но описание — его поле, и очистка
+    // описания у индексируемой страницы для него такой же отказ, как для admin.
+    const harness = createHarness();
+    harness.seed('cards', { ...publishedCard('mame', 5), robots: 'index,follow' });
+
+    await expectApiRule(
+      () => harness.update('cards', 5, { metaDescription: '' }, aiEditor),
+      'index-requires-description',
+    );
+  });
+
+  it('при noindex пустое описание правилом не трогается', async () => {
+    const harness = createHarness();
+    harness.seed('cards', publishedCard('mame', 5));
+
+    const updated = await harness.update('cards', 5, { metaDescription: '' }, admin);
+    expect(updated.metaDescription).toBe('');
+    expect(updated.robots).toBe('noindex,follow');
+  });
+
+  it('снятие с публикации индексируемой записи без описания не блокируется', async () => {
+    // Проверка стоит на ИТОГОВОЙ директиве, а не на входящей: уход из published
+    // понижает robots до noindex,follow тем же сохранением, поэтому отказ здесь
+    // держал бы страницу в индексе дольше необходимого.
+    const harness = createHarness();
+    harness.seed('cards', {
+      ...publishedCard('mame', 5),
+      metaDescription: '',
+      robots: 'index,follow',
+    });
+
+    const withdrawn = await harness.update(
+      'cards',
+      5,
+      { status: 'draft', withdrawal: { mode: '410', redirectTo: null } },
+      admin,
+    );
+    expect(withdrawn.robots).toBe('noindex,follow');
+    expect(withdrawn.status).toBe('draft');
+  });
+
+  it('пакетное открытие индексации отклоняет ровно ту запись, у которой пусто описание', async () => {
+    const harness = createHarness();
+    harness.seed('cards', publishedCard('mame', 5));
+    harness.seed('cards', { ...publishedCard('pape', 6), metaDescription: '' });
+
+    const opened = await harness.runBulk(
+      'cards',
+      { id: { in: [5, 6] } },
+      { robots: 'index,follow' },
+      admin,
+    );
+    expect(opened.updated.map((doc) => doc.id)).toEqual([5]);
+    expect(opened.errors).toHaveLength(1);
+    expect(opened.errors[0]).toContain('index,follow');
   });
 });

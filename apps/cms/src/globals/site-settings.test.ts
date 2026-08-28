@@ -20,6 +20,7 @@ import {
   IMAGE_CREATOR_KINDS,
   INFO_PAGE_INDEXING_FIELD,
   INFO_PAGE_KEYS,
+  type InfoPageFacts,
   SITE_SETTINGS_SLUG,
   isImageLicenseComplete,
   isInfoPageIndexable,
@@ -32,6 +33,7 @@ import type { SiteSetting } from '../payload-types';
 import {
   SiteSettings,
   adSlotFacts,
+  describeInfoPageIndexation,
   imageLicenseFacts,
   infoPageFacts,
   organizationFacts,
@@ -264,7 +266,7 @@ describe('Э3-00: все поля пустые по умолчанию', () => {
     expect(typeof call(null, { siblingData: { creator: 'Проект «Открытки»' } })).toBe('string');
   });
 
-  it('состав служебной страницы — выключатель индексации, заголовок, H1, description и текст', () => {
+  it('состав служебной страницы — выключатель индексации, заголовок, H1, description, текст и состояние', () => {
     for (const key of INFO_PAGE_KEYS) {
       expect(childFields(fieldAt(`infoPages.${key}`)).map((field) => field.name)).toEqual([
         INFO_PAGE_INDEXING_FIELD,
@@ -272,6 +274,9 @@ describe('Э3-00: все поля пустые по умолчанию', () => {
         'h1',
         'metaDescription',
         'body',
+        // Виртуальное поле-зеркало: считается на чтении по соседним, поэтому
+        // стоит последним. В базе его нет, редактируемым состав не пополнился.
+        'indexationState',
       ]);
       expect(fieldAt(`infoPages.${key}.body`).type).toBe('richText');
     }
@@ -448,5 +453,110 @@ describe('Э3-00: аудит правки настроек', () => {
 
   it('нераспознанная роль остаётся инцидентом, а не превращается в system', () => {
     expect(callBeforeChange('audit.authorRole', requestOf('editor'))).toBe('unknown');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Э4: состояние индексации служебной страницы видно, а не угадывается */
+/* ------------------------------------------------------------------ */
+
+describe('Э4: включённый выключатель без наполнения не молчит', () => {
+  const filledBody = lexicalBody('Текст. '.repeat(80));
+
+  it('выключатель выключен — сказано именно это, а не «не хватает полей»', () => {
+    const state = describeInfoPageIndexation({
+      body: filledBody,
+      metaDescription: 'Описание страницы «О проекте».',
+      title: 'О проекте',
+    });
+    expect(state).toContain('noindex,follow');
+    expect(state).toContain('выключен');
+  });
+
+  it('выключатель включён, description пуст — названо ПОСЛЕДСТВИЕ решения', () => {
+    const state = describeInfoPageIndexation({
+      [INFO_PAGE_INDEXING_FIELD]: true,
+      body: filledBody,
+      metaDescription: '   ',
+      title: 'О проекте',
+    });
+    expect(state).toContain('noindex,follow');
+    expect(state).toContain('вне sitemap');
+    expect(state).toContain('НЕ применяется');
+    expect(state).toContain('description');
+    expect(state).not.toContain('title');
+  });
+
+  it('заглушка вместо текста названа вместе с фактической длиной', () => {
+    const state = describeInfoPageIndexation({
+      [INFO_PAGE_INDEXING_FIELD]: true,
+      body: lexicalBody('TODO'),
+      metaDescription: 'Описание',
+      title: 'О проекте',
+    });
+    expect(state).toContain('основной текст');
+    expect(state).toContain('сейчас 4');
+  });
+
+  it('условия выполнены — сказано, что страница индексируется', () => {
+    const state = describeInfoPageIndexation({
+      [INFO_PAGE_INDEXING_FIELD]: true,
+      body: filledBody,
+      metaDescription: 'Описание страницы «О проекте».',
+      title: 'О проекте',
+    });
+    expect(state).toContain('index,follow');
+    expect(state).toContain('sitemap');
+  });
+
+  it('состояние совпадает с предикатом Ч-23, а не считается заново', () => {
+    // Вторая трактовка Ч-23 здесь была бы худшим исходом: подпись обещала бы
+    // одно, а шаблон делал другое. Поэтому пара сверяется на всех сочетаниях.
+    const cases: InfoPageFacts[] = [
+      {},
+      { [INFO_PAGE_INDEXING_FIELD]: true },
+      { [INFO_PAGE_INDEXING_FIELD]: true, body: filledBody, title: 'О проекте' },
+      {
+        [INFO_PAGE_INDEXING_FIELD]: true,
+        body: filledBody,
+        metaDescription: 'Описание',
+        title: 'О проекте',
+      },
+      { body: filledBody, metaDescription: 'Описание', title: 'О проекте' },
+    ];
+    for (const page of cases) {
+      expect(describeInfoPageIndexation(page).startsWith('Сейчас: index,follow')).toBe(
+        isInfoPageIndexable(page),
+      );
+    }
+  });
+
+  it('поле состояния есть у каждой служебной страницы, виртуально и только читается', () => {
+    for (const key of INFO_PAGE_KEYS) {
+      const field = fieldAt(`infoPages.${key}.indexationState`);
+      // Виртуальное: в базе не хранится, поэтому устареть не может. Payload сам
+      // делает такое поле readOnly, но опора на это здесь была бы опорой на
+      // деталь чужой реализации.
+      expect(field.virtual).toBe(true);
+      const hooks = asRecord(field.hooks).afterRead;
+      expect(Array.isArray(hooks) && hooks.length === 1).toBe(true);
+    }
+  });
+
+  it('хук поля считает состояние по СОСЕДНИМ полям своей группы', () => {
+    // Проверка проводки: значение обязано приходить в REST и GraphQL, а не
+    // только в форму админки — иначе внешний клиент состояния не увидит.
+    const hooks = asRecord(fieldAt('infoPages.about.indexationState').hooks).afterRead;
+    const hook = (hooks as unknown[])[0] as (args: unknown) => unknown;
+    expect(
+      hook({
+        siblingData: {
+          [INFO_PAGE_INDEXING_FIELD]: true,
+          body: filledBody,
+          metaDescription: '',
+          title: 'О проекте',
+        },
+      }),
+    ).toContain('description');
   });
 });

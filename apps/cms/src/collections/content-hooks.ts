@@ -21,6 +21,7 @@ import {
   type ReviewRequirement,
   assertBulkChangeAllowed,
   assertCreateStatus,
+  assertDescriptionForIndex,
   assertIncomingChangeAllowed,
   assertUrlShapeChangeAllowed,
   missingReviewFields,
@@ -151,6 +152,14 @@ export function collectFieldNames(fields: readonly Field[]): ReadonlySet<string>
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null ? { ...value } : {};
 }
+
+/**
+ * Имя поля описания. Константа, а не литерал в двух местах: от совпадения имени
+ * зависит, сработает ли проверка вовсе, а расхождение здесь не сломало бы
+ * сборку — правило увидело бы `undefined` и честно отказало БЕЗ повода либо
+ * пропустило бы запись молча.
+ */
+const META_DESCRIPTION_FIELD = 'metaDescription';
 
 /** Поля, из-за которых стоит читать документ в `beforeOperation`. */
 const CONTESTED_FIELDS = ['status', 'robots', 'slug', 'parent', 'nodeKind', 'urlChange'] as const;
@@ -364,6 +373,24 @@ function enforceContentRules(
         previous,
         user: req.user,
       });
+
+      if (options.knownFields.has(META_DESCRIPTION_FIELD)) {
+        // Проверяется ИТОГОВАЯ директива (`plan.robots`), а не входящая: уход из
+        // published понижает её тем же сохранением, и отказ на входящем значении
+        // держал бы страницу в индексе дольше необходимого.
+        //
+        // Описание берётся из слитых данных, но с оглядкой на отсутствие ключа:
+        // явная очистка поля (`''`) обязана дойти до правила, а PATCH, в котором
+        // поля нет вовсе, не должен читаться как очистка.
+        assertDescriptionForIndex({
+          metaDescription:
+            META_DESCRIPTION_FIELD in next
+              ? next[META_DESCRIPTION_FIELD]
+              : previous[META_DESCRIPTION_FIELD],
+          path: options.pathOf(next) ?? options.pathOf(previous),
+          robots: plan.robots,
+        });
+      }
 
       if (plan.robotsCoerced) {
         req.payload.logger.warn(

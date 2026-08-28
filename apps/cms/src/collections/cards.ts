@@ -14,6 +14,7 @@ import { collectFieldNames, contentHooks } from './content-hooks';
 import {
   canonicalField,
   headingField,
+  metaDescriptionField,
   publishedAtField,
   robotsField,
   slugField,
@@ -127,15 +128,7 @@ const cardFields: Field[] = [
     type: 'textarea',
     admin: { description: 'Описание открытки для страницы (видимый текст).' },
   },
-  {
-    name: 'metaDescription',
-    type: 'textarea',
-    admin: {
-      description:
-        'Meta description. Задаётся отдельно от описания (ТЗ §8.1); совпадения по ' +
-        'каталогу проверяются при сохранении (задача Э5-01).',
-    },
-  },
+  metaDescriptionField('Задаётся отдельно от видимого описания (ТЗ §8.1).'),
   {
     name: 'usageTerms',
     type: 'textarea',
