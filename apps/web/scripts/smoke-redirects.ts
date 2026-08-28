@@ -398,8 +398,17 @@ async function main(): Promise<void> {
       slug: `${PREFIX}-zamenyaemaya`,
       title: 'Смоук Э4-02: открытка, удаляемая с заменой',
     });
+    // Вторая половина строки «Удалено без замены → 404/410»: решение
+    // администратора «404» не создаёт правила вовсе, и адрес обязан отвечать
+    // обычным 404. Без этой фикстуры половина строки матрицы оставалась бы
+    // словами.
+    const gone404Id = await makeCard({
+      composition: 'rings',
+      slug: `${PREFIX}-udalyaemaya-404`,
+      title: 'Смоук Э4-06: открытка, удаляемая решением 404',
+    });
 
-    for (const id of [targetId, movedId, goneId, replacedId]) {
+    for (const id of [targetId, movedId, goneId, replacedId, gone404Id]) {
       await publish(id);
     }
 
@@ -407,6 +416,7 @@ async function main(): Promise<void> {
     const oldMovedPath = `/otkrytki/${PREFIX}-pereezzhayushchaya`;
     const newMovedPath = `/otkrytki/${PREFIX}-pereehavshaya`;
     const gonePath = `/otkrytki/${PREFIX}-udalyaemaya`;
+    const gone404Path = `/otkrytki/${PREFIX}-udalyaemaya-404`;
     const replacedPath = `/otkrytki/${PREFIX}-zamenyaemaya`;
     const legacyPath = `/${PREFIX}-staryy-adres-bez-marshruta`;
     const chainStartPath = `/${PREFIX}-tsepochka-a`;
@@ -433,6 +443,15 @@ async function main(): Promise<void> {
       collection: 'cards',
       id: goneId,
       data: { status: 'draft', withdrawal: { mode: '410' } },
+      ...asAdmin,
+    });
+
+    // Удалено без замены, решение «404»: записи в таблице редиректов не
+    // появляется вовсе — адрес просто перестаёт существовать.
+    await payload.update({
+      collection: 'cards',
+      id: gone404Id,
+      data: { status: 'draft', withdrawal: { mode: '404' } },
       ...asAdmin,
     });
 
@@ -622,6 +641,20 @@ async function main(): Promise<void> {
       location: goneResponse.headers.location,
       retryAfter: goneResponse.headers['retry-after'],
       status: goneResponse.status,
+    });
+
+    const gone404Response = await request(gone404Path);
+    record(
+      'удалено без замены решением «404» — 404 без Location и без правила',
+      gone404Response.status === 404 && gone404Response.headers.location === undefined,
+      `${gone404Path} → ${String(gone404Response.status)}`,
+    );
+    matrix.check('deleted-gone', `${gone404Path} (решение «404»)`, {
+      body: gone404Response.body,
+      hops: 0,
+      location: gone404Response.headers.location,
+      retryAfter: gone404Response.headers['retry-after'],
+      status: gone404Response.status,
     });
 
     const replacedHops = await followRedirects(replacedPath);
