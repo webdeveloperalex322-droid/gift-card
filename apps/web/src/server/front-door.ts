@@ -37,6 +37,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 
 import { decideRequestTarget, NOT_FOUND_PAGE_FILE } from '../routing/path-policy.js';
+import { errorPageRobots, robotsMetaTag } from '../seo/robots-directive.js';
 import type { AstroNodeHandler } from './astro-app.js';
 import type { MaintenanceDecision } from './maintenance.js';
 import { decideMediaRequest, type MediaDecision } from './media-files.js';
@@ -65,7 +66,10 @@ const FALLBACK_NOT_FOUND_HTML = [
   '<!doctype html>',
   '<html lang="ru">',
   '<head><meta charset="utf-8"><title>Страница не найдена</title>',
-  '<meta name="robots" content="noindex,follow"></head>',
+  // Директива берётся у единственного разрешателя (`../seo/robots-directive.ts`),
+  // как и у самой страницы 404: резервное тело обязано отвечать той же
+  // директивой, что и та, которую оно подменяет.
+  `${robotsMetaTag(errorPageRobots().robots)}</head>`,
   '<body><h1>Страница не найдена</h1>',
   '<p>Такого адреса на сайте нет. <a href="/">Перейти на главную</a>.</p>',
   '</body></html>',

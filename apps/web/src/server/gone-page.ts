@@ -35,6 +35,7 @@
  */
 
 import { SITE_NAV } from '../seo/catalog-pages.js';
+import { errorPageRobots, robotsMetaTag } from '../seo/robots-directive.js';
 
 /** Экранирование текста для HTML. Ссылки собираются из констант, но правило одно. */
 function escapeHtml(value: string): string {
@@ -52,16 +53,18 @@ const NAV_ITEMS = SITE_NAV.map(
 /**
  * Единственный источник тела ответа 410.
  *
- * `noindex,follow` в теле стоит рядом со статусом 410 намеренно: директива
- * относится к ЭТОМУ ответу, а правило проекта требует директиву на каждой
- * странице. `follow` — потому что ссылки в теле ведут на живые разделы.
+ * Директива в теле стоит рядом со статусом 410 намеренно: она относится к ЭТОМУ
+ * ответу, а правило проекта требует директиву на каждой странице. Значение не
+ * пишется здесь строкой — оно приходит из единственного разрешателя
+ * (`../seo/robots-directive.ts`, Э4-01) той же функцией, что у страницы 404:
+ * у обоих ответов нет собственного адреса, и директива у них одна.
  */
 export const GONE_PAGE_HTML = [
   '<!doctype html>',
   '<html lang="ru">',
   '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
   '<title>Страница удалена</title>',
-  '<meta name="robots" content="noindex,follow"></head>',
+  `${robotsMetaTag(errorPageRobots().robots)}</head>`,
   '<body><h1>Страница удалена</h1>',
   '<p>Эта страница была на сайте, но её убрали, и замены у неё нет. Ссылка не сломалась —',
   'материала больше не существует, поэтому возвращаться по ней незачем.</p>',

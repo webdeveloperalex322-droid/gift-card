@@ -40,6 +40,8 @@
 
 import type { SharedEnv } from '@otkritka/shared';
 
+import { robotsMetaTag, unavailablePageRobots } from '../seo/robots-directive.js';
+
 /** Имя параметра окружения — выключателя режима. */
 export const MAINTENANCE_ENV_KEY = 'MAINTENANCE_MODE';
 
@@ -70,10 +72,13 @@ export const MAINTENANCE_HTML = [
   '<html lang="ru">',
   '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
   '<title>Сайт на техническом обслуживании</title>',
-  // `noindex` здесь И заголовок 503: директива относится к ЭТОМУ ответу, а не к
+  // Директива здесь И заголовок 503: она относится к ЭТОМУ ответу, а не к
   // адресу. Без неё краулер, который всё-таки разобрал тело, увидел бы страницу
   // без директивы — а правило проекта требует директиву на каждой странице.
-  '<meta name="robots" content="noindex,nofollow"></head>',
+  // Значение приходит из единственного разрешателя (`../seo/robots-directive.ts`),
+  // а не пишется здесь строкой: литерал в сырой строке проходит мимо
+  // номинального типа PageRobots, то есть мимо проверки типов.
+  `${robotsMetaTag(unavailablePageRobots().robots)}</head>`,
   '<body><h1>Сайт на техническом обслуживании</h1>',
   '<p>Идут работы. Страницы сайта временно недоступны — зайдите, пожалуйста, позже:',
   'адреса не изменились, ничего искать заново не нужно.</p>',

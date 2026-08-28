@@ -225,6 +225,10 @@ describe('инварианты всех шаблонов страниц', () => 
       expect(source, file).not.toContain(cast);
       // Директива, вписанная в шаблон атрибутом строкой, а не выражением.
       expect(markupOf(source), file).not.toMatch(/robots\s*=\s*["'](?:no)?index/u);
+      // Третий обход, найденный `reviewer` 2026-08-28: готовый тег, собранный
+      // строкой внутри HTML-литерала (тела 410, 503 и резервного 404). Типовая
+      // защита его не видела — в сырой строке нет ни типа, ни пропа.
+      expect(markupOf(source), file).not.toMatch(/content\s*=\s*["'](?:no)?index/u);
     }
   });
 
