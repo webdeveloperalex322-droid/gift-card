@@ -1,23 +1,34 @@
 /**
- * Middleware Astro: тот же контроль пути, но для входов, где нашего сервера нет.
+ * Middleware Astro: контроль пути для входов, где нашего сервера нет, и
+ * ЕДИНСТВЕННОЕ место применения таблицы редиректов (задача Э4-02).
  *
- * Правил здесь нет — все они в `./routing/path-policy.ts` и покрыты
- * юнит-тестами (`tests/unit/web-path-policy.test.ts`). Задача этого файла —
- * превратить решение в HTTP-ответ и ничего больше.
+ * Правил здесь нет — они в `./routing/path-policy.ts` и `./routing/redirects.ts`
+ * и покрыты юнит-тестами (`tests/unit/web-path-policy.test.ts`,
+ * `tests/unit/web-redirects.test.ts`). Задача этого файла — превратить решение в
+ * HTTP-ответ и ничего больше.
  *
  * ## Кто и когда доходит до этого middleware
  *
- * На СОБРАННОМ сервере — почти никто: порядок обработки принадлежит
- * `src/server/front-door.ts`, и приложению Astro передаются только цели,
- * получившие решение `serve`, то есть уже канонические. Поэтому здесь
- * штатный результат — `next()`, и это не бесполезная работа: middleware
- * остаётся единственным контролем пути там, где входного сервера нет, а именно
+ * Контроль пути на СОБРАННОМ сервере срабатывает почти никогда: порядок
+ * обработки принадлежит `src/server/front-door.ts`, и приложению Astro
+ * передаются только цели, получившие решение `serve`, то есть уже канонические.
+ * Здесь он остаётся единственным контролем пути там, где входного сервера нет:
  *
  *   - `astro dev` (`pnpm dev`) — dev-сервер Vite поднимает Astro напрямую;
  *   - любое встраивание обработчика в чужой Node-сервер.
  *
  * Дублирования правила при этом нет: и middleware, и входной сервер зовут одну и
  * ту же чистую функцию.
+ *
+ * А вот ШАГ РЕДИРЕКТОВ проходит КАЖДЫЙ запрос к странице, и на собранном
+ * сервере тоже: входной сервер таблицу прочитать не может (обоснование — рядом с
+ * самим шагом, ниже). Отсюда требование к маршрутам: страница, до которой не
+ * доходит middleware, не получит и редиректа. Astro не вызывает middleware,
+ * когда запрос не совпал ни с одним маршрутом
+ * (`astro/dist/core/routing/handler.js`: `if (!state.routeData) return
+ * renderErrorFromState(… 404)`), поэтому в `src/pages/` есть перехватывающий
+ * маршрут `[...missing].ts` — он существует ровно затем, чтобы «нет такого
+ * адреса» решалось ПОСЛЕ таблицы переносов, а не вместо неё.
  *
  * ## Что в dev-режиме всё равно не проверить
  *
@@ -33,9 +44,12 @@ import { readFile } from 'node:fs/promises';
 
 import type { MiddlewareHandler } from 'astro';
 
+import { findRedirectFrom } from './data/redirects.js';
 import { maintenanceMode } from './server/maintenance.js';
 import { adminRoutePrefix, decideRequestTarget } from './routing/path-policy.js';
+import { GONE_PAGE_HTML } from './server/gone-page.js';
 import { decideMediaRequest, resolveMediaRoot } from './server/media-files.js';
+import { type RedirectDecision, resolveRedirect } from './routing/redirects.js';
 import { serverEnv, workspaceRoot } from './server-env.js';
 import { resolveServableFile } from './server/static-files.js';
 
@@ -75,6 +89,76 @@ async function respondWithDerivative(pathname: string): Promise<Response | null>
     headers: { ...decision.headers, 'Content-Length': String(file.size) },
     status: 200,
   });
+}
+
+/**
+ * Ответ по таблице редиректов либо `null` — правила нет и страница отдаётся.
+ *
+ * Здесь только превращение решения в HTTP-ответ; само решение принимает чистый
+ * `./routing/redirects.ts`. Два исхода из пяти ответа не дают: `ignored`
+ * (правило с пути, который сайт обслуживает сам) и `broken` (петля, цель вне
+ * сайта, 301 без цели) — в обоих случаях запрос идёт дальше, как будто правила
+ * нет, а причина уходит в лог. Отвечать 301 «куда-нибудь» нельзя: цена ошибки в
+ * редиректе выше цены пропущенного редиректа.
+ */
+async function respondWithRedirect(pathname: string, search: string): Promise<Response | null> {
+  let decision: RedirectDecision;
+  try {
+    decision = await resolveRedirect({
+      env: serverEnv(),
+      lookup: findRedirectFrom,
+      pathname,
+      search,
+    });
+  } catch (error) {
+    // База недоступна или таблица не читается. Отдать страницу — правильный
+    // ответ: перенос не применится (и это видно в логе), но живой сайт не ляжет
+    // из-за недоступной таблицы переносов.
+    console.error(
+      `[apps/web] таблица редиректов не прочитана для «${pathname}»: ` +
+        (error instanceof Error ? error.stack ?? error.message : String(error)),
+    );
+    return null;
+  }
+
+  switch (decision.action) {
+    case 'redirect':
+      if (decision.collapsed) {
+        console.error(
+          `[apps/web] в таблице редиректов была цепочка с «${pathname}» длиной ` +
+            `${String(decision.hops)}: ответ схлопнут в один переход на «${decision.location}». ` +
+            'Цепочки запрещены и схлопываются при записи — значит, в таблицу попали мимо ' +
+            'Payload. Проверьте коллекцию redirects.',
+        );
+      }
+      // Тело ПУСТОЕ, как у всех наших 3xx: шаблон 3xx самого Astro кладёт в
+      // `<meta http-equiv="refresh">` адрес-ИСТОЧНИК, то есть отправляет клиента
+      // назад (разбор — в шапке `./routing/path-policy.ts`).
+      return new Response(null, {
+        status: decision.status,
+        headers: { 'Content-Length': '0', Location: decision.location },
+      });
+
+    case 'gone':
+      // Тело у 410 своё и не зависит ни от базы, ни от рендера
+      // (`./server/gone-page.ts`). `Content-Length` считается в БАЙТАХ: текст
+      // кириллический, и длина строки была бы меньше длины тела.
+      return new Response(GONE_PAGE_HTML, {
+        status: decision.status,
+        headers: {
+          'Content-Length': String(Buffer.byteLength(GONE_PAGE_HTML)),
+          'Content-Type': 'text/html; charset=utf-8',
+        },
+      });
+
+    case 'ignored':
+    case 'broken':
+      console.error(`[apps/web] редирект не применён к «${pathname}»: ${decision.reason}`);
+      return null;
+
+    case 'none':
+      return null;
+  }
 }
 
 export const onRequest: MiddlewareHandler = async (context, next) => {
@@ -160,6 +244,31 @@ export const onRequest: MiddlewareHandler = async (context, next) => {
   const derivative = await respondWithDerivative(decision.pathname);
   if (derivative !== null) {
     return derivative;
+  }
+
+  // Таблица редиректов — ПОСЛЕДНИЙ шаг перед рендером и первый, который читает
+  // базу (задача Э4-02, ТЗ §7.5: «редиректы применяются до рендеринга»).
+  //
+  // Почему именно здесь, а не во входном сервере, где стоит остальная политика
+  // пути: `src/server/*` компилируется в настоящий Node ESM и конфиг Payload —
+  // файл `.ts` чужого пакета — импортировать не может (шапка
+  // `./data/payload-client.ts`). Дать ему второй путь к данным, в обход Local
+  // API и access control, было бы дороже: правило «черновик публично не
+  // существует» получило бы второй экземпляр. `CLAUDE.md` прямо называет это
+  // место: «`redirects` — 301-редиректы, редактируются в админке, применяются в
+  // middleware Astro».
+  //
+  // Почему после нормализации слеша, а не до: правило слеша (Ч-21) — это форма
+  // адреса, а таблица переносов хранит пути в канонической форме. Искать
+  // `/otkrytki/staraya/` в таблице значило бы либо держать в ней обе формы, либо
+  // промахиваться. Следствие названо в отчёте Э4-02: запрос к перенесённому
+  // адресу В НЕКАНОНИЧЕСКОЙ форме получает два перехода (301 на каноническую
+  // форму, затем 301 переноса). Ни один канонический URL сайта двух переходов не
+  // даёт, и слить их в один нельзя: первый 301 отдаёт входной сервер, у которого
+  // доступа к таблице нет.
+  const moved = await respondWithRedirect(decision.pathname, decision.search);
+  if (moved !== null) {
+    return moved;
   }
 
   return next();

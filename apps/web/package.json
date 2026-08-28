@@ -15,6 +15,7 @@
     "smoke:info": "pnpm --filter @otkritka/cms exec payload run ../web/scripts/smoke-info-pages.ts",
     "smoke:media": "node ./scripts/smoke-media.mjs",
     "smoke:pages": "pnpm --filter @otkritka/cms exec payload run ../web/scripts/smoke-pages.ts",
+    "smoke:redirects": "pnpm --filter @otkritka/cms exec payload run ../web/scripts/smoke-redirects.ts",
     "smoke:slash": "node ./scripts/smoke-trailing-slash.mjs",
     "start": "node ./scripts/start-server.mjs",
     "sync": "astro sync"
