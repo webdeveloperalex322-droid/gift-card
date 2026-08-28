@@ -39,17 +39,15 @@
  * `tests/unit/web-catalog-pages.test.ts`.
  */
 
+import type { RobotsDirective } from '@otkritka/shared';
+
 import {
   paginationCrumbLabel,
   paginationPathFor,
   paginationTitle,
 } from '../routing/pagination.js';
 import { type BreadcrumbTrail, buildBreadcrumbTrail } from './breadcrumbs.js';
-import {
-  type PageRobots,
-  resolvePageRobots,
-  type RobotsDirective,
-} from './robots-directive.js';
+import { type PageRobots, resolvePageRobots } from './robots-directive.js';
 import { SEARCH_PAGE, SEARCH_PATH } from './search-page.js';
 
 /**

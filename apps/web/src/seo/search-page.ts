@@ -38,12 +38,10 @@
  * содержание за JavaScript — прямой запрет п. 23.
  */
 
+import type { RobotsDirective } from '@otkritka/shared';
+
 import { type BreadcrumbTrail, buildBreadcrumbTrail } from './breadcrumbs.js';
-import {
-  type PageRobots,
-  resolvePageRobots,
-  type RobotsDirective,
-} from './robots-directive.js';
+import { type PageRobots, resolvePageRobots } from './robots-directive.js';
 
 /** Канонический путь страницы поиска — без завершающего слеша (решение Ч-21). */
 export const SEARCH_PATH = '/search';

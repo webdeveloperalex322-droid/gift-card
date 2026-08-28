@@ -39,29 +39,32 @@
  * и `astro check` не возразил бы. Единственное место, где значение создаётся, —
  * {@link seal} ниже.
  *
+ * ## Где живёт САМ набор значений
+ *
+ * В `@otkritka/shared` (`packages/shared/src/robots.ts`, задача Э4-05). Здесь его
+ * копии больше нет: до Э4-06 модуль держал свой список `ROBOTS_DIRECTIVES`,
+ * дословно повторявший список CMS, и совпадение поддерживалось вручную. Два
+ * закрытых набора, управляющих индексацией, расходятся молча — значение,
+ * известное CMS и неизвестное вебу, даёт либо исключение на рендере, либо
+ * страницу, закрытую в разметке и открытую в карте сайта. Разделение
+ * ответственности при этом сохранено: общий пакет знает НАБОР значений и
+ * предикаты самого значения, а правило «какая директива у ЭТОЙ страницы» —
+ * здесь.
+ *
  * Модуль ЧИСТЫЙ: без Astro, без Payload, без чтения `process.env`. Входит в
  * composite-проект `../../tsconfig.node.json`, проверяется юнит-тестом
  * `tests/unit/web-robots-directive.test.ts`.
  */
 
-import { canonicalizePath } from '@otkritka/shared';
+import {
+  canonicalizePath,
+  isIndexableRobots,
+  isRobotsDirective,
+  ROBOTS_DIRECTIVES,
+  type RobotsDirective,
+} from '@otkritka/shared';
 
 import { hasActiveFilter, type ViewParams } from '../routing/view-params.js';
-
-/**
- * Допустимые значения `<meta name="robots">` на этом сайте. Порядок — от самого
- * открытого к закрытому.
- *
- * Набор дословно повторяет `ROBOTS_DIRECTIVES` из
- * `apps/cms/src/seo/robots.ts`, потому что это одно и то же поле записи, а
- * импортировать `.ts` чужого пакета в composite-проект нельзя (см. шапку
- * `../../tsconfig.node.json`). Совпадение двух списков поддерживается вручную и
- * названо в отчёте Э4-01 как кандидат на переезд в `packages/shared` — зону,
- * которой владеет не этот агент.
- */
-export const ROBOTS_DIRECTIVES = ['index,follow', 'noindex,follow', 'noindex,nofollow'] as const;
-
-export type RobotsDirective = (typeof ROBOTS_DIRECTIVES)[number];
 
 declare const RESOLVED_BY_THIS_MODULE: unique symbol;
 
@@ -78,18 +81,6 @@ export type PageRobots = RobotsDirective & { readonly [RESOLVED_BY_THIS_MODULE]:
 /** Единственное место, где значение типа {@link PageRobots} появляется. */
 function seal(directive: RobotsDirective): PageRobots {
   return directive as PageRobots;
-}
-
-/**
- * Разрешает ли директива индексацию.
- *
- * Проверяется РАВЕНСТВО `index,follow`, а не отсутствие слова `noindex`: набор
- * значений закрытый, и проверка «всё, что не noindex» при появлении нового
- * значения молча пустила бы страницу в индекс. То же правило и по той же причине
- * записано в `apps/cms/src/seo/robots.ts`.
- */
-export function isIndexableDirective(value: unknown): boolean {
-  return value === 'index,follow';
 }
 
 /** Почему страница закрыта от индексации, хотя объявленная директива её открывала. */
@@ -167,10 +158,6 @@ const FIRST_LIST_PAGE = 1;
 /** Публично существует только этот статус (`../data/read-scope.ts`). */
 const PUBLIC_STATUS = 'published';
 
-function isRobotsDirective(value: unknown): value is RobotsDirective {
-  return typeof value === 'string' && (ROBOTS_DIRECTIVES as readonly string[]).includes(value);
-}
-
 /**
  * Директива робота страницы.
  *
@@ -217,7 +204,7 @@ export function resolvePageRobots(facts: PageIndexationFacts): PageIndexation {
 
   return {
     closedBy,
-    indexable: isIndexableDirective(robots),
+    indexable: isIndexableRobots(robots),
     robots: seal(robots),
   };
 }
@@ -277,7 +264,7 @@ export interface SitemapEligibility {
 export function sitemapEligibility(candidate: SitemapCandidate): SitemapEligibility {
   const excludedBy: SitemapExclusionReason[] = [];
 
-  if (!isIndexableDirective(candidate.robots)) {
+  if (!isIndexableRobots(candidate.robots)) {
     excludedBy.push('noindex');
   }
   // Сравниваются КАНОНИЧЕСКИЕ формы: хвостовой слеш второго адреса не создаёт

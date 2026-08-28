@@ -15,10 +15,12 @@
  *   1. состав набора и его закрытость (никаких «похожих» написаний);
  *   2. дефолт закрывает, а не открывает — новая запись не попадает в индекс
  *      сама (CLAUDE.md, «Правила модели», ТЗ §7.1 и §8.2);
- *   3. копия в `apps/web` пока существует и обязана совпадать с общим набором.
- *      Этот пункт — временный: `apps/web` принадлежит другому агенту, и после
- *      того, как он перейдёт на импорт из `@otkritka/shared`, проверка станет
- *      тавтологией и её можно снять.
+ *   3. копии набора в `apps/web` больше НЕТ: на Э4-06 модуль
+ *      `apps/web/src/seo/robots-directive.ts` перешёл на импорт из
+ *      `@otkritka/shared`, поэтому прежний сторож «копия совпадает с общим
+ *      набором» стал тавтологией и снят. Сторож против ВОЗВРАТА копии — типовой:
+ *      набор больше не экспортируется из apps/web, и второй список пришлось бы
+ *      объявлять заново, то есть видимой правкой.
  *
  * Того же про `apps/cms` здесь НЕТ, и это не пробел: проект `tests` ссылается на
  * `packages/*` и на `apps/web/tsconfig.node.json`, но не на `apps/cms` — тот
@@ -33,8 +35,6 @@ import {
   isRobotsDirective,
   ROBOTS_DIRECTIVES,
 } from '@otkritka/shared';
-
-import { ROBOTS_DIRECTIVES as WEB_ROBOTS_DIRECTIVES } from '../../apps/web/src/seo/robots-directive.js';
 
 describe('набор значений robots-директивы', () => {
   it('состоит ровно из трёх значений ТЗ §8.1, от открытого к закрытому', () => {
@@ -70,11 +70,5 @@ describe('набор значений robots-директивы', () => {
     expect(DEFAULT_ROBOTS).toBe('noindex,follow');
     expect(isRobotsDirective(DEFAULT_ROBOTS)).toBe(true);
     expect(isIndexableRobots(DEFAULT_ROBOTS)).toBe(false);
-  });
-});
-
-describe('единственность источника набора', () => {
-  it('копия в apps/web совпадает с общим набором (сторож до перехода web на shared)', () => {
-    expect(WEB_ROBOTS_DIRECTIVES).toEqual(ROBOTS_DIRECTIVES);
   });
 });

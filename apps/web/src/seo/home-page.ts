@@ -48,16 +48,13 @@ import {
   type OrganizationFacts,
   organizationJsonLd,
   resolveSiteName,
+  type RobotsDirective,
   type SharedEnv,
 } from '@otkritka/shared';
 
 import { canonicalUrlFor } from '../routing/canonical.js';
 import type { JsonLdDocument } from './json-ld.js';
-import {
-  type PageRobots,
-  resolvePageRobots,
-  type RobotsDirective,
-} from './robots-directive.js';
+import { type PageRobots, resolvePageRobots } from './robots-directive.js';
 
 /**
  * Канонический путь главной — корень сайта.

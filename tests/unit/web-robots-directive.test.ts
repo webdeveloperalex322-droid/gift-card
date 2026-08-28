@@ -19,11 +19,11 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { isIndexableRobots, ROBOTS_DIRECTIVES } from '@otkritka/shared';
+
 import { parseViewParams } from '../../apps/web/src/routing/view-params.js';
 import {
-  isIndexableDirective,
   resolvePageRobots,
-  ROBOTS_DIRECTIVES,
   sitemapEligibility,
 } from '../../apps/web/src/seo/robots-directive.js';
 
@@ -143,14 +143,18 @@ describe('что закрывает страницу от индексации',
 });
 
 describe('признак индексируемости', () => {
-  it('индексируемой считается ровно «index,follow»', () => {
-    expect(isIndexableDirective('index,follow')).toBe(true);
-    expect(isIndexableDirective('noindex,follow')).toBe(false);
-    expect(isIndexableDirective('noindex,nofollow')).toBe(false);
-    // Не «всё, что не noindex»: набор значений закрытый, и такая проверка при
-    // появлении нового значения молча пустила бы страницу в индекс.
-    expect(isIndexableDirective('all')).toBe(false);
-    expect(isIndexableDirective(undefined)).toBe(false);
+  it('разрешатель и общий предикат отвечают одно и то же', () => {
+    // Сам предикат живёт в `@otkritka/shared` (набор значений один на
+    // монорепозиторий, Э4-05) и проверен в `tests/unit/robots.test.ts`. Здесь
+    // проверяется стык: поле `indexable` разрешателя считается ИМ, а не второй
+    // формулой рядом, — иначе страница могла бы оказаться закрытой в разметке и
+    // открытой в карте сайта.
+    for (const declared of ROBOTS_DIRECTIVES) {
+      const resolved = resolvePageRobots({ ...OPEN, declared });
+      expect(resolved.indexable, declared).toBe(isIndexableRobots(resolved.robots));
+    }
+    expect(resolvePageRobots(OPEN).indexable).toBe(true);
+    expect(resolvePageRobots({ ...OPEN, declared: 'noindex,follow' }).indexable).toBe(false);
   });
 });
 
