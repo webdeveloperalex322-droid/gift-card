@@ -24,6 +24,14 @@
  *     вычисляется из `PAYLOAD_ADMIN_PATH`, а не записан строкой;
  *   - `./env.ts` — тип среза окружения; окружение всегда аргумент с дефолтом,
  *     чтобы тесты не мутировали `process.env`;
+ *   - `./robots.ts` (задача Э4-05) — закрытый набор значений robots-директивы,
+ *     дефолт для новой записи и предикаты значения. Живёт здесь, потому что
+ *     набор нужен обоим слоям: `apps/cms` строит из него поле записи и проверяет
+ *     вход API, `apps/web` проверяет объявленную директиву и отбирает страницы в
+ *     sitemap. Двух копий быть не должно — они расходятся молча, а расхождение
+ *     даёт страницу, закрытую в разметке и открытую в карте сайта. Правило
+ *     «какая директива у ЭТОЙ страницы» сюда НЕ входит: это правило рендера, оно
+ *     остаётся в `apps/web/src/seo/robots-directive.ts`;
  *   - `./rich-text-href.ts` — какие адреса публичный рендер вводного текста
  *     печатает ССЫЛКОЙ. Правило общее потому, что по нему живут два разных
  *     слоя: `apps/web` решает, что печатать, а `apps/cms` — что вообще можно
@@ -55,6 +63,7 @@ export {
   PAYLOAD_ADMIN_PATH_ENV_KEY,
   type PathAvailability,
   type ReservedRoute,
+  type ReservedRouteCrawl,
   type ReservedRouteKind,
   type ReservedRouteSource,
   reservedRoutes,
@@ -67,6 +76,14 @@ export {
   publicRichTextHref,
   validatePublicRichTextHref,
 } from './rich-text-href.js';
+
+export {
+  DEFAULT_ROBOTS,
+  isIndexableRobots,
+  isRobotsDirective,
+  ROBOTS_DIRECTIVES,
+  type RobotsDirective,
+} from './robots.js';
 
 export {
   canonicalizePath,
