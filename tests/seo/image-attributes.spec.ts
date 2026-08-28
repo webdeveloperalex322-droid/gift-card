@@ -57,6 +57,7 @@ import { expect, test } from '@playwright/test';
 
 import { type ImageTag, imageTags } from './support/html.js';
 import { fetchRaw } from './support/http.js';
+import { noteNotChecked } from './support/not-checked.js';
 import { ACCEPTANCE_PAGES } from './support/pages.js';
 import { resolveAcceptanceTarget, urlFor } from './support/target.js';
 
@@ -103,14 +104,13 @@ for (const page of ACCEPTANCE_PAGES) {
           'Либо изображение потерялось на рендере плитки, либо оно дорисовывается JS (прямой ' +
           'запрет п. 23 ТЗ). Пустая выборка выглядит иначе: нет ни плиток, ни изображений.',
       ).toBe(0);
-      testInfo.annotations.push({
-        type: 'проверено нечем',
-        description:
-          `Страница ${page.path} объявлена как images: data-driven, и в этом прогоне сетка ` +
+      noteNotChecked(
+        testInfo,
+        `Страница ${page.path} объявлена как images: data-driven, и в этом прогоне сетка ` +
           'пуста — опубликованных открыток в базе нет. Контракт изображений (src, width, ' +
           'height, alt, единственное неленивое) на ней НЕ проверен: проверять было нечего. ' +
           'Полную силу утверждение получает на наполненном каталоге (Э3-13).',
-      });
+      );
       return;
     }
 
