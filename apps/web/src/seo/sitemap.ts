@@ -80,6 +80,25 @@ export const SITEMAP_IMAGES_PREFIX = 'sitemap-images';
 /** Тип содержимого всех файлов карты сайта. */
 export const SITEMAP_CONTENT_TYPE = 'application/xml; charset=utf-8';
 
+/**
+ * Срок жизни ответа файлов карты сайта, в секундах. ОДНО число на два
+ * потребителя.
+ *
+ * Первый — заголовок {@link SITEMAP_CACHE_CONTROL} ниже. Второй — общая память
+ * процесса под собранную модель (`./sitemap-memo.ts`): карта собирается на
+ * запросе, и без памяти один проход краулера по четырём файлам означает четыре
+ * полных обхода каталога.
+ *
+ * Совпадение сроков обязательно и держится тем, что число здесь одно. Окно
+ * устаревания у карты сайта уже объявлено заголовком — ответ разрешено держать
+ * в кеше клиента и посредника ровно столько; память на тот же срок его не
+ * расширяет. Второе число рядом разошлось бы с заголовком молча.
+ */
+export const SITEMAP_CACHE_SECONDS = 300;
+
+/** Заголовок кеширования файлов карты сайта. Собран из {@link SITEMAP_CACHE_SECONDS}. */
+export const SITEMAP_CACHE_CONTROL = `public, max-age=${String(SITEMAP_CACHE_SECONDS)}`;
+
 const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8"?>';
 const SITEMAP_NAMESPACE = 'http://www.sitemaps.org/schemas/sitemap/0.9';
 const IMAGE_NAMESPACE = 'http://www.google.com/schemas/sitemap-image/1.1';
@@ -114,7 +133,22 @@ export type SitemapExclusion =
    * запись не должна уносить с собой всю карту сайта, но и попасть в неё она не
    * может — в карте только канонические адреса без параметров.
    */
-  | 'not-a-path';
+  | 'not-a-path'
+  /**
+   * Дата содержательного обновления не разбирается.
+   *
+   * Та же политика и по той же причине, что у `not-a-path`: одна испорченная
+   * запись исключается с названной причиной, а не уносит с собой карту сайта
+   * целиком. Раньше здесь было исключение — то есть на один класс порчи данных
+   * действовали две противоположные политики (правка по вердикту `reviewer` от
+   * 2026-08-28).
+   *
+   * Почему запись именно ИСКЛЮЧАЕТСЯ, а не входит без `lastmod`: пустой
+   * `lastmod` — это утверждение «дату сообщить нечем», а испорченный —
+   * повреждённые данные. Выдав первое вместо второго, карта сайта скрыла бы
+   * поломку и сообщила поисковику, что страница не менялась.
+   */
+  | 'bad-lastmod';
 
 /** Факты о странице — ровно то, из чего складывается решение о включении. */
 export interface SitemapPageFacts {
@@ -187,7 +221,8 @@ function isPathValue(value: string): boolean {
  * @throws Error если значение непусто и не разбирается как дата. Тихо выбросить
  *   непонятное значение нельзя: `lastmod` — единственное, чем карта сайта
  *   сообщает об обновлении, и его молчаливая пропажа выглядела бы как «страница
- *   не менялась».
+ *   не менялась». Отказ ловит {@link decideSitemapUrl} и превращает в причину
+ *   исключения `bad-lastmod` — карта сайта теряет одну запись, а не себя целиком.
  */
 export function formatLastmod(value: string | null | undefined): string | null {
   const raw = value?.trim() ?? '';
@@ -213,7 +248,10 @@ export function formatLastmod(value: string | null | undefined): string | null {
  * «почему страницы нет в карте», и половина ответа отправила бы редактора
  * исправлять не то.
  *
- * @throws Error если `SITE_URL` не задан или если `lastmod` не разбирается.
+ * @throws Error если `SITE_URL` не задан. Порча ДАННЫХ ЗАПИСИ исключением не
+ *   является ни в одном случае: и негодный путь, и негодная дата возвращаются
+ *   причиной исключения. Ненастроенное окружение — другое дело: без хоста карта
+ *   сайта не собирается вовсе, и молчать об этом нельзя.
  */
 export function decideSitemapUrl(
   facts: SitemapPageFacts,
@@ -221,6 +259,14 @@ export function decideSitemapUrl(
 ): SitemapDecision {
   const excludedBy: SitemapExclusion[] = [];
   const pathsAreValid = isPathValue(facts.pagePath) && isPathValue(facts.canonicalPath);
+
+  let lastmod: string | null = null;
+  let lastmodIsValid = true;
+  try {
+    lastmod = formatLastmod(facts.lastmod);
+  } catch {
+    lastmodIsValid = false;
+  }
 
   if (pathsAreValid) {
     // Условия 1 и 2 считает Э4-01 — тот же код, что отвечает на вопрос «можно ли
@@ -239,6 +285,9 @@ export function decideSitemapUrl(
   if (!pathsAreValid) {
     excludedBy.push('not-a-path');
   }
+  if (!lastmodIsValid) {
+    excludedBy.push('bad-lastmod');
+  }
 
   if (excludedBy.length > 0) {
     return { excludedBy, included: false };
@@ -248,7 +297,7 @@ export function decideSitemapUrl(
     included: true,
     url: {
       images: facts.images ?? [],
-      lastmod: formatLastmod(facts.lastmod),
+      lastmod,
       // Адрес собирается из СОБСТВЕННОГО пути страницы: он и canonical к этому
       // моменту уже признаны одним адресом (условие 2), а собственный путь —
       // тот, по которому маршрут отвечает 200.
@@ -258,6 +307,7 @@ export function decideSitemapUrl(
 }
 
 const NO_EXCLUSIONS: Readonly<Record<SitemapExclusion, number>> = {
+  'bad-lastmod': 0,
   noindex: 0,
   'not-200': 0,
   'not-a-path': 0,
@@ -477,9 +527,9 @@ export function sitemapFilePayload(
   return {
     body: render(urls),
     headers: {
-      // Тот же короткий кеш, что у индекса: карта собирается на запросе, окна
-      // устаревания у неё нет, а пять минут защищают базу от частого обхода.
-      'Cache-Control': 'public, max-age=300',
+      // Тот же короткий кеш, что у индекса, и то же число, что у памяти
+      // процесса (`./sitemap-memo.ts`): один срок на оба, {@link SITEMAP_CACHE_SECONDS}.
+      'Cache-Control': SITEMAP_CACHE_CONTROL,
       'Content-Type': SITEMAP_CONTENT_TYPE,
     },
     status: 200,

@@ -26,6 +26,7 @@ import { describe, expect, it } from 'vitest';
 import { resolvePageRobots } from '../../apps/web/src/seo/robots-directive.js';
 import {
   decideSitemapUrl,
+  formatLastmod,
   MAX_URLS_PER_SITEMAP,
   parseShardParam,
   renderImageUrlset,
@@ -180,8 +181,38 @@ describe('lastmod', () => {
     );
   });
 
-  it('непонятная дата — отказ, а не тихий пропуск значения', () => {
-    expect(() => decideSitemapUrl(page({ lastmod: 'позавчера' }), ENV)).toThrow(/lastmod/u);
+  it('непонятная дата исключает ОДНУ запись, а не уносит всю карту сайта', () => {
+    // Политика на порчу данных одна на весь отбор (правка по вердикту
+    // `reviewer` от 2026-08-28): негодный canonical исключает запись с
+    // причиной, и негодный lastmod — тоже. Прежнее исключение здесь означало,
+    // что одна испорченная дата делает карту сайта недоступной целиком.
+    const decision = decideSitemapUrl(page({ lastmod: 'позавчера' }), ENV);
+
+    expect(decision.included).toBe(false);
+    expect(decision.included ? [] : decision.excludedBy).toContain('bad-lastmod');
+  });
+
+  it('одна испорченная дата не мешает остальным адресам попасть в карту', () => {
+    const selection = selectSitemapUrls(
+      [
+        page({ lastmod: '2026-03-08T09:30:00.000Z' }),
+        page({
+          canonicalPath: '/otkrytki/porchennaya',
+          lastmod: 'позавчера',
+          pagePath: '/otkrytki/porchennaya',
+        }),
+      ],
+      ENV,
+    );
+
+    expect(selection.urls).toHaveLength(1);
+    expect(selection.diagnostics.excludedBy['bad-lastmod']).toBe(1);
+  });
+
+  it('сам форматтер по-прежнему отказывается разбирать мусор', () => {
+    // Тихо выбросить непонятное значение нельзя и на этом уровне: «страница не
+    // менялась» — это утверждение, а не отсутствие данных.
+    expect(() => formatLastmod('позавчера')).toThrow(/lastmod/u);
   });
 });
 

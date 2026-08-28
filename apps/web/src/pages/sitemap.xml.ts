@@ -16,7 +16,11 @@ import type { APIRoute } from 'astro';
 
 import { buildSitemapModel, sitemapIndexEntries } from '../data/sitemap-content';
 import { canonicalUrlFor } from '../routing/canonical';
-import { renderSitemapIndex, SITEMAP_CONTENT_TYPE } from '../seo/sitemap';
+import {
+  renderSitemapIndex,
+  SITEMAP_CACHE_CONTROL,
+  SITEMAP_CONTENT_TYPE,
+} from '../seo/sitemap';
 import { serverEnv } from '../server-env';
 
 export const prerender = false;
@@ -41,9 +45,9 @@ export const GET: APIRoute = async () => {
 
   return new Response(body, {
     headers: {
-      // Короткий кеш: карта сайта собирается на запросе, поэтому окна
-      // устаревания у неё нет, а пять минут защищают базу от частого обхода.
-      'Cache-Control': 'public, max-age=300',
+      // Короткий кеш. То же число, что у остальных файлов карты и у памяти
+      // процесса под собранную модель: один срок на всё (SITEMAP_CACHE_SECONDS).
+      'Cache-Control': SITEMAP_CACHE_CONTROL,
       'Content-Type': SITEMAP_CONTENT_TYPE,
     },
     status: 200,
