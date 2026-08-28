@@ -81,6 +81,46 @@ describe('перенос: одиночный 301', () => {
   });
 });
 
+describe('перенос со структуры прежнего сайта', () => {
+  // Ради этого класса адресов и существует перехватывающий маршрут: у
+  // `/index.php` и `/staraya.html` маршрута Astro нет, а ссылки на них остались
+  // снаружи. Проверка добавлена по вердикту `reviewer` от 2026-08-28: пропуск
+  // «любой путь с расширением» отменял такое правило целиком и молча.
+  const legacy: readonly (readonly [string, string])[] = [
+    ['/index.php', '/'],
+    ['/staraya.html', '/otkrytki/novaya'],
+    ['/katalog/otkrytka.htm', '/otkrytki/novaya'],
+    ['/2019/08/pozdravlenie.aspx', '/podborki/prazdniki/8-marta'],
+  ];
+
+  for (const [from, to] of legacy) {
+    it(`правило с «${from}» применяется, а не молчит`, async () => {
+      const decision = await decide(from, [moved(from, to)]);
+
+      expect(decision).toMatchObject({
+        action: 'redirect',
+        hops: 1,
+        location: to,
+        status: 301,
+      });
+    });
+  }
+
+  it('без правила такой адрес по-прежнему отдаётся маршрутом (то есть 404)', async () => {
+    expect(await decide('/staraya.html', [moved('/drugaya.html', '/otkrytki/novaya')])).toEqual({
+      action: 'none',
+    });
+  });
+
+  it('цель без расширения: 301 ведёт на нормальный адрес страницы', async () => {
+    const decision = await decide('/staraya.html', [
+      moved('/staraya.html', '/otkrytki/novaya/'),
+    ]);
+
+    expect(decision).toMatchObject({ location: '/otkrytki/novaya' });
+  });
+});
+
 describe('цепочка в данных схлопывается на чтении', () => {
   it('A→B при существующем B→C даёт ОДИН переход сразу на C', async () => {
     const decision = await decide('/otkrytki/a', [
@@ -180,22 +220,72 @@ describe('испорченные данные не превращаются в �
 
     expect(decision.action).toBe('broken');
   });
+
+  it('цель с параметрами — отказ РЕШЕНИЕМ, а не исключением', async () => {
+    // Разрешатель обещает не бросать: исключение здесь middleware диагностирует
+    // как «таблица не прочитана», то есть отправляет разбираться в базу вместо
+    // одной негодной строки.
+    const decision = await decide('/otkrytki/a', [
+      { code: '301', from: '/otkrytki/a', to: '/otkrytki/b?utm_source=mail' },
+    ]);
+
+    expect(decision.action).toBe('broken');
+    if (decision.action !== 'broken') return;
+    expect(decision.reason).toContain('/otkrytki/b?utm_source=mail');
+  });
+
+  it('цель с фрагментом — тот же отказ', async () => {
+    const decision = await decide('/otkrytki/a', [
+      { code: '301', from: '/otkrytki/a', to: '/otkrytki/b#nizhe' },
+    ]);
+
+    expect(decision.action).toBe('broken');
+  });
+
+  it('запрошенный путь не является путём — отказ, а не исключение', async () => {
+    const decision = await decide('/otkrytki/a?x=1', [moved('/otkrytki/a', '/otkrytki/b')]);
+
+    expect(decision.action).toBe('broken');
+  });
 });
 
 describe('чего таблица редиректов не касается', () => {
-  it('URL файла постоянен: правило к нему не применяется и в базу за ним не ходят', async () => {
-    let asked = 0;
-    const decision = await resolveRedirect({
-      env: ENV,
-      lookup: (path) => {
-        asked += 1;
-        return Promise.resolve(moved(path, '/otkrytki/novaya'));
-      },
-      pathname: '/media/otkrytka-mame-8-marta-abc123-640.webp',
-    });
+  it('производные изображений: правило к ним не применяется и в базу за ними не ходят', async () => {
+    // Пропуск сужен до пространства `/media` (правка по вердикту reviewer от
+    // 2026-08-28). Раньше пропускался ЛЮБОЙ путь с расширением, и правило с
+    // `from = /staraya.html` не срабатывало никогда.
+    for (const pathname of [
+      '/media/otkrytka-mame-8-marta-abc123-640.webp',
+      '/media/cards/r2/otkrytka-1280.avif',
+      // Мусор под /media — тоже не адрес страницы: этот путь останавливает слой
+      // отдачи файлов, а не таблица переносов.
+      '/media/takogo-klyucha-net',
+    ]) {
+      let asked = 0;
+      const decision = await resolveRedirect({
+        env: ENV,
+        lookup: (path) => {
+          asked += 1;
+          return Promise.resolve(moved(path, '/otkrytki/novaya'));
+        },
+        pathname,
+      });
 
-    expect(decision).toEqual({ action: 'none' });
-    expect(asked).toBe(0);
+      expect(decision, pathname).toEqual({ action: 'none' });
+      expect(asked, pathname).toBe(0);
+    }
+  });
+
+  it('файловые маршруты самого сайта не перекрываются: правило видно в логе', async () => {
+    // `/robots.txt` и `/sitemap.xml` — маршруты, которые сайт обслуживает сам.
+    // Их защищает реестр зарезервированных маршрутов, а не пропуск по
+    // расширению: правило с такого пути обязано быть ЗАМЕЧЕНО, а не молча
+    // проигнорировано.
+    for (const path of ['/robots.txt', '/sitemap.xml', '/sitemap-cards-1.xml']) {
+      const decision = await decide(path, [moved(path, '/otkrytki/novaya')]);
+
+      expect(decision.action, path).toBe('ignored');
+    }
   });
 
   it('маршрут, который сайт обслуживает сам, редиректом не перекрывается', async () => {
@@ -207,6 +297,33 @@ describe('чего таблица редиректов не касается', (
       const decision = await decide(path, [moved(path, '/podborki')]);
 
       expect(decision.action, path).toBe('ignored');
+    }
+  });
+
+  it('цепочка останавливается на маршруте, который сайт обслуживает сам', async () => {
+    // Находка `url-guard` от 2026-08-28: проверка реестра стояла только у
+    // НАЧАЛА цепочки. Правило с «/search» (данные мимо Payload) уводило бы
+    // запрос дальше — с живой служебной страницы, без предупреждения.
+    const decision = await decide('/otkrytki/staraya', [
+      moved('/otkrytki/staraya', '/search'),
+      moved('/search', '/podborki'),
+    ]);
+
+    expect(decision).toMatchObject({
+      action: 'redirect',
+      hops: 1,
+      location: '/search',
+      status: 301,
+    });
+  });
+
+  it('перенос на каталог остаётся законным: цель — живой адрес, а не запрет', async () => {
+    // Обратная половина того же правила: `/otkrytki` и `/` тоже зарезервированы,
+    // и 301 НА них — обычный перенос, ради которого таблица и существует.
+    for (const target of ['/', '/otkrytki', '/podborki']) {
+      const decision = await decide('/staraya.html', [moved('/staraya.html', target)]);
+
+      expect(decision, target).toMatchObject({ action: 'redirect', location: target });
     }
   });
 
