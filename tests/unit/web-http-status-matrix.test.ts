@@ -61,6 +61,37 @@ function readRepoFile(relativePath: string): string {
 
 const CLAUDE_MD = readRepoFile('CLAUDE.md');
 
+/** Экранирует якорь: имя проверки ищется как текст, а не как выражение. */
+function escapeForRegExp(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/gu, '\\$&');
+}
+
+/**
+ * Есть ли в файле ПРОВЕРКА с таким именем.
+ *
+ * Ищется вызов `record(`, `it(` или `test(`, у которого имя начинается с якоря
+ * (начинается, а не совпадает: имена смоуков и приёмки часто собираются
+ * шаблонной строкой с адресом внутри).
+ *
+ * Строка, стоящая в комментарии, проверкой не считается — ни в строчном `//`,
+ * ни в docstring `*`. До правки по вердикту `reviewer` от 2026-08-28 якорь
+ * искался по всему файлу, и удовлетворить замок могла строка, уцелевшая в
+ * комментарии после удаления самой проверки: ссылка становилась фикцией ровно в
+ * том сценарии, ради которого она существует.
+ */
+function hasCheckNamed(source: string, anchor: string): boolean {
+  const call = new RegExp(`(?:record|it|test)\\(\\s*['"\`]${escapeForRegExp(anchor)}`, 'gu');
+
+  for (const match of source.matchAll(call)) {
+    const lineStart = source.lastIndexOf('\n', match.index) + 1;
+    const beforeOnLine = source.slice(lineStart, match.index).trimStart();
+    if (!beforeOnLine.startsWith('//') && !beforeOnLine.startsWith('*')) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Строки таблицы «Ситуация → Ответ» из раздела «HTTP-статусы» самого CLAUDE.md. */
 function tableFromNorm(): readonly (readonly [string, string])[] {
   const section = /\n## HTTP-статусы\n([\s\S]*?)\n## /.exec(CLAUDE_MD)?.[1];
@@ -143,17 +174,70 @@ describe('состав матрицы сверяется с таблицей CLA
 });
 
 describe('строка без проверки заметна: ссылки машинные', () => {
-  it('у каждой строки есть ссылка, и файл по ссылке содержит названный якорь', () => {
+  it('у каждой строки есть ссылка, и файл по ссылке содержит названную проверку', () => {
     for (const row of HTTP_STATUS_MATRIX) {
       expect(row.coverage.length, `${row.id}: строка без единой проверки`).toBeGreaterThan(0);
 
       for (const entry of row.coverage) {
         const source = readRepoFile(entry.file);
         expect(
-          source.includes(entry.anchor),
+          hasCheckNamed(source, entry.anchor),
           `${row.id}: в ${entry.file} нет проверки «${entry.anchor}»`,
         ).toBe(true);
       }
+    }
+  });
+
+  it('якорь ищется ВНУТРИ вызова проверки, а не где угодно в файле', () => {
+    // Ровно тот сценарий, от которого замок и защищает: проверку удалили, а
+    // строка уцелела в комментарии — и поиск по всему файлу удовлетворялся ею.
+    const source = [
+      '// Раньше здесь была проверка «удалённая строка».',
+      "//    record('закомментированная строка', true);",
+      " *    it('строка из docstring', () => {});",
+      "record('живая проверка смоука', ok);",
+      "  it('живая проверка юнит-теста', () => {});",
+      '  test(`живая проверка приёмки: ${page.path}`, async () => {});',
+    ].join('\n');
+
+    expect(hasCheckNamed(source, 'живая проверка смоука')).toBe(true);
+    expect(hasCheckNamed(source, 'живая проверка юнит-теста')).toBe(true);
+    expect(hasCheckNamed(source, 'живая проверка приёмки')).toBe(true);
+
+    expect(hasCheckNamed(source, 'удалённая строка')).toBe(false);
+    expect(hasCheckNamed(source, 'закомментированная строка')).toBe(false);
+    expect(hasCheckNamed(source, 'строка из docstring')).toBe(false);
+  });
+
+  it('у каждой строки есть проверка, которую исполняет pnpm verify', () => {
+    // Смоуки в `verify` не входят: им нужна наполненная база и они запускаются
+    // руками. Строка, проверенная ТОЛЬКО смоуком, при зелёном шлюзе не проверена
+    // ничем — а матрица при этом рапортует полное покрытие.
+    for (const row of HTTP_STATUS_MATRIX) {
+      const blocking = row.coverage.filter(
+        (entry) => entry.kind === 'unit' || entry.kind === 'acceptance',
+      );
+
+      expect(
+        blocking.length,
+        `${row.id}: только смоуки (${row.coverage.map((entry) => entry.kind).join(', ')}), ` +
+          'то есть блокирующий шлюз строку не исполняет',
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it('приёмочные ссылки ведут в tests/seo, а не куда попало', () => {
+    // Приёмка — зона `seo-auditor`; матрица на неё ссылается и её не правит.
+    // Ссылка на файл вне `tests/seo/` означала бы, что вид проверки указан
+    // неверно, и правило «исполняется шлюзом» перестало бы быть правдой.
+    const acceptance = HTTP_STATUS_MATRIX.flatMap((row) =>
+      row.coverage.filter((entry) => entry.kind === 'acceptance'),
+    );
+    expect(acceptance.length).toBeGreaterThan(0);
+
+    for (const entry of acceptance) {
+      expect(entry.file.startsWith('tests/seo/'), entry.file).toBe(true);
+      expect(entry.file.endsWith('.spec.ts'), entry.file).toBe(true);
     }
   });
 

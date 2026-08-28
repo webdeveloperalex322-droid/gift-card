@@ -17,17 +17,22 @@
  *
  * Поэтому здесь перечень ситуаций, у каждой — ожидаемые статусы, правила
  * заголовков и ССЫЛКИ НА ПРОВЕРКИ ({@link StatusCoverage}). Ссылка машинная: она
- * называет файл и строку, которая обязана в нём быть дословно. Отсюда три
- * замка, и все три срабатывают в обычном `pnpm test`
+ * называет файл и имя проверки, которое обязано в нём быть дословно и ВНУТРИ
+ * вызова проверки, а не где угодно в тексте. Отсюда четыре замка, и все четыре
+ * срабатывают в обычном `pnpm test`
  * (`tests/unit/web-http-status-matrix.test.ts`):
  *
  *   1. состав {@link HTTP_STATUS_MATRIX} сверяется с таблицей САМОГО
  *      `CLAUDE.md` — строка, добавленная в документ и не добавленная сюда,
  *      роняет тест, и наоборот;
  *   2. у каждой строки обязана быть хотя бы одна ссылка на проверку, а файл по
- *      ссылке — содержать названный якорь. Строка без проверки и проверка,
+ *      ссылке — содержать названную проверку. Строка без проверки и проверка,
  *      которую переименовали или удалили, видны одинаково;
- *   3. сами правила исполняются: {@link statusViolations} применяется и в
+ *   3. у каждой строки обязана быть проверка, которую исполняет БЛОКИРУЮЩИЙ
+ *      шлюз, то есть `unit` или `acceptance`. Одного `live` мало: смоуки в
+ *      `pnpm verify` не входят, и строка, проверенная только смоуком, при
+ *      зелёном `verify` не проверена ничем (находка `reviewer` от 2026-08-28);
+ *   4. сами правила исполняются: {@link statusViolations} применяется и в
  *      юнит-тесте к чистым решениям (`resolveRedirect`, `maintenanceMode`, тела
  *      410 и 503), и в живом смоуке к настоящим ответам сервера.
  *
@@ -82,11 +87,35 @@ export type HttpStatusRowId =
  * строка осталась без доказательства.
  */
 export interface StatusCoverage {
-  /** `unit` — обычный `pnpm test`; `live` — смоук против собранного сервера. */
-  readonly kind: 'unit' | 'live';
+  /**
+   * Где проверка исполняется. Различие не описательное: два вида из трёх входят
+   * в блокирующий шлюз `pnpm verify`, а третий — нет.
+   *
+   *   - `unit` — обычный `pnpm test`;
+   *   - `acceptance` — Playwright-приёмка `tests/seo/` (`pnpm test:seo`). Тоже
+   *     часть `verify`: с этапа 3 незаданный `BASE_URL` даёт `FAILED`, а не
+   *     пропуск;
+   *   - `live` — смоук против собранного сервера с живой базой
+   *     (`pnpm --filter @otkritka/web run smoke:*`). В `verify` НЕ входит:
+   *     запускается руками и требует наполненной базы.
+   *
+   * Отсюда правило {@link HTTP_STATUS_MATRIX}: одного только `live` строке
+   * недостаточно. Матрица, у которой три строки из восьми проверялись лишь
+   * смоуком, рапортовала полное покрытие, а блокирующий шлюз их не исполнял
+   * (находка `reviewer` от 2026-08-28).
+   */
+  readonly kind: 'unit' | 'acceptance' | 'live';
   /** Путь файла от корня монорепозитория, через прямые слеши. */
   readonly file: string;
-  /** Строка, обязанная присутствовать в файле дословно. */
+  /**
+   * Имя проверки в файле — ДОСЛОВНО и целиком либо началом, если имя собрано
+   * шаблонной строкой.
+   *
+   * Ищется не по всему файлу, а внутри вызова `record(`, `it(` или `test(`
+   * (`tests/unit/web-http-status-matrix.test.ts`): поиск по файлу удовлетворялся
+   * строкой, уцелевшей В КОММЕНТАРИИ после удаления самой проверки, — то есть
+   * ссылка становилась фикцией ровно в том сценарии, от которого защищает.
+   */
   readonly anchor: string;
 }
 
@@ -122,6 +151,18 @@ const SMOKE_PAGES = 'apps/web/scripts/smoke-pages.ts';
 const UNIT_MATRIX = 'tests/unit/web-http-status-matrix.test.ts';
 
 /**
+ * Приёмочные спеки (`tests/seo/`) — зона агента `seo-auditor`. Матрица на них
+ * ССЫЛАЕТСЯ и не правит их: ссылка машинная, поэтому переименованный там тест
+ * роняет тест матрицы и требует согласовать ссылку, а не переписать проверку.
+ */
+const SEO_SITEMAP_ENTRIES = 'tests/seo/sitemap-entries-are-indexable.spec.ts';
+const SEO_NOT_FOUND_STATUS = 'tests/seo/not-found-status.spec.ts';
+const SEO_NOT_FOUND_BODY = 'tests/seo/not-found-page-content.spec.ts';
+const SEO_PAGINATION_404 = 'tests/seo/pagination-invalid-number.spec.ts';
+const SEO_STATUS_IGNORES_QUERY = 'tests/seo/status-ignores-query.spec.ts';
+const SEO_MAINTENANCE = 'tests/seo/maintenance-mode-503.spec.ts';
+
+/**
  * Матрица. Порядок первых пяти строк совпадает с порядком таблицы `CLAUDE.md`, и
  * это требование теста, а не оформление: так расхождение видно построчно.
  */
@@ -141,6 +182,18 @@ export const HTTP_STATUS_MATRIX: readonly HttpStatusRow[] = [
       'Опубликованная страница отвечает сама, а не переходом: 301 с адреса живой страницы ' +
       'делает её недостижимой, и причина не видна ни в шаблоне, ни в записи.',
     coverage: [
+      {
+        // Приёмка проверяет ровно эту строку и обе её половины сразу: КАЖДЫЙ
+        // адрес карты сайта отвечает 200 и не является переходом.
+        kind: 'acceptance',
+        file: SEO_SITEMAP_ENTRIES,
+        anchor: 'каждый адрес из карты сайта отвечает 200, каноничен сам себе и открыт в индекс',
+      },
+      {
+        kind: 'acceptance',
+        file: SEO_STATUS_IGNORES_QUERY,
+        anchor: 'статус не зависит от параметров',
+      },
       { kind: 'live', file: SMOKE_REDIRECTS, anchor: 'цель переноса отвечает 200' },
       { kind: 'live', file: SMOKE_REDIRECTS, anchor: 'у живой страницы нет Location' },
     ],
@@ -248,6 +301,7 @@ export const HTTP_STATUS_MATRIX: readonly HttpStatusRow[] = [
       },
       { kind: 'live', file: SMOKE_REDIRECTS, anchor: 'у 503 есть Retry-After' },
       { kind: 'unit', file: UNIT_MATRIX, anchor: 'сервис недоступен: 503 с Retry-After' },
+      { kind: 'acceptance', file: SEO_MAINTENANCE, anchor: '503 с Retry-After' },
     ],
   },
   {
@@ -292,6 +346,17 @@ export const HTTP_STATUS_MATRIX: readonly HttpStatusRow[] = [
       'Навигация обязательна: без неё ответ является тупиком.',
     coverage: [
       {
+        kind: 'acceptance',
+        file: SEO_NOT_FOUND_STATUS,
+        anchor: 'настоящий 404 на несуществующем адресе',
+      },
+      {
+        // Вторая половина строки — навигация в теле, а не только статус.
+        kind: 'acceptance',
+        file: SEO_NOT_FOUND_BODY,
+        anchor: 'тело страницы 404: заголовок, навигация, ссылка на поиск, отсутствие canonical',
+      },
+      {
         kind: 'live',
         file: SMOKE_REDIRECTS,
         anchor: '404 остался настоящей страницей 404 с навигацией',
@@ -317,6 +382,20 @@ export const HTTP_STATUS_MATRIX: readonly HttpStatusRow[] = [
       'применения фильтра: адрес, отдающий 200 без параметров и 404 с ними, — два разных ' +
       'ответа одной страницы.',
     coverage: [
+      {
+        // Адрес списка, которого не существует (номер страницы вне диапазона),
+        // — тот же класс: сетка пуста, значит ответ не 200.
+        kind: 'acceptance',
+        file: SEO_PAGINATION_404,
+        anchor: 'не адрес страницы — 404',
+      },
+      {
+        // Вторая половина: адрес, отдающий 200 без параметров и 404 с ними (или
+        // наоборот), — это два разных ответа одной страницы.
+        kind: 'acceptance',
+        file: SEO_STATUS_IGNORES_QUERY,
+        anchor: 'параметры не превращают 404 в 200',
+      },
       {
         kind: 'live',
         file: SMOKE_PAGES,
