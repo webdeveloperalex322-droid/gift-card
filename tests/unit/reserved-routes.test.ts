@@ -89,9 +89,56 @@ describe('реестр: структура записей', () => {
     expect(isReservedPath('/podborki/media', DEFAULT_ADMIN_ENV)).toBe(false);
   });
 
-  it('не выводит форму директив Disallow: реестр хранит только пути', () => {
+  it('не выводит форму директив Disallow: у записи есть путь, вид, доступ и причина', () => {
+    // Состав полей закреплён нарочно. Реестр знает ФАКТЫ о маршруте — путь, вид
+    // (контейнер или занят целиком), доступ для обхода и причину резерва, — и не
+    // знает ни формы директивы `Disallow` (решение Ч-22: без завершающего
+    // слеша), ни того, печатать ли её вообще (там же: путь админки не
+    // публикуется). Поле `crawl` появилось на Э4-03 и является фактом о
+    // маршруте, а не директивой: из вида записи состав закрытых путей не
+    // выводится — «занят целиком» стоит и у `/search`, и у `/sitemap.xml`.
     for (const route of reservedRoutes(DEFAULT_ADMIN_ENV)) {
-      expect(Object.keys(route).sort()).toEqual(['kind', 'path', 'reason', 'source']);
+      expect(Object.keys(route).sort()).toEqual(['crawl', 'kind', 'path', 'reason', 'source']);
+      expect(['open', 'closed']).toContain(route.crawl);
+    }
+  });
+
+  it('путь админки помечен источником admin-env: его нельзя перепутать с маршрутом сайта', () => {
+    // На этом различии держится решение Ч-22 «путь админки в robots.txt не
+    // публикуется»: закрыты и `/search`, и админка, но назвать вслух можно
+    // только первый. Различать их сравнением со значением PAYLOAD_ADMIN_PATH
+    // означало бы второй разбор того же параметра.
+    const admin = reservedRoutes({ PAYLOAD_ADMIN_PATH: '/vkhod-redaktora' }).find(
+      (route) => route.source === 'admin-env',
+    );
+
+    expect(admin?.path).toBe('/vkhod-redaktora');
+    expect(admin?.crawl).toBe('closed');
+  });
+
+  it('закрыты для обхода ровно служебные маршруты, а файлы карты сайта и /media — нет', () => {
+    const crawl = new Map(
+      reservedRoutes(DEFAULT_ADMIN_ENV).map((route) => [route.path, route.crawl]),
+    );
+
+    for (const closed of ['/search', '/account', '/generator/preview', '/admin']) {
+      expect(crawl.get(closed), closed).toBe('closed');
+    }
+    // Закрыть их значило бы спрятать от краулера карту сайта, изображения и
+    // страницы, которым решением Ч-23 предстоит попасть в индекс.
+    for (const open of [
+      '/',
+      '/otkrytki',
+      '/podborki',
+      '/media',
+      '/robots.txt',
+      '/sitemap.xml',
+      '/sitemap-sections.xml',
+      '/o-proekte',
+      '/usloviya',
+      '/kontakty',
+    ]) {
+      expect(crawl.get(open), open).toBe('open');
     }
   });
 });

@@ -25,8 +25,20 @@
  * Пути хранятся в канонической форме БЕЗ завершающего слеша (решение Ч-21).
  * Форма директив `Disallow` из реестра НЕ выводится: она задана решением Ч-22 и
  * относится к генерации robots.txt (там же решено, что путь админки в robots.txt
- * не публикуется вовсе). Поэтому запись реестра — это путь, вид и причина, и
- * ничего про robots.
+ * не публикуется вовсе). Поэтому запись реестра — это путь, вид, ДОСТУП ДЛЯ
+ * ОБХОДА ({@link ReservedRouteCrawl}) и причина; ни формы директивы, ни решения
+ * «печатать ли её» здесь нет.
+ *
+ * Почему доступ для обхода всё-таки живёт в реестре (задача Э4-03). Состав
+ * закрытых путей — это свойство САМИХ маршрутов: `/search`, `/account` и
+ * `/generator/preview` закрыты «всегда `noindex` и вне sitemap» по разделу
+ * «Правила индексации», а `/media`, файлы sitemap и служебные страницы Ч-23
+ * обязаны оставаться доступными. Из вида записи (`container`/`occupied`) это НЕ
+ * выводится: «занят целиком» одинаково стоит и у `/search`, и у `/o-proekte`, и
+ * у `/robots.txt`. Значит, потребитель, выводящий состав из вида, либо закрыл бы
+ * от краулера собственный sitemap, либо открыл бы личный кабинет. Список же,
+ * переписанный в `apps/web` строками, разошёлся бы с реестром при первом
+ * пополнении — молча и в сторону «маршрут есть, а в robots.txt его нет».
  *
  * Путь админки попадает в реестр ВЫЧИСЛЕННЫМ из `PAYLOAD_ADMIN_PATH`, а не
  * записанным строкой: при нестандартном значении подборка с таким slug иначе
@@ -74,14 +86,40 @@ export type ReservedRouteKind = 'container' | 'occupied';
  * Откуда запись взялась. Нужен для диагностики: «занят целиком» по реестру и
  * «занят как корневой сегмент» — разные поводы, и редактору полезно видеть, что
  * именно конфликтует.
+ *
+ * `admin-env` выделен из `registry` намеренно (задача Э4-03): путь админки — это
+ * ЗНАЧЕНИЕ ОКРУЖЕНИЯ конкретной установки, а не общеизвестный маршрут сайта.
+ * Различие нужно ровно там, где реестр читают, чтобы что-то ОПУБЛИКОВАТЬ:
+ * решение Ч-22 запрещает печатать путь админки в robots.txt, и без отдельного
+ * источника отличить его от `/search` можно было бы только сравнением со
+ * значением `PAYLOAD_ADMIN_PATH` — то есть вторым разбором того же параметра.
  */
-export type ReservedRouteSource = 'registry' | 'extensionless' | 'root-segment';
+export type ReservedRouteSource = 'registry' | 'admin-env' | 'extensionless' | 'root-segment';
+
+/**
+ * Доступ маршрута для обхода краулером — ФАКТ О МАРШРУТЕ, а не директива.
+ *
+ *   - `closed` — по маршруту не должно ходить ничего: он «всегда `noindex` и вне
+ *     sitemap» (`CLAUDE.md`, «Правила индексации») либо не предназначен публике
+ *     вовсе. Что с этим делает генератор robots.txt — его дело: форму директивы
+ *     задаёт решение Ч-22, а решение «публиковать ли путь» — тоже (путь админки
+ *     закрыт, но не публикуется);
+ *   - `open` — маршрут обходить можно и нужно. Так помечены контейнеры, файлы
+ *     robots и sitemap (закрыть их значило бы спрятать от краулера собственную
+ *     карту сайта), `/media` (CSS, JS и изображения не блокируются) и служебные
+ *     страницы Ч-23, которым решением человека предстоит попасть в индекс.
+ *
+ * Значение обязательно у каждой ЯВНОЙ записи: новая строка реестра заставляет
+ * автора решить вопрос, а не унаследовать умолчание.
+ */
+export type ReservedRouteCrawl = 'open' | 'closed';
 
 export interface ReservedRoute {
   /** Путь в канонической форме: с ведущим слешем, без завершающего. */
   readonly path: string;
   readonly kind: ReservedRouteKind;
   readonly source: ReservedRouteSource;
+  readonly crawl: ReservedRouteCrawl;
   /** Зачем зарезервирован — попадает в текст ошибки. */
   readonly reason: string;
 }
@@ -102,7 +140,13 @@ export type PathAvailability =
 interface RegistryEntry {
   readonly path: string;
   readonly kind: ReservedRouteKind;
+  readonly crawl: ReservedRouteCrawl;
   readonly reason: string;
+  /**
+   * Источник ЯВНОЙ записи. Не указан — наполнение реестра; у пути админки это
+   * `admin-env`, потому что путь приходит из окружения установки.
+   */
+  readonly source?: Extract<ReservedRouteSource, 'admin-env' | 'registry'>;
 }
 
 /**
@@ -116,51 +160,66 @@ const STATIC_REGISTRY: readonly RegistryEntry[] = [
   {
     path: '/',
     kind: 'container',
+    crawl: 'open',
     reason: 'главная страница сайта',
   },
   {
     path: '/otkrytki',
     kind: 'container',
+    crawl: 'open',
     reason: 'каталог открыток: под ним живут карточки и подборки',
   },
   {
     path: '/podborki',
     kind: 'container',
+    crawl: 'open',
     reason: 'раздел подборок: под ним живут подборки',
   },
   {
     path: '/search',
     kind: 'occupied',
+    crawl: 'closed',
     reason: 'внутренний поиск: noindex и вне sitemap на всей глубине',
   },
   {
     path: '/account',
     kind: 'occupied',
+    crawl: 'closed',
     reason: 'личный кабинет: noindex и вне sitemap на всей глубине',
   },
   {
     path: '/o-proekte',
     kind: 'occupied',
+    // Открыт для обхода: по решению Ч-23 страница получает `index,follow` и место
+    // в sitemap, как только человек наполнит её текстом и включит выключатель.
+    // Директива `Disallow` на неё означала бы, что включённое решение не работает.
+    crawl: 'open',
     reason: 'информационная страница: статический маршрут Astro, не запись CMS',
   },
   {
     path: '/usloviya',
     kind: 'occupied',
+    crawl: 'open',
     reason: 'информационная страница: статический маршрут Astro, не запись CMS',
   },
   {
     path: '/kontakty',
     kind: 'occupied',
+    crawl: 'open',
     reason: 'информационная страница: статический маршрут Astro, не запись CMS',
   },
   {
     path: '/generator/preview',
     kind: 'occupied',
+    crawl: 'closed',
     reason: 'страницы генерации и превью: noindex и вне sitemap',
   },
   {
     path: '/pozdravleniya',
     kind: 'occupied',
+    // Страницы по этому пути НЕТ (решение Ч-20), и адрес отвечает 404. Закрывать
+    // от обхода нечего: `Disallow` здесь только объявил бы краулеру о планах.
+    crawl: 'open',
     reason:
       'резерв под этап 2 развития: резерв в реестре не разрешает создавать страницу, ' +
       'запрет по Ч-20 остаётся в силе',
@@ -168,6 +227,10 @@ const STATIC_REGISTRY: readonly RegistryEntry[] = [
   {
     path: '/media',
     kind: 'occupied',
+    // Открыт намеренно и это требование: CSS, JS и изображения не блокируются
+    // (`CLAUDE.md`, «Sitemap и robots»). Закрытый `/media` спрятал бы от краулера
+    // сами открытки — то есть содержание сайта.
+    crawl: 'open',
     reason:
       'публичный префикс производных изображений (решение Ч-03): по нему отдаются файлы, ' +
       'а не страницы, поэтому путь закрыт целиком — маршрут появится на этапе 3',
@@ -175,26 +238,32 @@ const STATIC_REGISTRY: readonly RegistryEntry[] = [
   {
     path: '/robots.txt',
     kind: 'occupied',
+    crawl: 'open',
     reason: 'файловый маршрут robots',
   },
   {
     path: '/sitemap.xml',
     kind: 'occupied',
+    // Карта сайта обязана быть доступна: на неё ссылается сам robots.txt.
+    crawl: 'open',
     reason: 'sitemap-индекс',
   },
   {
     path: '/sitemap-sections.xml',
     kind: 'occupied',
+    crawl: 'open',
     reason: 'sitemap разделов и подборок',
   },
   {
     path: '/sitemap-cards.xml',
     kind: 'occupied',
+    crawl: 'open',
     reason: 'sitemap карточек',
   },
   {
     path: '/sitemap-images.xml',
     kind: 'occupied',
+    crawl: 'open',
     reason: 'image sitemap',
   },
 ];
@@ -281,6 +350,11 @@ function resolveAdminRoute(env: SharedEnv): RegistryEntry {
   return {
     path: parseAdminPath(env[PAYLOAD_ADMIN_PATH_ENV_KEY]),
     kind: 'occupied',
+    // Закрыт для обхода — и при этом НЕ публикуется в robots.txt (решение Ч-22):
+    // публикация только подсказала бы адрес админки. Различает эти два свойства
+    // источник записи (`admin-env`), а не сравнение со значением переменной.
+    crawl: 'closed',
+    source: 'admin-env',
     reason: `путь админки Payload из ${PAYLOAD_ADMIN_PATH_ENV_KEY}`,
   };
 }
@@ -361,9 +435,22 @@ export function reservedRoutes(env: SharedEnv = currentEnv()): readonly Reserved
   };
 
   for (const entry of entries) {
-    put({ path: entry.path, kind: entry.kind, source: 'registry', reason: entry.reason });
+    put({
+      path: entry.path,
+      kind: entry.kind,
+      source: entry.source ?? 'registry',
+      crawl: entry.crawl,
+      reason: entry.reason,
+    });
   }
 
+  // ПРОИЗВОДНЫЕ записи всегда `open`, и это не умолчание, а решение. Они
+  // защищают от ПУТАНИЦЫ имён (`/sitemap` рядом с `/sitemap.xml`, `/generator`
+  // рядом с `/generator/preview`), а не описывают существующий маршрут: страницы
+  // по такому пути нет вовсе, и запрещать её обход нечем. Наследовать `closed` от
+  // родителя тем более нельзя: `Disallow: /generator` закрыл бы одной строкой
+  // больше, чем перечислено решением Ч-22, а `Disallow: /sitemap` — собственную
+  // карту сайта, потому что форма директивы префиксная.
   for (const entry of entries) {
     const withoutExtension = stripExtension(entry.path);
     if (withoutExtension !== entry.path && withoutExtension !== '') {
@@ -371,6 +458,7 @@ export function reservedRoutes(env: SharedEnv = currentEnv()): readonly Reserved
         path: withoutExtension,
         kind: 'occupied',
         source: 'extensionless',
+        crawl: 'open',
         reason: `имя файлового маршрута «${entry.path}» без расширения: путается с ним`,
       });
     }
@@ -386,6 +474,7 @@ export function reservedRoutes(env: SharedEnv = currentEnv()): readonly Reserved
       path: rootPath,
       kind: 'occupied',
       source: 'root-segment',
+      crawl: 'open',
       reason: `корневой сегмент зарезервированного маршрута «${entry.path}»`,
     });
   }
