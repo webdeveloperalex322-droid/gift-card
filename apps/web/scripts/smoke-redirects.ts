@@ -11,7 +11,7 @@
  *   - что решение вообще ПРИМЕНЯЕТСЯ — то есть что запрос доходит до middleware
  *     на собранном сервере, а не получает 404 раньше (Astro не зовёт middleware,
  *     если запрос не совпал ни с одним маршрутом; ради этого в `src/pages/`
- *     существует `[...missing].ts`);
+ *     существует `[...missing].astro`);
  *   - что переходов РОВНО СТОЛЬКО, сколько заявлено: хопы считаются на живых
  *     ответах, а не выводятся из кода;
  *   - что решение администратора о судьбе URL (группа `withdrawal` в CMS)
@@ -57,7 +57,7 @@ import { inspect } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { Payload } from 'payload';
+import type { Payload, Where } from 'payload';
 
 import { createPngFixture } from '../../cms/src/images/png-fixture.js';
 import { payloadClient } from '../src/data/index.js';
@@ -78,6 +78,19 @@ const PREFIX = 'smoke-e4-02';
 /** Имя файла собирается пайплайном из заголовка транслитерацией: «смоук» → `smouk`. */
 const IMAGE_STEM_PREFIX = 'smouk-e4-02';
 
+/**
+ * Путь, с которого смоук заводит правило НАМЕРЕННО «неправильное»: живой
+ * маршрут, который сайт обслуживает сам.
+ */
+const RESERVED_RULE_FROM = '/search';
+
+/**
+ * Комментарий правила с зарезервированного маршрута. Содержит {@link PREFIX}
+ * дословно, и это не оформление: `from` у такого правила общий (`/search`),
+ * поэтому единственный признак «наше» — комментарий.
+ */
+const RESERVED_RULE_COMMENT = `Смоук ${PREFIX}: правило с зарезервированного маршрута.`;
+
 /** Единственный источник ответа на вопрос «что здесь наше». */
 const LEFTOVER_FILTERS = {
   cards: { slug: { like: PREFIX } },
@@ -86,6 +99,19 @@ const LEFTOVER_FILTERS = {
   images: { nameStem: { like: IMAGE_STEM_PREFIX } },
   redirects: { from: { like: PREFIX } },
 } as const;
+
+/**
+ * «Наше» правило с зарезервированного маршрута — отдельным фильтром и по
+ * КОММЕНТАРИЮ.
+ *
+ * У такого правила нет префикса смоука в `from` (путь общий — `/search`),
+ * поэтому фильтр «все правила с /search» удалял бы ЧУЖОЕ: правило, заведённое
+ * человеком в общей dev-базе, исчезало бы без предупреждения, а его наличие
+ * ещё и делало бы уборку смоука «грязной» (находка `reviewer` от 2026-08-28).
+ */
+const RESERVED_RULE_FILTER: Where = {
+  and: [{ from: { equals: RESERVED_RULE_FROM } }, { comment: { like: PREFIX } }],
+};
 
 interface Check {
   readonly detail: string;
@@ -419,6 +445,16 @@ async function main(): Promise<void> {
     const gone404Path = `/otkrytki/${PREFIX}-udalyaemaya-404`;
     const replacedPath = `/otkrytki/${PREFIX}-zamenyaemaya`;
     const legacyPath = `/${PREFIX}-staryy-adres-bez-marshruta`;
+    // Адреса прежнего сайта С РАСШИРЕНИЕМ. Ради них перехватывающий маршрут и
+    // существует, а до правки 2026-08-28 правило с таким `from` не читалось
+    // вовсе: разрешатель пропускал любой путь, у которого в последнем сегменте
+    // есть точка. Проверяются три разные формы — корневая, «страница» и путь во
+    // вложенном каталоге.
+    const legacyFilePaths = [
+      `/${PREFIX}-index.php`,
+      `/${PREFIX}-staraya-stranica.html`,
+      `/katalog-${PREFIX}/otkrytka.htm`,
+    ];
     const chainStartPath = `/${PREFIX}-tsepochka-a`;
     const chainMiddlePath = `/${PREFIX}-tsepochka-b`;
 
@@ -468,7 +504,7 @@ async function main(): Promise<void> {
     /* ------------------------------------------------------------ */
 
     // Перенос со старого адреса, у которого НЕТ маршрута Astro: ровно этот
-    // случай проверяет, что запрос доходит до middleware (`[...missing].ts`).
+    // случай проверяет, что запрос доходит до middleware (`[...missing].astro`).
     const legacyRule = await payload.create({
       collection: 'redirects',
       data: {
@@ -480,6 +516,24 @@ async function main(): Promise<void> {
       ...asAdmin,
     });
     created.redirects.push(legacyRule.id);
+
+    // Переносы со старых адресов С РАСШИРЕНИЕМ. Создаются обычным путём — через
+    // Payload, как их создал бы администратор: CMS такой `from` принимает, и
+    // именно поэтому молчаливый пропуск на стороне сайта был дорог (правило
+    // видно в списке, а сайт отвечает 404).
+    for (const from of legacyFilePaths) {
+      const rule = await payload.create({
+        collection: 'redirects',
+        data: {
+          code: '301',
+          comment: `Смоук ${PREFIX}: перенос со старого адреса с расширением.`,
+          from,
+          to: targetPath,
+        },
+        ...asAdmin,
+      });
+      created.redirects.push(rule.id);
+    }
 
     // ЦЕПОЧКА В ДАННЫХ. Через Payload её не создать: планировщик схлопывает
     // цепочку при записи (Э1-06) — в этом и смысл. Поэтому второе звено
@@ -521,8 +575,8 @@ async function main(): Promise<void> {
         collection: 'redirects',
         data: {
           code: '301',
-          comment: 'Смоук Э4-02: правило с зарезервированного маршрута.',
-          from: '/search',
+          comment: RESERVED_RULE_COMMENT,
+          from: RESERVED_RULE_FROM,
           to: targetPath,
         },
         ...asAdmin,
@@ -691,6 +745,22 @@ async function main(): Promise<void> {
       hopCount(legacyHops) === 1 && legacyHops[0]?.location === targetPath,
       legacyHops.map((hop) => `${hop.target} → ${String(hop.status)}`).join(' | '),
     );
+
+    // Адрес прежнего сайта с расширением: 301, а не 404. Живая половина
+    // негативного юнит-теста (`tests/unit/web-redirects.test.ts`): тот проверяет
+    // РЕШЕНИЕ, а этот — что запрос вообще доходит до таблицы на собранном
+    // сервере, где `/….html` легко принять за адрес файла.
+    for (const from of legacyFilePaths) {
+      const hops = await followRedirects(from);
+      record(
+        `перенос со старого адреса С РАСШИРЕНИЕМ применяется: ${from}`,
+        hopCount(hops) === 1 &&
+          hops[0]?.status === 301 &&
+          hops[0].location === targetPath &&
+          finalHop(hops).status === 200,
+        hops.map((hop) => `${hop.target} → ${String(hop.status)}`).join(' | '),
+      );
+    }
 
     /* ------------------------------------------------------------ */
     /* 6. Несуществующие адреса                                      */
@@ -902,6 +972,11 @@ async function main(): Promise<void> {
     await cleanup
       .delete({ collection: 'redirects', where: LEFTOVER_FILTERS.redirects })
       .catch(() => undefined);
+    // И правило с зарезервированного маршрута — по своему комментарию, а не по
+    // одному только `from`: с тем же `/search` в базе может лежать чужое.
+    await cleanup
+      .delete({ collection: 'redirects', where: RESERVED_RULE_FILTER })
+      .catch(() => undefined);
     for (const id of created.cardImages) {
       await cleanup.delete({ collection: 'card-images', id }).catch(() => undefined);
     }
@@ -931,9 +1006,11 @@ async function main(): Promise<void> {
         await cleanup.count({ collection: 'redirects', where: LEFTOVER_FILTERS.redirects })
       ).totalDocs,
       // Правило с «/search» идентификатора могло не получить (CMS вправе
-      // отказать в его создании), поэтому считается отдельно и по значению.
+      // отказать в его создании), поэтому считается отдельно — но ТОЛЬКО СВОЁ,
+      // по комментарию: чужое правило с тем же `from` остатком смоука не
+      // является и на его код выхода влиять не должно.
       searchRules: (
-        await cleanup.count({ collection: 'redirects', where: { from: { equals: '/search' } } })
+        await cleanup.count({ collection: 'redirects', where: RESERVED_RULE_FILTER })
       ).totalDocs,
     };
 
@@ -972,8 +1049,10 @@ async function sweepLeftovers(payload: Payload): Promise<void> {
     redirects: (
       await payload.delete({ collection: 'redirects', where: LEFTOVER_FILTERS.redirects })
     ).docs.length,
+    // Только СВОЁ правило с «/search» — по комментарию. Фильтр по одному лишь
+    // `from` сметал бы правило, заведённое человеком в общей dev-базе.
     searchRules: (
-      await payload.delete({ collection: 'redirects', where: { from: { equals: '/search' } } })
+      await payload.delete({ collection: 'redirects', where: RESERVED_RULE_FILTER })
     ).docs.length,
   };
 
