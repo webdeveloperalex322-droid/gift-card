@@ -22,6 +22,29 @@
  * Для файловых маршрутов резервируется имя БЕЗ расширения: заняты и
  * `/sitemap.xml`, и `/sitemap`.
  *
+ * ## Семейство префикса: файловый маршрут, который отдаётся ЧАСТЯМИ
+ *
+ * Правило 3 закрывает путаницу с ИМЕНЕМ файла, но карта сайта состоит не из
+ * одного файла: сайт отдаёт `/sitemap-cards-1.xml`, `/sitemap-images-1.xml` и так
+ * далее, а в реестре записаны только базовые имена. Из-за этого путь
+ * `/sitemap-cards-1` оставался формально свободным — то есть подборка могла
+ * встать под именем, неотличимым от части карты сайта (находка задачи Э4-06).
+ * Прямой коллизии в базе при этом нет (slug записи точку содержать не может), но
+ * защищает реестр именно от ПУТАНИЦЫ, а не только от совпадения.
+ *
+ * Поэтому запись реестра может быть помечена как БАЗА СЕМЕЙСТВА
+ * ({@link ReservedFamily}): тогда занят и весь префикс `<имя без расширения>-`.
+ * Это ровно та трактовка, которую формулировка `CLAUDE.md` «`/sitemap.xml` и
+ * производные sitemap» уже подразумевает. Правило узкое намеренно: семейство
+ * растёт от КОНКРЕТНОЙ базы, а не от слова `sitemap`, поэтому подборка со slug
+ * `sitemap-podborki` под него не попадает.
+ *
+ * Семейство — это ПРЕФИКС, а не путь, поэтому в {@link reservedRoutes} его нет и
+ * быть не может: там список путей, и строка `/sitemap-cards-` была бы в нём
+ * ложью, а для генератора robots.txt — ещё и директивой `Disallow`, закрывающей
+ * собственную карту сайта. Семейства живут отдельным списком
+ * ({@link reservedFamilies}) и участвуют только в проверке пути.
+ *
  * Пути хранятся в канонической форме БЕЗ завершающего слеша (решение Ч-21).
  * Форма директив `Disallow` из реестра НЕ выводится: она задана решением Ч-22 и
  * относится к генерации robots.txt (там же решено, что путь админки в robots.txt
@@ -124,8 +147,28 @@ export interface ReservedRoute {
   readonly reason: string;
 }
 
+/**
+ * Семейство префикса: файловый маршрут, который сайт отдаёт ЧАСТЯМИ.
+ *
+ * Занят не только базовый путь (он и так запись реестра), но и всё, что
+ * начинается с {@link prefix}: `/sitemap-cards-1`, `/sitemap-cards-1.xml`,
+ * `/sitemap-cards-1/что-угодно`. Обоснование — в шапке модуля.
+ */
+export interface ReservedFamily {
+  /** Базовый маршрут: запись реестра, у которой объявлено семейство. */
+  readonly base: string;
+  /** Префикс занятых путей: имя базы без расширения плюс дефис. */
+  readonly prefix: string;
+  /** Зачем занято — попадает в текст ошибки. */
+  readonly reason: string;
+}
+
 /** Правило, по которому путь отклонён. */
-export type ReservedRule = 'pagination-segment' | 'occupied-path' | 'container-path';
+export type ReservedRule =
+  | 'pagination-segment'
+  | 'occupied-path'
+  | 'container-path'
+  | 'reserved-family';
 
 export type PathAvailability =
   | { readonly available: true }
@@ -147,6 +190,15 @@ interface RegistryEntry {
    * `admin-env`, потому что путь приходит из окружения установки.
    */
   readonly source?: Extract<ReservedRouteSource, 'admin-env' | 'registry'>;
+  /**
+   * Маршрут отдаётся ЧАСТЯМИ — занят и весь префикс имени с дефисом.
+   *
+   * Ставится только там, где части реально существуют: за соответствие
+   * маршрутам `apps/web/src/pages/sitemap-*-[shard].xml.ts` отвечает тест
+   * `tests/unit/reserved-routes.test.ts`, поэтому новый шардированный маршрут
+   * без семейства в реестре не проходит `pnpm test`.
+   */
+  readonly parts?: true;
 }
 
 /**
@@ -258,12 +310,16 @@ const STATIC_REGISTRY: readonly RegistryEntry[] = [
     path: '/sitemap-cards.xml',
     kind: 'occupied',
     crawl: 'open',
+    // Отдаётся частями по 50 000 URL: `/sitemap-cards-1.xml` и далее. Отсюда
+    // семейство — см. шапку модуля.
+    parts: true,
     reason: 'sitemap карточек',
   },
   {
     path: '/sitemap-images.xml',
     kind: 'occupied',
     crawl: 'open',
+    parts: true,
     reason: 'image sitemap',
   },
 ];
@@ -275,6 +331,33 @@ function stripExtension(path: string): string {
     return path;
   }
   return path.slice(0, lastDot);
+}
+
+/**
+ * Семейства, выведенные из наполнения реестра.
+ *
+ * Считаются один раз при загрузке модуля: набор не зависит ни от окружения, ни
+ * от аргументов — семейство есть свойство самого файлового маршрута. Именно
+ * поэтому у {@link reservedFamilies} нет параметра `env`: он создавал бы
+ * впечатление, что значение можно настроить установкой, а его нельзя.
+ */
+const STATIC_FAMILIES: readonly ReservedFamily[] = STATIC_REGISTRY.filter(
+  (entry) => entry.parts === true,
+).map((entry) => ({
+  base: entry.path,
+  // Префикс ВЫВОДИТСЯ из базы, а не пишется второй строкой рядом: две строки
+  // разошлись бы при первом переименовании файла, и семейство молча перестало
+  // бы совпадать с тем, что сайт отдаёт.
+  prefix: `${stripExtension(entry.path)}-`,
+  reason: `часть файлового маршрута «${entry.path}» (${entry.reason}): он отдаётся частями`,
+}));
+
+/**
+ * Семейства префиксов — список, отдельный от {@link reservedRoutes}, потому что
+ * это ПРЕФИКСЫ, а не пути (обоснование — в шапке модуля).
+ */
+export function reservedFamilies(): readonly ReservedFamily[] {
+  return STATIC_FAMILIES;
 }
 
 /**
@@ -382,6 +465,21 @@ function resolveAdminRoute(env: SharedEnv): RegistryEntry {
  * производную — см. {@link reservedRoutes}.
  */
 function assertAdminRouteFree(admin: RegistryEntry): void {
+  // Семейство проверяется первым: путь админки внутри него — это тот же спор
+  // двух обработчиков на одном адресе, только адрес принадлежит ЧАСТИ карты
+  // сайта, а не базовому имени. Сообщение обязано называть семейство, иначе
+  // администратор искал бы конфликт среди записей реестра и не нашёл бы.
+  const family = STATIC_FAMILIES.find((entry) => admin.path.startsWith(entry.prefix));
+  if (family !== undefined) {
+    throw new Error(
+      `${PAYLOAD_ADMIN_PATH_ENV_KEY} задан как «${admin.path}», но этот путь принадлежит ` +
+        `семейству «${family.prefix}…» (${family.reason}): по таким адресам сайт отдаёт части ` +
+        'карты сайта, и роутер админки забрал бы адрес себе. Это ошибка конфигурации, а не ' +
+        'режим работы, поэтому реестр зарезервированных маршрутов не собирается. Задайте ' +
+        `${PAYLOAD_ADMIN_PATH_ENV_KEY} отдельным сегментом верхнего уровня.`,
+    );
+  }
+
   const clash = STATIC_REGISTRY.find(
     (entry) => entry.path === admin.path || entry.path.startsWith(`${admin.path}/`),
   );
@@ -522,6 +620,22 @@ export function checkReservedPath(
         ? `путь совпадает с контейнером «${exact.path}» (${exact.reason}); записи живут под ним, ` +
           'а не на его месте'
         : `путь занят целиком: «${exact.path}» — ${exact.reason}`,
+    );
+  }
+
+  // Семейство префикса проверяется ПОСЛЕ точного совпадения и ДО родителей:
+  // база семейства уже есть в реестре точной записью, а под занятым целиком
+  // родителем часть карты сайта не лежит — она его сосед по имени. Проверка
+  // покрывает и путь ПОД частью (`/sitemap-cards-1/otkrytki`): «занято целиком»
+  // относится ко всему префиксу.
+  const family = STATIC_FAMILIES.find((entry) => target.startsWith(entry.prefix));
+  if (family !== undefined) {
+    return unavailable(
+      'reserved-family',
+      family.prefix,
+      `путь входит в семейство «${family.prefix}…» — ${family.reason}. Прямого совпадения с ` +
+        'записью реестра здесь нет, и в этом суть: имя, неотличимое от части карты сайта, ' +
+        'путается с ней ровно так же, как «/sitemap» с «/sitemap.xml».',
     );
   }
 

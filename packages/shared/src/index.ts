@@ -21,7 +21,10 @@
  *     сборку, значений по умолчанию в коде нет;
  *   - `./reserved-routes.ts` — реестр зарезервированных маршрутов (контейнеры и
  *     занятые целиком), запрет сегмента `page` на любой позиции; путь админки
- *     вычисляется из `PAYLOAD_ADMIN_PATH`, а не записан строкой;
+ *     вычисляется из `PAYLOAD_ADMIN_PATH`, а не записан строкой. Там же
+ *     семейства префиксов (`reservedFamilies`, задача Э4-06): файловый маршрут,
+ *     который отдаётся частями, занимает и весь префикс имени — иначе
+ *     `/sitemap-cards-1` остаётся свободным и путается с `/sitemap-cards-1.xml`;
  *   - `./env.ts` — тип среза окружения; окружение всегда аргумент с дефолтом,
  *     чтобы тесты не мутировали `process.env`;
  *   - `./robots.ts` (задача Э4-05) — закрытый набор значений robots-директивы,
@@ -62,6 +65,8 @@ export {
   parseAdminPath,
   PAYLOAD_ADMIN_PATH_ENV_KEY,
   type PathAvailability,
+  type ReservedFamily,
+  reservedFamilies,
   type ReservedRoute,
   type ReservedRouteCrawl,
   type ReservedRouteKind,

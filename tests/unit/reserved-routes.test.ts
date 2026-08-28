@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
@@ -8,6 +8,7 @@ import {
   PAGINATION_SEGMENT,
   parseAdminPath,
   PAYLOAD_ADMIN_PATH_ENV_KEY,
+  reservedFamilies,
   reservedRoutes,
 } from '@otkritka/shared';
 
@@ -269,6 +270,105 @@ describe('правило 3 и файловые маршруты', () => {
     ]) {
       expect(isReservedPath(path, DEFAULT_ADMIN_ENV), path).toBe(true);
     }
+  });
+
+  it('семейство частей карты сайта занято целиком: `/sitemap-cards-1` не свободен', () => {
+    // Дыра, найденная на Э4-06. В реестре записаны БАЗОВЫЕ имена файловых
+    // маршрутов (`/sitemap-cards.xml`) и их формы без расширения, а сайт отдаёт
+    // ЧАСТИ: `/sitemap-cards-1.xml`, `/sitemap-images-1.xml`. Путь
+    // `/sitemap-cards-1` формально не совпадал ни с одной записью и был
+    // свободен — то есть подборка могла встать под именем, неотличимым от части
+    // карты сайта. Это ровно то, от чего защищает правило 3, поэтому закрывается
+    // тем же способом: семейством префикса.
+    for (const path of [
+      '/sitemap-cards-1',
+      '/sitemap-cards-1.xml',
+      '/sitemap-cards-0007',
+      '/sitemap-images-42',
+      '/sitemap-images-42.xml',
+      '/sitemap-cards-arhiv',
+      '/sitemap-cards-1/otkrytki',
+    ]) {
+      const result = checkReservedPath(path, DEFAULT_ADMIN_ENV);
+      expect(result.available, path).toBe(false);
+      if (!result.available) {
+        expect(result.rule, path).toBe('reserved-family');
+        expect(result.conflict, path).toMatch(/^\/sitemap-(cards|images)-$/);
+      }
+    }
+  });
+
+  it('семейство объявлено ровно для тех баз, у которых есть части', () => {
+    const families = reservedFamilies();
+    expect(families.map((family) => family.base).sort()).toEqual([
+      '/sitemap-cards.xml',
+      '/sitemap-images.xml',
+    ]);
+    for (const family of families) {
+      // Префикс выводится из базы, а не пишется второй строкой: иначе они
+      // разошлись бы при первом переименовании файла.
+      expect(family.prefix).toBe(`${family.base.replace(/\.xml$/, '')}-`);
+      expect(family.reason.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('маршруты частей карты сайта в apps/web все до одного покрыты семейством', () => {
+    // Сторож против повторения дыры: новый шардированный маршрут
+    // (`sitemap-<что-то>-[shard].xml.ts`) обязан получить семейство в реестре, а
+    // не остаться именем, под которое может встать запись CMS. Проверка идёт по
+    // ФАЙЛАМ маршрутов, потому что именно они определяют, какие части сайт
+    // реально отдаёт.
+    const pagesDir = fileURLToPath(new URL('../../apps/web/src/pages/', import.meta.url));
+    const shardRoutes = readdirSync(pagesDir).filter((name) =>
+      /^sitemap-[a-z0-9-]+-\[shard\]\.xml\.ts$/.test(name),
+    );
+    expect(shardRoutes.length).toBeGreaterThan(0);
+
+    const covered = new Set(reservedFamilies().map((family) => family.base));
+    for (const route of shardRoutes) {
+      const base = `/${route.replace('-[shard].xml.ts', '.xml')}`;
+      expect(covered.has(base), `${route} → семейство для ${base}`).toBe(true);
+    }
+  });
+
+  it('ничего лишнего: похожее имя вне семейства остаётся свободным', () => {
+    // Правило обязано быть узким. Семейство — это префикс КОНКРЕТНОЙ базы с
+    // дефисом, а не всё, что начинается со слова sitemap: иначе реестр закрыл бы
+    // подборки, к картам сайта отношения не имеющие.
+    for (const path of [
+      '/sitemap-podborki',
+      '/sitemap-cards2',
+      '/sitemapcards-1',
+      '/podborki/sitemap-cards-1',
+      '/otkrytki/sitemap-images-2',
+    ]) {
+      expect(isReservedPath(path, DEFAULT_ADMIN_ENV), path).toBe(false);
+    }
+  });
+
+  it('семейство не задевает вычисляемый резерв админки', () => {
+    // Нестандартный PAYLOAD_ADMIN_PATH: резерв админки остаётся ровно таким же,
+    // а похожее на него имя с суффиксом семейством НЕ становится — семейства
+    // объявлены только у файловых маршрутов с частями.
+    expect(isReservedPath('/upravlenie-sajtom', CUSTOM_ADMIN_ENV)).toBe(true);
+    expect(isReservedPath('/upravlenie-sajtom/collections', CUSTOM_ADMIN_ENV)).toBe(true);
+    expect(isReservedPath('/upravlenie-sajtom-1', CUSTOM_ADMIN_ENV)).toBe(false);
+    expect(isReservedPath('/sitemap-cards-1', CUSTOM_ADMIN_ENV)).toBe(true);
+    // Список семейств от окружения не зависит вовсе — у него нет параметра
+    // `env`: семейство есть свойство файлового маршрута, а не установки.
+    expect(reservedFamilies().map((family) => family.prefix)).toEqual([
+      '/sitemap-cards-',
+      '/sitemap-images-',
+    ]);
+  });
+
+  it('админка внутри семейства — ошибка конфигурации, а не режим работы', () => {
+    // Тот же класс, что «путь админки поглощает служебный маршрут»: на
+    // `/sitemap-cards-1` сайт отдаёт часть карты сайта, и роутер админки забрал
+    // бы этот адрес себе. Правильного исхода нет, поэтому реестр не собирается.
+    expect(() => reservedRoutes({ [PAYLOAD_ADMIN_PATH_ENV_KEY]: '/sitemap-cards-1' })).toThrow(
+      /sitemap-cards/,
+    );
   });
 
   it('корневой сегмент занятого пути резервируется отдельно', () => {
