@@ -15,13 +15,26 @@
  *      схлопывается: `A→B` + `B→C` становится `A→C` (одиночный 301);
  *   4. цепочка, замыкающаяся в петлю, отклоняется, а не схлопывается;
  *   5. цепочка, ведущая на удалённый URL, превращается в 410 на всей длине:
- *      иначе `A→B` вело бы на страницу, которой нет.
+ *      иначе `A→B` вело бы на страницу, которой нет;
+ *   6. `from` не может быть маршрутом, который сайт обслуживает сам (задача
+ *      Э4-06). Подробности — у {@link assertRedirectSourceFree}.
+ *
+ * Окружение приходит АРГУМЕНТОМ: правилу 6 нужен реестр зарезервированных
+ * маршрутов, а путь админки в реестре вычисляется из `PAYLOAD_ADMIN_PATH`.
+ * Чтение `process.env` внутри сделало бы правило непроверяемым на нестандартном
+ * значении — том самом случае, ради которого путь админки и вычисляется.
  *
  * Чего планировщик НЕ делает: не проверяет, что `to` отвечает 200 (это задача
  * приёмки и `url-guard`), и не создаёт редирект при смене slug — атомарная
  * операция «сменить URL с 301» это задача Э1-09.
  */
-import { canonicalizePath, looksLikeAbsoluteUrl } from '@otkritka/shared';
+import {
+  type SharedEnv,
+  canonicalizePath,
+  checkReservedPath,
+  currentEnv,
+  looksLikeAbsoluteUrl,
+} from '@otkritka/shared';
 
 /** Коды из ТЗ §8.1. 302 и 307 в модели не существуют: перенос всегда постоянный. */
 export const REDIRECT_CODES = ['301', '410'] as const;
@@ -35,6 +48,10 @@ export type RedirectRuleCode =
   | 'invalid-path'
   | 'loop'
   | 'missing-target'
+  /** Реестр маршрутов не собрался: `PAYLOAD_ADMIN_PATH` не задан или негоден. */
+  | 'registry-unavailable'
+  /** `from` — маршрут, который сайт обслуживает сам (Э4-06). */
+  | 'reserved-from'
   | 'unexpected-target';
 
 /**
@@ -132,6 +149,96 @@ function fail(rule: RedirectRuleCode, message: string): never {
   throw new RedirectRuleError(rule, message);
 }
 
+/**
+ * Хвост отказа: где проходит граница правила. Один текст на все случаи, потому
+ * что редактор, получивший отказ, спрашивает ровно это — «а что тогда можно».
+ */
+const SOURCE_RULE_BOUNDARY =
+  'Ограничение касается только источника правила: цель редиректа (поле «to») на служебный ' +
+  'путь, на каталог или на главную допустима, а пути ПОД контейнерами — /otkrytki/<slug>, ' +
+  '/podborki/... — это обычные адреса записей, и переносить их можно.';
+
+/**
+ * Проверяет, что путь-ИСТОЧНИК редиректа не занят самим сайтом (задача Э4-06).
+ *
+ * Правило появилось по находке Э4-01/Э4-02: правило с `from = /`, `/search` или
+ * `/o-proekte` создавалось без возражений, а нейтрализовал его уже рантайм
+ * middleware (`apps/web/src/routing/redirects.ts`) — игнорировал и писал в лог.
+ * Место неверное: 301 с адреса живой страницы делает её недостижимой, а причина
+ * не видна ни в шаблоне, ни в записи — только в логе. Отказ обязан произойти при
+ * сохранении, то есть одинаково в админке, REST и GraphQL.
+ *
+ * Проверка — тот же предикат, что у middleware (`checkReservedPath`), и это не
+ * совпадение, а условие: правило, которое отклоняет одно, а игнорирует другое,
+ * оставило бы записи, законные при сохранении и мёртвые в рантайме.
+ *
+ * Граница правила НЕ шире реестра, и это важнее самого запрета:
+ *   - «занят целиком» и «контейнер» запрещены НА САМОМ пути. Редирект с
+ *     `/otkrytki` увёл бы с каталога, с `/search` — с поиска;
+ *   - пути ПОД контейнером разрешены: `/otkrytki/<slug>` и `/podborki/...` — это
+ *     обычные адреса записей, и без редиректа с них перенос карточки был бы
+ *     невозможен, то есть запрет сломал бы главное требование к URL;
+ *   - к полю `to` правило не применяется вовсе: цель обязана быть достижимой, а
+ *     служебная страница, каталог и главная достижимы.
+ *
+ * @throws RedirectRuleError с признаком `reserved-from` — путь занят сайтом;
+ *   `registry-unavailable` — реестр не собрался (нет `PAYLOAD_ADMIN_PATH`).
+ *   Второй случай не подменяется «разрешено»: без пути админки нельзя сказать,
+ *   свободен ли путь, а дефолт зарезервировал бы не тот путь.
+ */
+export function assertRedirectSourceFree(from: string, env: SharedEnv): void {
+  let availability;
+  try {
+    availability = checkReservedPath(from, env);
+  } catch (error) {
+    return fail(
+      'registry-unavailable',
+      `Редирект с «${from}» проверить нельзя: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  if (availability.available) {
+    return;
+  }
+
+  return fail(
+    'reserved-from',
+    `Редирект с «${from}» создать нельзя: этот путь сайт обслуживает сам — ` +
+      `${availability.reason}. 301 или 410 с адреса живой страницы сделал бы её ` +
+      'недостижимой, а причина не была бы видна ни в шаблоне, ни в записи. ' +
+      SOURCE_RULE_BOUNDARY,
+  );
+}
+
+/**
+ * Форма правила для `validate` поля `from`: возвращает `true` либо текст отказа.
+ *
+ * Существует РЯДОМ с проверкой в хуке, а не вместо неё. Валидацию поля Payload
+ * умеет пропускать (например при сохранении черновика версии), а
+ * `beforeChange` коллекции — нет, поэтому авторитетная проверка живёт в
+ * планировщике. Здесь — та же формулировка, показанная редактору сразу в форме,
+ * а не после отправки.
+ *
+ * Исключений не бросает даже при незаданном `PAYLOAD_ADMIN_PATH`: проблема
+ * конфигурации обязана дойти до редактора текстом, а не пятисоткой, иначе она
+ * выглядит как поломка админки.
+ */
+export function validateRedirectFrom(
+  value: unknown,
+  env: SharedEnv = currentEnv(),
+): string | true {
+  try {
+    assertRedirectSourceFree(normalizeRedirectPath(value), env);
+  } catch (error) {
+    if (error instanceof RedirectRuleError) {
+      return error.message;
+    }
+    throw error;
+  }
+  return true;
+}
+
 function assertCode(value: unknown): RedirectCode {
   if (typeof value === 'string' && (REDIRECT_CODES as readonly string[]).includes(value)) {
     return value as RedirectCode;
@@ -159,11 +266,24 @@ function sameId(left: number | string | undefined, right: number | string | unde
  */
 export function planRedirect(input: {
   readonly candidate: RedirectInput;
+  /** Окружение для реестра маршрутов: путь админки в нём вычисляется. */
+  readonly env?: SharedEnv;
   readonly existing: readonly RedirectRecord[];
 }): RedirectPlan {
   const { candidate, existing } = input;
+  const env = input.env ?? currentEnv();
 
   const from = normalizeRedirectPath(candidate.from);
+  // Правило 6 проверяется ДО остальных: путь, который сайт обслуживает сам, не
+  // становится законным ни от кода, ни от цели, ни от состояния таблицы.
+  //
+  // Проверяется только КАНДИДАТ. Остальные строки таблицы не перепроверяются:
+  // унаследованную строку с занятым `from` рантайм и так игнорирует, а отказ на
+  // ней сорвал бы правку любой соседней записи — то есть чужая ошибка блокировала
+  // бы работу. Саму такую строку сохранить заново не выйдет (её `from` и есть
+  // кандидат при обновлении), и это верно: чинится она удалением, как и советует
+  // сообщение middleware.
+  assertRedirectSourceFree(from, env);
   const code = assertCode(candidate.code);
 
   let target: string | null;

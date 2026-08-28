@@ -2,6 +2,7 @@ import type {
   CollectionBeforeChangeHook,
   CollectionConfig,
   FieldHook,
+  TextFieldSingleValidation,
   TypeWithID,
 } from 'payload';
 import { APIError } from 'payload';
@@ -12,7 +13,12 @@ import {
   systemFieldAccess,
 } from '../access/policies';
 import type { Redirect } from '../payload-types';
-import { RedirectRuleError, type RedirectRecord, planRedirect } from './redirects-plan';
+import {
+  RedirectRuleError,
+  type RedirectRecord,
+  planRedirect,
+  validateRedirectFrom,
+} from './redirects-plan';
 
 /**
  * Редиректы (задача Э1-06, ТЗ §8.1 и §7.5).
@@ -20,9 +26,10 @@ import { RedirectRuleError, type RedirectRecord, planRedirect } from './redirect
  * Таблица применяется middleware Astro (задача Э3-01), поэтому её содержимое —
  * это HTTP-поведение сайта, а не справочник. Отсюда два следствия:
  *
- *   - все правила (петля, дубль `from`, схлопывание цепочек) живут в серверном
- *     хуке и в чистом планировщике `redirects-plan.ts`. Через REST и GraphQL
- *     обойти их нельзя, потому что другого пути записи не существует;
+ *   - все правила (петля, дубль `from`, схлопывание цепочек, запрет источника на
+ *     маршруте, который сайт обслуживает сам) живут в серверном хуке и в чистом
+ *     планировщике `redirects-plan.ts`. Через REST и GraphQL обойти их нельзя,
+ *     потому что другого пути записи не существует;
  *   - создавать и менять редиректы вправе только `admin`. Для сервисного
  *     аккаунта `ai-editor` это запрещено на уровне access control (CLAUDE.md,
  *     ТЗ §9): редирект — это решение о судьбе URL, уже известного поисковику.
@@ -57,8 +64,14 @@ const fillCreatedBy: FieldHook<TypeWithID, number | string | null | undefined, u
 }) => value ?? req.user?.id ?? null;
 
 /**
- * Проверяет и достраивает редирект: нормализует пути, отклоняет петли и дубли,
- * схлопывает цепочки.
+ * Проверяет и достраивает редирект: нормализует пути, отклоняет петли, дубли и
+ * источник на маршруте, который сайт обслуживает сам, схлопывает цепочки.
+ *
+ * Планировщик зовётся БЕЗ явного окружения — он берёт настоящее `process.env`
+ * через `currentEnv()`. Это здесь обязательно: реестр зарезервированных
+ * маршрутов вычисляет путь админки из `PAYLOAD_ADMIN_PATH`, и подставленное
+ * окружение проверяло бы другую установку. Поэтому же отказ по незаданному
+ * `PAYLOAD_ADMIN_PATH` приходит как содержательный 400, а не как 500.
  *
  * Схлопывание выполняется здесь же, до записи основного документа: операция
  * Payload идёт в транзакции, поэтому либо применяются и новый редирект, и
@@ -126,6 +139,15 @@ const applyRedirectRules: CollectionBeforeChangeHook<Redirect> = async ({
   }
 };
 
+/**
+ * Валидация поля `from` в форме, которую ожидает Payload.
+ *
+ * Окружение не передаётся: в рабочем процессе CMS реестр маршрутов обязан
+ * собираться из НАСТОЯЩЕГО `PAYLOAD_ADMIN_PATH`, иначе проверка говорила бы о
+ * другой установке. Тесты зовут `validateRedirectFrom` с явным окружением.
+ */
+const validateFromValue: TextFieldSingleValidation = (value) => validateRedirectFrom(value);
+
 export const Redirects: CollectionConfig = {
   slug: 'redirects',
   labels: {
@@ -161,8 +183,13 @@ export const Redirects: CollectionConfig = {
         description:
           'Старый путь от корня сайта, например /otkrytki/staraya-otkrytka. ' +
           'Уникален: два правила для одного пути сделали бы ответ зависимым от ' +
-          'порядка строк.',
+          'порядка строк. Маршрут, который сайт обслуживает сам, источником быть ' +
+          'не может: «/», «/otkrytki», «/podborki», «/search», «/account», ' +
+          'служебные страницы, файлы robots и sitemap, «/media», путь админки и ' +
+          'любой путь под ними — редирект оттуда сделал бы живую страницу ' +
+          'недостижимой. Адреса записей под каталогами переносить можно.',
       },
+      validate: validateFromValue,
     },
     {
       name: 'to',
@@ -173,7 +200,10 @@ export const Redirects: CollectionConfig = {
         // отказ «410 не имеет цели» без возможности очистить значение.
         description:
           'Новый путь от корня сайта. Обязателен для 301 и обязан быть ПУСТЫМ для ' +
-          '410. Абсолютный URL недопустим: хост собирается из SITE_URL.',
+          '410. Абсолютный URL недопустим: хост собирается из SITE_URL. В отличие ' +
+          'от поля «from», цель МОЖЕТ быть служебным маршрутом — каталогом, ' +
+          'информационной страницей или главной: цель редиректа обязана быть ' +
+          'достижимой, и запрет здесь сделал бы часть переносов невыполнимой.',
       },
     },
     {
