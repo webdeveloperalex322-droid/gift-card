@@ -74,6 +74,7 @@ import type { Collection } from '@otkritka/cms/types';
 import { createPngFixture } from '../../cms/src/images/png-fixture.js';
 import { DEFAULT_CARDS_PER_PAGE, payloadClient } from '../src/data/index.js';
 import { serverChildEnv } from './server-child-env.mjs';
+import { createStatusMatrixHarness } from './status-matrix-check.js';
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const serverEntry = path.join(appDir, 'dist', 'server', 'entry.mjs');
@@ -129,6 +130,18 @@ function record(name: string, ok: boolean, detail = ''): void {
   checks.push({ detail, name, ok });
   console.log(`${ok ? 'OK  ' : 'FAIL'} ${name}${detail === '' ? '' : ` — ${detail}`}`);
 }
+
+/**
+ * Мост к матрице HTTP-статусов (`../src/server/http-status-matrix.ts`,
+ * задача Э4-06).
+ *
+ * Этому смоуку матрица поручила две строки, и обе про ответ 404: «настоящий 404
+ * с навигацией» на черновике и «пустая или слабая страница не отдаёт 200». Обе
+ * ситуации уже проверялись здесь по одной; мост добавляет к ним общее правило
+ * (статус, отсутствие Location, содержимое тела) и сверку списка — забытая
+ * строка валит прогон.
+ */
+const matrix = createStatusMatrixHarness('apps/web/scripts/smoke-pages.ts', record);
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -1248,6 +1261,12 @@ async function main(): Promise<void> {
       emptiedBase.status === 404,
       `status=${String(emptiedBase.status)}`,
     );
+    matrix.check('no-soft-404', emptiedPath, {
+      hops: 0,
+      location: emptiedBase.headers.location,
+      retryAfter: emptiedBase.headers['retry-after'],
+      status: emptiedBase.status,
+    });
     for (const target of [`${emptiedPath}/page/1`, `${emptiedPath}/page/2`]) {
       const response = await request(target);
       record(
@@ -1351,6 +1370,16 @@ async function main(): Promise<void> {
         response.status === 404 && response.headers.location === undefined,
         `status=${String(response.status)}`,
       );
+      // Ответ на черновик обязан быть НАСТОЯЩЕЙ страницей 404 с навигацией, а не
+      // пустым телом со статусом: адрес черновика попадает в чужие ссылки так же,
+      // как любой другой.
+      matrix.check('real-404-with-navigation', target, {
+        body: response.body,
+        hops: 0,
+        location: response.headers.location,
+        retryAfter: response.headers['retry-after'],
+        status: response.status,
+      });
     }
 
     /* ------------------------------------------------------------ */
@@ -1366,6 +1395,10 @@ async function main(): Promise<void> {
       // и требовать их означало бы требовать сетку там, где её не должно быть.
       { path: '/podborki', withImages: false },
     ]);
+
+    // Матрица статусов: строки, порученные этому смоуку, обязаны быть
+    // отработаны все до одной. Список берётся у матрицы, а не перечисляется тут.
+    matrix.assertAllRowsExercised();
 
     // Задержка перед уборкой — для ручной проверки curl'ом по живым страницам.
     // Ограничена по времени намеренно: уборка обязана произойти сама, а не

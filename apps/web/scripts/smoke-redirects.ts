@@ -61,7 +61,9 @@ import type { Payload } from 'payload';
 
 import { createPngFixture } from '../../cms/src/images/png-fixture.js';
 import { payloadClient } from '../src/data/index.js';
+import type { ObservedResponse } from '../src/server/http-status-matrix.js';
 import { serverChildEnv } from './server-child-env.mjs';
+import { createStatusMatrixHarness } from './status-matrix-check.js';
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const serverEntry = path.join(appDir, 'dist', 'server', 'entry.mjs');
@@ -97,6 +99,15 @@ function record(name: string, ok: boolean, detail = ''): void {
   checks.push({ detail, name, ok });
   console.log(`${ok ? 'OK  ' : 'FAIL'} ${name}${detail === '' ? '' : ` — ${detail}`}`);
 }
+
+/**
+ * Мост к матрице HTTP-статусов (`../src/server/http-status-matrix.ts`).
+ *
+ * Путь файла указывается ровно тем написанием, каким он записан в матрице: по
+ * нему смоук спрашивает, какие строки поручены ИМЕННО ЕМУ, и в конце прогона
+ * сверяет список с отработанным.
+ */
+const matrix = createStatusMatrixHarness('apps/web/scripts/smoke-redirects.ts', record);
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -532,6 +543,12 @@ async function main(): Promise<void> {
       target.headers.location === undefined,
       String(target.headers.location),
     );
+    matrix.check('published-200', targetPath, {
+      hops: 0,
+      location: target.headers.location,
+      retryAfter: target.headers['retry-after'],
+      status: target.status,
+    });
 
     /* ------------------------------------------------------------ */
     /* 2. Перенос: ровно один 301 на конечный адрес                  */
@@ -549,6 +566,12 @@ async function main(): Promise<void> {
       finalHop(movedHops).status === 200,
       `итог ${String(finalHop(movedHops).status)}`,
     );
+    const movedFirst = movedHops[0] ?? finalHop(movedHops);
+    matrix.check('moved-301', oldMovedPath, {
+      hops: hopCount(movedHops),
+      location: movedFirst.location,
+      status: movedFirst.status,
+    });
 
     /* ------------------------------------------------------------ */
     /* 3. Цепочка в данных схлопывается на чтении                    */
@@ -593,6 +616,13 @@ async function main(): Promise<void> {
       '410 закрыт директивой noindex',
       /<meta name="robots" content="noindex,follow">/.test(goneResponse.body),
     );
+    matrix.check('deleted-gone', gonePath, {
+      body: goneResponse.body,
+      hops: 0,
+      location: goneResponse.headers.location,
+      retryAfter: goneResponse.headers['retry-after'],
+      status: goneResponse.status,
+    });
 
     const replacedHops = await followRedirects(replacedPath);
     record(
@@ -605,6 +635,18 @@ async function main(): Promise<void> {
       replacedHops[0]?.location !== '/',
       String(replacedHops[0]?.location),
     );
+    const replacedFirst = replacedHops[0] ?? finalHop(replacedHops);
+    const replacedObserved: ObservedResponse = {
+      hops: hopCount(replacedHops),
+      location: replacedFirst.location,
+      status: replacedFirst.status,
+    };
+    matrix.check('replaced-301', replacedPath, replacedObserved);
+    // Тот же ответ проверяется второй строкой матрицы — запретом. Строки разные:
+    // «301 на релевантный URL» требует перехода, а «массовый редирект на главную
+    // запрещён» запрещает конкретную цель, и удовлетворить первую, нарушив
+    // вторую, можно одним ответом.
+    matrix.check('no-blanket-home-redirect', replacedPath, replacedObserved);
 
     /* ------------------------------------------------------------ */
     /* 5. Старый адрес без маршрута Astro                            */
@@ -637,6 +679,13 @@ async function main(): Promise<void> {
       missingTop.body.includes('Страница не найдена') && missingTop.body.includes('href="/"'),
       `${String(Buffer.byteLength(missingTop.body))} байт`,
     );
+    matrix.check('real-404-with-navigation', `/${PREFIX}-takogo-adresa-net`, {
+      body: missingTop.body,
+      hops: 0,
+      location: missingTop.headers.location,
+      retryAfter: missingTop.headers['retry-after'],
+      status: missingTop.status,
+    });
 
     const missingCard = await request(`/otkrytki/${PREFIX}-takoy-otkrytki-net`);
     record(
@@ -649,11 +698,37 @@ async function main(): Promise<void> {
     /* 7. Параметры не меняют судьбу адреса                          */
     /* ------------------------------------------------------------ */
 
-    const goneWithQuery = await request(`${gonePath}?utm_source=mail`);
+    // «Ни при каких параметрах» проверяется перебором, а не одним `utm_source`:
+    // судьба адреса определяется записью, а не хвостом ссылки. В перебор входят
+    // и параметр фильтра представления (`format`, Э3-10), и то, чем обычно
+    // пробуют открыть скрытое (`draft`, `preview`), и хвост пагинации.
+    const goneQueries = [
+      '',
+      '?utm_source=mail',
+      '?format=vertical',
+      '?format=vertical&utm_source=mail&utm_medium=email',
+      '?page=2',
+      '?draft=true&preview=1',
+      '?q=otkrytka',
+      '?',
+    ];
+    for (const query of goneQueries) {
+      const response = await request(`${gonePath}${query}`);
+      record(
+        `удалённая открытка не отдаёт 200 ни при каких параметрах: «${query === '' ? 'без параметров' : query}»`,
+        response.status === 410 && response.headers.location === undefined,
+        `status=${String(response.status)} location=${String(response.headers.location)}`,
+      );
+    }
+
+    // Неканоническая форма того же адреса: переход по правилу слеша допустим, а
+    // вот 200 в цепочке — нет. Проверяется вся цепочка, а не только её конец.
+    const goneSlashHops = await followRedirects(`${gonePath}/?utm_source=mail`);
     record(
-      'удалённая открытка не отдаёт 200 ни при каких параметрах',
-      goneWithQuery.status === 410,
-      String(goneWithQuery.status),
+      'удалённая открытка не отдаёт 200 и в неканонической форме адреса',
+      finalHop(goneSlashHops).status === 410 &&
+        !goneSlashHops.some((hop) => hop.status === 200),
+      goneSlashHops.map((hop) => `${hop.target} → ${String(hop.status)}`).join(' | '),
     );
 
     const movedWithQuery = await request(`${oldMovedPath}?utm_source=mail`);
@@ -720,6 +795,24 @@ async function main(): Promise<void> {
       duringMaintenance.headers['retry-after'] !== undefined,
       String(duringMaintenance.headers['retry-after']),
     );
+    matrix.check('service-unavailable-503', `${oldMovedPath} в режиме обслуживания`, {
+      body: duringMaintenance.body,
+      hops: 0,
+      location: duringMaintenance.headers.location,
+      retryAfter: duringMaintenance.headers['retry-after'],
+      status: duringMaintenance.status,
+    });
+
+    /* ------------------------------------------------------------ */
+    /* 11. Матрица статусов: ни одна строка не осталась без ответа   */
+    /* ------------------------------------------------------------ */
+    //
+    // Список берётся у самой матрицы (`liveRowsFor`), а не переписывается здесь:
+    // строка, которой матрица поручила живую проверку именно этому файлу и
+    // которую забыли отработать, обязана валить прогон, а не оставаться
+    // обещанием в комментарии.
+
+    matrix.assertAllRowsExercised();
   } finally {
     await cleanupOnce();
   }
