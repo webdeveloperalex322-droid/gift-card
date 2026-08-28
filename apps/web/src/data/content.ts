@@ -61,6 +61,8 @@ import {
   searchCardsQuery,
   searchCollectionsQuery,
   seasonalCollectionsQuery,
+  sitemapCardsQuery,
+  sitemapCollectionsQuery,
   similarCardsQueries,
   type SimilarCardsQueryInput,
   similarCardsWindow,
@@ -247,6 +249,68 @@ export async function nodesWithContent(
   }
   const flags = await Promise.all(nodes.map((node) => hasContent(node.id, memo, 0)));
   return nodes.filter((_node, index) => flags[index] === true);
+}
+
+/* ------------------------------------------------------------------ */
+/* Обход всего опубликованного: карта сайта (задача Э4-04)             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Предел числа страниц обхода — защита от бесконечного цикла.
+ *
+ * При `SITEMAP_SCAN_BATCH` = 500 это полтора миллиона записей: до такого объёма
+ * карта сайта дойдёт не раньше, чем проект перерастёт отдачу «по запросу»
+ * (обоснование выбора — шапка `./sitemap-content.ts`). Предел существует не как
+ * ограничение объёма, а как страховка от состояния базы, при котором `totalPages`
+ * не сходится с фактической выдачей: молчаливый бесконечный цикл в ответе на
+ * запрос хуже честной ошибки.
+ */
+const MAX_SCAN_PAGES = 3000;
+
+async function scanAll<TSlug extends 'cards' | 'collections'>(
+  query: (page: number) => PublicFindQuery<TSlug>,
+  subject: string,
+): Promise<readonly unknown[]> {
+  const collected: unknown[] = [];
+  let page = 1;
+
+  for (;;) {
+    const { docs, totalPages } = await findMany(query(page));
+    collected.push(...docs);
+    if (page >= totalPages || docs.length === 0) {
+      return collected;
+    }
+    page += 1;
+    if (page > MAX_SCAN_PAGES) {
+      throw new Error(
+        `Обход коллекции «${subject}» превысил ${String(MAX_SCAN_PAGES)} страниц. Это не предел ` +
+          'объёма каталога, а страховка: столько страниц означает, что число страниц в ответе ' +
+          'не сходится с выдачей. Карта сайта прекращена намеренно — неполная карта хуже ' +
+          'ошибки, потому что выглядит полной.',
+      );
+    }
+  }
+}
+
+/**
+ * ВСЕ опубликованные карточки — вход карты сайта.
+ *
+ * Читается именно всё: карта сайта перечисляет каталог целиком, и «первая
+ * страница» здесь ничего не значит. Отбор по условиям включения делает
+ * `./sitemap-content.ts`, а не выборка: запрос отдаёт опубликованное, решение об
+ * индексации принимается по директиве.
+ */
+export async function listAllPublishedCards(): Promise<readonly Card[]> {
+  const docs = await scanAll(sitemapCardsQuery, 'cards');
+  return (docs as Card[]).map((card) => assertPublicallyReadable(card, 'карточку карты сайта'));
+}
+
+/** ВСЕ опубликованные узлы таксономии — вход карты сайта. */
+export async function listAllPublishedCollections(): Promise<readonly Collection[]> {
+  const docs = await scanAll(sitemapCollectionsQuery, 'collections');
+  return (docs as Collection[]).map((node) =>
+    assertPublicallyReadable(node, 'подборку карты сайта'),
+  );
 }
 
 /** Опубликованная карточка по slug. `null` — записи нет либо она не опубликована. */

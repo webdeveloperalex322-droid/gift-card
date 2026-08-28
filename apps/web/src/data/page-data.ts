@@ -122,6 +122,64 @@ function filled(value: string | null | undefined): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
+/* ------------------------------------------------------------------ */
+/* Директива робота записи: одна формула на шаблон и на карту сайта    */
+/* ------------------------------------------------------------------ */
+//
+// ЗАЧЕМ ЭТО ОТДЕЛЬНЫЕ ФУНКЦИИ (задача Э4-04). Карта сайта отбирает страницы ПО
+// ДИРЕКТИВЕ, а собрать содержимое страницы ради одного значения она не может:
+// `collectionPageContent` требует карточек, детей, родителя и смежных узлов, то
+// есть пяти запросов на узел. Написать «такую же» формулу в карте сайта тоже
+// нельзя — это ровно та вторая трактовка, из-за которой страница оказывается
+// закрытой в разметке и открытой в карте (запрет п. 23). Поэтому формула одна и
+// живёт здесь, а зовут её оба: шаблон через `*PageContent` и карта сайта через
+// `../data/sitemap-content.ts`.
+
+/** Директива робота страницы карточки. Факты — поля записи, и только они. */
+export function cardPageRobots(
+  card: Pick<Card, 'metaDescription' | 'robots' | 'status'>,
+): PageRobots {
+  return resolvePageRobots({
+    declared: card.robots,
+    description: card.metaDescription,
+    status: card.status,
+  }).robots;
+}
+
+/** Директива робота страницы подборки — любой страницы списка. */
+export function collectionPageRobots(input: {
+  readonly node: Pick<Collection, 'robots' | 'status'>;
+  /** Номер страницы списка, начиная с 1: страницы 2+ закрыты (решение Ч-01b). */
+  readonly page: number;
+  /** Описание, которое РЕАЛЬНО пойдёт в тег: на страницах 2+ его нет. */
+  readonly metaDescription: string | null;
+  readonly view?: ViewParams;
+}): PageRobots {
+  return resolvePageRobots({
+    declared: input.node.robots,
+    description: input.metaDescription,
+    listPage: input.page,
+    status: input.node.status,
+    view: input.view ?? NO_VIEW_PARAMS,
+  }).robots;
+}
+
+/**
+ * Директива робота ПОСАДОЧНОЙ страницы подборки: первая страница, без фильтра.
+ *
+ * Именно её спрашивает карта сайта: страницы пагинации в неё не входят, и
+ * отдельного правила для этого не нужно — их директиву закрывает номер страницы.
+ */
+export function collectionLandingRobots(
+  node: Pick<Collection, 'metaDescription' | 'robots' | 'status'>,
+): PageRobots {
+  return collectionPageRobots({
+    metaDescription: filled(node.metaDescription),
+    node,
+    page: 1,
+  });
+}
+
 /** Плитки для сетки в порядке, в котором их вернул запрос. */
 export function cardTiles(cards: readonly Card[]): readonly CardTile[] {
   return cards.map((card) => ({
@@ -299,19 +357,16 @@ export function cardPageContent(input: CardPageInput): CardPageContent | null {
       input.env,
     ),
     metaDescription: filled(input.card.metaDescription),
-    // Директива считается ОДНИМ разрешателем на все типы страниц (задача Э4-01).
-    // Карточке он добавляет два условия, которых у неё раньше не было: пустое
-    // описание закрывает страницу от индексации (индексируемая страница без
-    // description не проходит п. 22.1, а сочинить его вместо редактора запрещает
-    // п. 23.4), и неопубликованный статус закрывает её независимо от поля
-    // `robots`, оставшегося с прошлой публикации. Второе недостижимо — черновик
-    // до шаблона не доходит (`./read-scope.ts`), — и стоит здесь именно потому,
-    // что цена ошибки в этом месте выше цены двойной проверки.
-    robots: resolvePageRobots({
-      declared: input.card.robots,
-      description: input.card.metaDescription,
-      status: input.card.status,
-    }).robots,
+    // Директива считается ОДНИМ разрешателем на все типы страниц (задача Э4-01)
+    // и ОДНОЙ функцией на шаблон и карту сайта (задача Э4-04, `cardPageRobots`).
+    // Карточке разрешатель добавляет два условия, которых у неё раньше не было:
+    // пустое описание закрывает страницу от индексации (индексируемая страница
+    // без description не проходит п. 22.1, а сочинить его вместо редактора
+    // запрещает п. 23.4), и неопубликованный статус закрывает её независимо от
+    // поля `robots`, оставшегося с прошлой публикации. Второе недостижимо —
+    // черновик до шаблона не доходит (`./read-scope.ts`), — и стоит здесь именно
+    // потому, что цена ошибки в этом месте выше цены двойной проверки.
+    robots: cardPageRobots(input.card),
     similar: cardTiles(input.similar),
     title: input.card.title,
     usageTerms: filled(input.card.usageTerms),
@@ -553,17 +608,13 @@ export function collectionPageContent(input: CollectionPageInput): CollectionPag
     ]),
     // Директива робота: ОДИН разрешатель на все условия (задача Э4-01). До него
     // это была композиция двух функций из двух модулей, и каждый шаблон складывал
-    // её сам. Здесь ему передаются только ФАКТЫ: объявленная человеком директива
+    // её сам. Ему передаются только ФАКТЫ: объявленная человеком директива
     // записи, номер страницы (2+ → noindex,follow, решение Ч-01b), активный
     // фильтр (ТЗ §5.2), фактическое описание (его отсутствие закрывает страницу)
     // и статус записи. Открыть страницу разрешатель не может ни по одному факту.
-    robots: resolvePageRobots({
-      declared: input.node.robots,
-      description: metaDescription,
-      listPage: page,
-      status: input.node.status,
-      view,
-    }).robots,
+    // Вызов идёт через `collectionPageRobots` — ту же функцию, которой директиву
+    // спрашивает карта сайта (задача Э4-04).
+    robots: collectionPageRobots({ metaDescription, node: input.node, page, view }),
     tiles,
     tilesOnPage: allTiles.length,
     title,

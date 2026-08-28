@@ -126,8 +126,14 @@ export interface SitemapPageFacts {
   readonly robots: PageRobots;
   /** Отвечает ли маршрут 200. Условие 3: факт снаружи, см. шапку модуля. */
   readonly respondsOk: boolean;
-  /** Дата содержательного обновления (`updatedContentAt`). */
-  readonly lastmod?: string | null;
+  /**
+   * Дата содержательного обновления (`updatedContentAt`).
+   *
+   * Тип с явным `| undefined`: при `exactOptionalPropertyTypes` поле записи,
+   * которого может не быть вовсе, обязано быть выразимо здесь — иначе слой
+   * данных нормализовал бы его сам, то есть завёл бы вторую трактовку «пусто».
+   */
+  readonly lastmod?: string | null | undefined;
   /** Изображения страницы для image sitemap. */
   readonly images?: readonly SitemapImage[];
 }
@@ -423,6 +429,61 @@ export function renderSitemapIndex(entries: readonly SitemapIndexEntry[]): strin
     '  </sitemap>',
   ]);
   return document('sitemapindex', `xmlns="${SITEMAP_NAMESPACE}"`, body);
+}
+
+/**
+ * Ответ на запрос ОДНОГО файла карты сайта.
+ *
+ * Собирается здесь, а не в трёх маршрутах, по одной причине: решение «файла нет»
+ * обязано быть одинаковым у всех частей. Разойдясь, они дали бы индекс, который
+ * ссылается на 404 у одной части и на пустой валидный файл у другой.
+ */
+export interface SitemapFilePayload {
+  readonly body: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly status: 200 | 404;
+}
+
+/**
+ * Текст ответа на запрос несуществующей части карты сайта.
+ *
+ * Обычный текст, а не HTML: адрес файловый, и страницу 404 сюда подставлять
+ * незачем — ответ читает робот.
+ */
+const ABSENT_SITEMAP_FILE_TEXT =
+  '404 Not Found\n\nТакой части карты сайта нет. Существуют только те файлы, что перечислены ' +
+  'в индексе /sitemap.xml: пустая часть не выкладывается вовсе.\n';
+
+/**
+ * Готовый ответ для маршрута файла карты сайта.
+ *
+ * Пустой набор и отсутствующий номер части дают ОДИН И ТОТ ЖЕ 404: файла с таким
+ * адресом не существует ни в том, ни в другом случае. Отдавать пустой `<urlset>`
+ * нельзя — он невалиден по схеме, и поисковая система показала бы его ошибкой, а
+ * не пустотой.
+ */
+export function sitemapFilePayload(
+  urls: readonly SitemapUrl[] | null,
+  render: (urls: readonly SitemapUrl[]) => string,
+): SitemapFilePayload {
+  if (urls === null || urls.length === 0) {
+    return {
+      body: ABSENT_SITEMAP_FILE_TEXT,
+      headers: { 'Cache-Control': 'no-store', 'Content-Type': 'text/plain; charset=utf-8' },
+      status: 404,
+    };
+  }
+
+  return {
+    body: render(urls),
+    headers: {
+      // Тот же короткий кеш, что у индекса: карта собирается на запросе, окна
+      // устаревания у неё нет, а пять минут защищают базу от частого обхода.
+      'Cache-Control': 'public, max-age=300',
+      'Content-Type': SITEMAP_CONTENT_TYPE,
+    },
+    status: 200,
+  };
 }
 
 /** Самая свежая дата набора либо `null` — датировать файл нечем. */

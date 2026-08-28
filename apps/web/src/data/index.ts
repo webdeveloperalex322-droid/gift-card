@@ -83,6 +83,8 @@ export {
   findCardBySlug,
   findCollectionById,
   findCollectionByPath,
+  listAllPublishedCards,
+  listAllPublishedCollections,
   listCatalogCards,
   listCollectionCards,
   listCollectionsByIds,
@@ -160,6 +162,21 @@ export {
   collectionPageContent,
   seasonalLinks,
 } from './page-data.js';
+
+/**
+ * Карта сайта (Э4-04). Маршруты файлов зовут одну функцию и печатают то, что она
+ * отобрала: отбор идёт по трём условиям и объясняет каждое исключение —
+ * обоснование в шапке `./sitemap-content.ts`.
+ */
+export {
+  buildSitemapModel,
+  collectSitemapFacts,
+  shardAt,
+  type SitemapFacts,
+  type SitemapModel,
+  sitemapIndexEntries,
+  sitemapModelFrom,
+} from './sitemap-content.js';
 
 export {
   assertPageNumber,

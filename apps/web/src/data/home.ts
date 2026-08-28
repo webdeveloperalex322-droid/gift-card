@@ -31,12 +31,12 @@ import type { SharedEnv } from '@otkritka/shared';
 import {
   HOME_PAGE,
   HOME_PATH,
-  HOME_ROBOTS,
   type HomePageJsonLd,
   homePageJsonLd,
+  homePageRobots,
 } from '../seo/home-page.js';
 import type { ListItemFacts } from '../seo/collection-page.js';
-import { type PageRobots, resolvePageRobots } from '../seo/robots-directive.js';
+import type { PageRobots } from '../seo/robots-directive.js';
 import {
   listChildCollections,
   listRecentCards,
@@ -151,10 +151,9 @@ export async function homePage(today: Date, env?: SharedEnv): Promise<HomePageCo
       metaDescription: HOME_PAGE.description,
       // Через единственный разрешатель (задача Э4-01), хотя главная закрыта уже
       // объявлением: своего пути к тегу robots нет ни у одной страницы сайта.
-      robots: resolvePageRobots({
-        declared: HOME_ROBOTS,
-        description: HOME_PAGE.description,
-      }).robots,
+      // Формула вынесена в `homePageRobots` (Э4-04) — её же спрашивает карта
+      // сайта, и второй трактовки у главной не появляется.
+      robots: homePageRobots(),
       title: HOME_PAGE.title,
     },
   };

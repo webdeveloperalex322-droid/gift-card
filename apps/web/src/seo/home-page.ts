@@ -53,7 +53,11 @@ import {
 
 import { canonicalUrlFor } from '../routing/canonical.js';
 import type { JsonLdDocument } from './json-ld.js';
-import type { RobotsDirective } from './robots-directive.js';
+import {
+  type PageRobots,
+  resolvePageRobots,
+  type RobotsDirective,
+} from './robots-directive.js';
 
 /**
  * Канонический путь главной — корень сайта.
@@ -130,6 +134,22 @@ export const HOME_PAGE: HomeFacts = {
   },
   title: 'Поздравительные открытки к праздникам — подборки по поводам и адресатам',
 };
+
+/**
+ * Директива робота главной, посчитанная единственным разрешателем (Э4-01).
+ *
+ * Функция, а не константа {@link HOME_ROBOTS}: в тег идёт результат
+ * разрешателя, а не объявление, и спрашивают его теперь двое — шаблон
+ * (`../data/home.ts`) и карта сайта (`../data/sitemap-content.ts`, задача
+ * Э4-04). Две формулы на один вопрос означали бы главную, закрытую в разметке и
+ * открытую в карте сайта.
+ */
+export function homePageRobots(): PageRobots {
+  return resolvePageRobots({
+    declared: HOME_ROBOTS,
+    description: HOME_PAGE.description,
+  }).robots;
+}
 
 /**
  * Тождество узла организации внутри документа разметки.
