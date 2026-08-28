@@ -154,6 +154,36 @@ describe('вне режима обслуживания порядок прежн
     expect(captured.status).toBe(0);
   });
 
+  it('приложение получает цель ИЗ РЕШЕНИЯ, а не сырую строку запроса', async () => {
+    // Строка запроса обязана дойти до middleware: таблица переносов сохраняет
+    // параметры в Location. Проверяется здесь же, потому что передача цели и её
+    // сохранность — одно действие входного сервера.
+    reachedAstro = [];
+    const { res } = fakeResponse();
+    await frontDoor({})(fakeRequest('/staraya.html?utm_source=mail'), res);
+
+    expect(reachedAstro).toEqual(['/staraya.html?utm_source=mail']);
+  });
+
+  it('адрес на .html СО СЛЕШЕМ приложению не передаётся вовсе: 404 отвечает вход', async () => {
+    // ЗАМЕР 2026-08-28 (`url-guard`, BLOCKER 1). Такой путь уходил в приложение
+    // сырым, и раньше нашего middleware отвечал встроенный обработчик слеша
+    // Astro: 301 с телом, где `<meta http-equiv="refresh">` указывает НАЗАД на
+    // источник, плюс чужие robots и относительный canonical на ответе 3xx.
+    // Форма со слешем после расширения адресом не является — как и
+    // `/staraya.php/`, — поэтому отвечает 404 сам вход, не спрашивая таблицу.
+    for (const target of ['/o-proekte.html/', '/staraya.html/?utm_source=mail', '/404.html//']) {
+      reachedAstro = [];
+      const { captured, res } = fakeResponse();
+      await frontDoor({})(fakeRequest(target), res);
+
+      expect(reachedAstro, target).toEqual([]);
+      expect(captured.status, target).toBe(404);
+      expect(captured.headers['Location'], target).toBeUndefined();
+      expect(captured.body, target).toBe(NOT_FOUND_FILE_BODY);
+    }
+  });
+
   it('файл заранее отрендеренной страницы в сборке при этом остаётся нетронутым', async () => {
     // Проверка на подмену смысла: `.html` уходит в приложение НЕ потому, что
     // статики нет, а потому, что этот путь ей не адресован. Файл в сборке лежит

@@ -36,7 +36,11 @@ import { readFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 
-import { decideRequestTarget, NOT_FOUND_PAGE_FILE } from '../routing/path-policy.js';
+import {
+  decideRequestTarget,
+  NOT_FOUND_PAGE_FILE,
+  type TargetDecision,
+} from '../routing/path-policy.js';
 import { errorPageRobots, robotsMetaTag } from '../seo/robots-directive.js';
 import type { AstroNodeHandler } from './astro-app.js';
 import type { MaintenanceDecision } from './maintenance.js';
@@ -203,10 +207,17 @@ export function createFrontDoor(
 /**
  * Отдаёт производную изображения из корня хранилища.
  *
- * Приложению Astro запрос под `/media/` не передаётся НИКОГДА: пространство
- * файлов и пространство страниц разные, и промах по файлу здесь — это 404, а не
- * повод искать страницу с таким адресом. Промах по методу (`POST` и прочие) —
- * тоже 404: у адреса файла других методов нет.
+ * Запрос, признанный обращением к производной, приложению Astro не передаётся:
+ * пространство файлов и пространство страниц разные, и промах по файлу здесь —
+ * это 404, а не повод искать страницу с таким адресом. Промах по методу (`POST`
+ * и прочие) — тоже 404: у адреса файла других методов нет.
+ *
+ * Слово «никогда» про всё пространство `/media/` было бы неверным, и это не
+ * придирка: `/media/foo.html` до этой функции не доходит вовсе — путь на `.html`
+ * решается раньше (`not-found-unless-moved`) и уходит в приложение за таблицей
+ * переносов. Ответ там 404, но приходит он от приложения. Правило переноса с
+ * адреса прежнего сайта вида `/media/staraya.html` при этом не читается:
+ * `resolveRedirect` пространство `/media` не обслуживает — см. его шапку.
  */
 async function serveMedia(
   req: IncomingMessage,
@@ -231,6 +242,36 @@ async function serveMedia(
   if (!served) {
     await respondNotFound(res, options.clientRoot);
   }
+}
+
+/**
+ * Единственная передача запроса приложению Astro.
+ *
+ * Цель берётся ИЗ РЕШЕНИЯ (`pathname + search`), а не из сырого `req.url`, и это
+ * не косметика. Встроенный обработчик Astro применяет правило слеша ДО
+ * пользовательского middleware (`astro/dist/core/routing/handler.js` →
+ * `trailing-slash-handler.js`), поэтому цель, которую сам Astro считает
+ * неканонической, получает ЕГО ответ: 3xx с непустым телом, где
+ * `<meta http-equiv="refresh">` указывает на адрес-ИСТОЧНИК, плюс чужие
+ * `<meta name="robots">` и относительный canonical мимо нашего разрешателя
+ * директив. Ровно это замерил `url-guard` 2026-08-28 на `/staraya.html/`.
+ *
+ * Сегодня подстановка — тождество: политика пути отдаёт в обе ветки только цели,
+ * равные своей канонической форме (`serve` сверяется с `assertCanonical`,
+ * `not-found-unless-moved` отклоняет неканонические формы). Строка держит это
+ * тождество проверяемым в ОДНОМ месте: свойство «приложение видит ровно то, что
+ * решила политика» перестаёт зависеть от того, какие формы политика решит
+ * пропускать завтра. Живая проверка — `scripts/smoke-trailing-slash.mjs`
+ * (у любого нашего 3xx тело пусто, и ни одна форма `<…>.html/` 3xx не даёт).
+ */
+async function handOverToAstro(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: FrontDoorOptions,
+  decision: Extract<TargetDecision, { readonly pathname: string; readonly search: string }>,
+): Promise<void> {
+  req.url = `${decision.pathname}${decision.search}`;
+  await options.astroHandler(req, res);
 }
 
 /**
@@ -297,7 +338,7 @@ async function route(
       // читается только в middleware Astro. Приложение вернёт 404 само, если
       // правила нет: маршрута под такой путь у него тоже нет, и до него
       // добирается перехватывающий `[...missing].astro`.
-      await options.astroHandler(req, res);
+      await handOverToAstro(req, res, options, decision);
       return;
 
     case 'not-served':
@@ -325,7 +366,7 @@ async function route(
       if (served) {
         return;
       }
-      await options.astroHandler(req, res);
+      await handOverToAstro(req, res, options, decision);
       return;
     }
   }

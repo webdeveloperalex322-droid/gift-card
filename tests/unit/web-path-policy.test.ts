@@ -202,6 +202,13 @@ describe('у страницы нет второго адреса с расшир
   // `.html`, и отказ до таблицы отменял бы такое правило целиком, молча.
   // Второго адреса с 200 это не создаёт: ни входной сервер, ни middleware этот
   // путь статикой не отдают, а маршрута под него у приложения нет.
+  //
+  // УТОЧНЕНО В ТОТ ЖЕ ДЕНЬ (BLOCKER 1 контролёра `url-guard`): откладывается
+  // ответ только на КАНОНИЧЕСКОЙ форме пути. Форма со слешем после расширения до
+  // таблицы не доходит и отвечает 404 сразу — иначе приложение получало бы цель,
+  // которую само считает неканонической, и раньше нашего middleware отвечал бы
+  // встроенный обработчик слеша Astro (301 с телом, где meta-refresh ведёт назад
+  // на источник).
 
   it('/index.html — не адрес главной', () => {
     // Замерено на прежней сборке: /index.html отдавал 200 с содержимым главной,
@@ -220,13 +227,71 @@ describe('у страницы нет второго адреса с расшир
     expect(decide('/500.html').action).toBe('not-found-unless-moved');
   });
 
-  it('в таблице переносов ищется путь БЕЗ хвостовых слешей и без параметров', () => {
-    const decision = decide('/staraya.html/?utm_source=mail');
+  it('в таблице переносов ищется путь без параметров', () => {
+    const decision = decide('/staraya.html?utm_source=mail');
 
     expect(decision.action).toBe('not-found-unless-moved');
     if (decision.action !== 'not-found-unless-moved') return;
     expect(decision.pathname).toBe('/staraya.html');
     expect(decision.search).toBe('?utm_source=mail');
+  });
+
+  it('цель решения совпадает с сырой целью запроса — байт в байт', () => {
+    // Это требование к ПАРЕ «политика + входной сервер», а не украшение.
+    // Приложению Astro передаётся ровно `pathname + search` из решения, и его
+    // встроенный обработчик слеша срабатывает РАНЬШЕ нашего middleware
+    // (`astro/dist/core/routing/handler.js`). Значит, отдать приложению форму,
+    // которую сам Astro считает неканонической, — это его 301 с телом, в котором
+    // meta-refresh указывает НАЗАД на источник. Пока цель решения равна сырой
+    // цели, такой формы в эту ветку не приходит вовсе.
+    for (const target of [
+      '/o-proekte.html',
+      '/index.html',
+      '/staraya.html?utm_source=mail',
+      '/OTKRYTKI.HTML',
+      '/podborki/prazdniki/8-marta.html?ot=vk',
+    ]) {
+      const decision = decide(target);
+      expect(decision.action, target).toBe('not-found-unless-moved');
+      if (decision.action !== 'not-found-unless-moved') continue;
+      expect(`${decision.pathname}${decision.search}`, target).toBe(target);
+    }
+  });
+
+  it('форма со слешем после расширения до таблицы переносов не доходит: 404 сразу', () => {
+    // ЗАМЕР 2026-08-28 (`url-guard`, BLOCKER 1): `/staraya.html/?utm_source=mail`
+    // отдавал 301 с телом Astro, где meta-refresh вёл обратно на источник.
+    //
+    // Почему именно 404, а не поиск в таблице по снятой форме: адрес прежнего
+    // сайта — это `/staraya.html`, и он в таблице ищется. Форма со слешем после
+    // расширения не существовала ни на прежнем сайте, ни на этом; для остальных
+    // расширений (`/staraya.php/`, `/otkrytka.htm/`) сайт уже сейчас отвечает
+    // ровно так же — 404 без обращения к таблице (шаг 7 политики, «URL файла с
+    // завершающим слешем»). Разводить `.html` и `.php` было бы правилом, которое
+    // нечем объяснить.
+    for (const target of [
+      '/staraya.html/?utm_source=mail',
+      '/o-proekte.html/',
+      '/index.html/',
+      '/404.html/',
+      '/o-proekte.html//',
+      '/a.HTML/',
+      '/podborki//8-marta.html',
+    ]) {
+      expect(decide(target).action, target).toBe('not-found');
+    }
+  });
+
+  it('«.html» со слешем и «.php» со слешем решаются одинаково', () => {
+    // Симметрия проверяется явно: расхождение здесь означало бы, что у одного
+    // расширения есть привилегия, которой нет у соседнего.
+    const pairs: readonly (readonly [string, string])[] = [
+      ['/staraya.html/', '/staraya.php/'],
+      ['/katalog/otkrytka.html/', '/katalog/otkrytka.htm/'],
+    ];
+    for (const [html, other] of pairs) {
+      expect(decide(html).action, html).toBe(decide(other).action);
+    }
   });
 });
 
@@ -309,6 +374,9 @@ describe('инвариант: цель редиректа никогда не р
     '/%2e',
     '/index.html',
     '/x.html',
+    '/x.html/',
+    '/x.html//',
+    '/x.html/?utm_source=mail',
     '/otkrytki',
     '/otkrytki/',
     '/otkrytki//',
