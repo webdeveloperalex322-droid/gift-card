@@ -670,10 +670,11 @@ async function main(): Promise<void> {
      * `pageCount === 0`, а Payload при `totalDocs: 0` ставит `totalPages: 1`,
      * поэтому условие было недостижимо).
      *
-     * Родителя у узла нет намеренно: ребёнком группы он добавил бы в её блок
-     * «Разделы подборки» ссылку на адрес с 404 и смешал бы проверку редиректа с
-     * проверкой перелинковки. Здесь проверяется статус ответа, а не то, откуда
-     * на этот адрес ссылаются.
+     * Узел стоит РЕБЁНКОМ группы, и это не деталь фикстуры: иначе его вообще
+     * нельзя создать — CMS не пускает `occasion` в корень `/podborki`
+     * (допустимый родитель у него только `group`). Заодно это делает проверку
+     * полной: у группы есть блок «Разделы подборки», и вместе со статусом
+     * проверяется условие Э3-13-A — ссылки на опустевший узел в списках нет.
      */
     const emptied = await payload.create({
       collection: 'collections',
@@ -681,6 +682,7 @@ async function main(): Promise<void> {
         intro: INTRO,
         metaDescription: 'Смоук Э3-05: узел, опустевший после отвязки открытки.',
         nodeKind: 'occasion',
+        parent: group.id,
         related: [group.id],
         responsibleEditor: adminId,
         robots: 'noindex,follow',
@@ -1239,7 +1241,7 @@ async function main(): Promise<void> {
     // 404, значит и `/page/1` обязан отвечать 404, а не отправлять клиента на
     // адрес с 404 (находка вердикта `reviewer`, MAJOR 1).
 
-    const emptiedPath = `/podborki/${PREFIX}-opustevshiy`;
+    const emptiedPath = `/podborki/${PREFIX}-gruppa/${PREFIX}-opustevshiy`;
     const emptiedBase = await request(emptiedPath);
     record(
       'опустевший узел: базовый URL отдаёт 404, а не 200 с пустой сеткой',
@@ -1261,7 +1263,7 @@ async function main(): Promise<void> {
     // блок «Разделы подборки» продолжали бы печатать ссылку на страницу, которая
     // законно отвечает 404. Проверка живая, потому что именно живой прогон
     // показывает разницу: юнит-тест не знает состояния базы.
-    for (const page of ['/podborki', '/']) {
+    for (const page of ['/podborki', '/', groupPath]) {
       const response = await request(page);
       record(
         `ссылки на опустевший узел нет: ${page}`,

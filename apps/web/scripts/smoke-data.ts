@@ -332,6 +332,10 @@ async function main(): Promise<void> {
           caption: 'Подпись смоука',
           collections: [publishedNodeId],
           ...(imageId === undefined ? {} : { image: imageId }),
+          // `metaDescription` — требование полноты перед `review`
+          // (`CARD_REVIEW_REQUIREMENTS`): без него переход отклоняется, и смоук
+          // падал на публикации открытки.
+          metaDescription: `Смоук Э3-02, meta description: ${args.title}`,
           robots: 'noindex,follow',
           slug: args.slug,
           status: 'draft',
