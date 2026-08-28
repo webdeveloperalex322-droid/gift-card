@@ -27,7 +27,7 @@
  * когда запрос не совпал ни с одним маршрутом
  * (`astro/dist/core/routing/handler.js`: `if (!state.routeData) return
  * renderErrorFromState(… 404)`), поэтому в `src/pages/` есть перехватывающий
- * маршрут `[...missing].ts` — он существует ровно затем, чтобы «нет такого
+ * маршрут `[...missing].astro` — он существует ровно затем, чтобы «нет такого
  * адреса» решалось ПОСЛЕ таблицы переносов, а не вместо неё.
  *
  * ## Что в dev-режиме всё равно не проверить
@@ -220,6 +220,17 @@ export const onRequest: MiddlewareHandler = async (context, next) => {
       status: 400,
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
+  }
+
+  // `.html`: адресом материала путь не является, но ответ 404 обязан прийти
+  // ПОСЛЕ таблицы переносов. Со структуры прежнего сайта переносят прежде всего
+  // адреса на `.html`, и 404 до таблицы отменял бы такое правило целиком
+  // (находки `reviewer` и `url-guard` от 2026-08-28). Статикой этот путь не
+  // обслуживается ни здесь, ни во входном сервере, поэтому второго адреса с 200
+  // у страницы не появляется.
+  if (decision.action === 'not-found-unless-moved') {
+    const movedLegacy = await respondWithRedirect(decision.pathname, decision.search);
+    return movedLegacy ?? new Response(null, { status: 404 });
   }
 
   if (decision.action === 'not-found' || decision.action === 'not-served') {

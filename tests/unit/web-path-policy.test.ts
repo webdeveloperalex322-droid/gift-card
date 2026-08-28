@@ -195,21 +195,38 @@ describe('процентное кодирование не создаёт ни �
 });
 
 describe('у страницы нет второго адреса с расширением .html', () => {
+  // ЧТО ИЗМЕНИЛОСЬ 2026-08-28 (находки `reviewer` и `url-guard`). Ответ на
+  // `.html` остался 404 и статикой такой путь не обслуживается — но решение
+  // теперь `not-found-unless-moved`: 404 приходит ПОСЛЕ таблицы переносов.
+  // Причина: со структуры прежнего сайта переносят прежде всего адреса на
+  // `.html`, и отказ до таблицы отменял бы такое правило целиком, молча.
+  // Второго адреса с 200 это не создаёт: ни входной сервер, ни middleware этот
+  // путь статикой не отдают, а маршрута под него у приложения нет.
+
   it('/index.html — не адрес главной', () => {
     // Замерено на прежней сборке: /index.html отдавал 200 с содержимым главной,
     // то есть второй адрес одного материала.
-    expect(decide('/index.html').action).toBe('not-found');
+    expect(decide('/index.html').action).toBe('not-found-unless-moved');
   });
 
   it('файл заранее отрендеренной страницы адресом не является', () => {
     for (const target of ['/o-proekte.html', '/OTKRYTKI.HTML', '/podborki/prazdniki/8-marta.html']) {
-      expect(decide(target).action, target).toBe('not-found');
+      expect(decide(target).action, target).toBe('not-found-unless-moved');
     }
   });
 
   it('страницы 404 и 500 недоступны как файлы', () => {
-    expect(decide('/404.html').action).toBe('not-found');
-    expect(decide('/500.html').action).toBe('not-found');
+    expect(decide('/404.html').action).toBe('not-found-unless-moved');
+    expect(decide('/500.html').action).toBe('not-found-unless-moved');
+  });
+
+  it('в таблице переносов ищется путь БЕЗ хвостовых слешей и без параметров', () => {
+    const decision = decide('/staraya.html/?utm_source=mail');
+
+    expect(decision.action).toBe('not-found-unless-moved');
+    if (decision.action !== 'not-found-unless-moved') return;
+    expect(decision.pathname).toBe('/staraya.html');
+    expect(decision.search).toBe('?utm_source=mail');
   });
 });
 
@@ -249,7 +266,9 @@ describe('у страницы 404 нет собственного адреса',
   });
 
   it('файл 404.html как адрес по-прежнему отклонён — правило не подменило прежнее', () => {
-    expect(decide('/404.html').action).toBe('not-found');
+    // Отказ тот же; изменился только момент ответа — после таблицы переносов
+    // (см. describe про `.html` выше).
+    expect(decide('/404.html').action).toBe('not-found-unless-moved');
   });
 });
 
@@ -334,7 +353,14 @@ describe('инвариант: цель редиректа никогда не р
   it('на корпусе нет ни одного решения вне известного множества', () => {
     // Замкнутость множества ответов — это и есть отсутствие цикла: любой путь
     // за один шаг приходит в состояние, которое переходов больше не порождает.
-    const allowed = ['serve', 'redirect', 'not-found', 'bad-request', 'not-served'];
+    const allowed = [
+      'serve',
+      'redirect',
+      'not-found',
+      'not-found-unless-moved',
+      'bad-request',
+      'not-served',
+    ];
     for (const target of CORPUS) {
       expect(allowed, target).toContain(decide(target).action);
     }

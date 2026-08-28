@@ -287,6 +287,15 @@ async function route(
       await respondNotFound(res, options.clientRoot);
       return;
 
+    case 'not-found-unless-moved':
+      // `.html`: статикой НЕ отдаём (иначе у страницы появился бы второй адрес с
+      // 200), но и 404 здесь не отвечаем — сначала таблица переносов, а она
+      // читается только в middleware Astro. Приложение вернёт 404 само, если
+      // правила нет: маршрута под такой путь у него тоже нет, и до него
+      // добирается перехватывающий `[...missing].astro`.
+      await options.astroHandler(req, res);
+      return;
+
     case 'not-served':
       // Маршруты админки Payload. Причина в лог НЕ пишется намеренно: она
       // содержит значение PAYLOAD_ADMIN_PATH, а путь админки не публикуется
