@@ -21,7 +21,11 @@
  *     иначе планировщик схлопнул бы её при записи и проверять было бы нечего);
  *   - что редирект не перекрывает живую страницу и не отменяет режим
  *     обслуживания;
- *   - что у всех наших 3xx тело ПУСТОЕ, а у 410 — своё, с навигацией.
+ *   - что у всех наших 3xx тело ПУСТОЕ, а у 410 — своё, с навигацией;
+ *   - что форма адреса СО СЛЕШЕМ после расширения (`/staraya.html/`) правило из
+ *     таблицы не подменяет: 404 без `Location`, а не 301 с телом Astro. Правило
+ *     в таблице при этом лежит — этим проверка и отличается от `smoke:slash`,
+ *     который гоняется на пустой таблице.
  *
  * Проверка идёт против собранного сервера (`dist/server/entry.mjs`), а не против
  * `astro dev`: порядок обработки запроса и правило слеша в dev ведут себя иначе
@@ -759,6 +763,33 @@ async function main(): Promise<void> {
           hops[0].location === targetPath &&
           finalHop(hops).status === 200,
         hops.map((hop) => `${hop.target} → ${String(hop.status)}`).join(' | '),
+      );
+    }
+
+    // Та же тройка адресов, но В ФОРМЕ СО СЛЕШЕМ, и правило в таблице ЕСТЬ.
+    // Проверка добавлена 2026-08-28 по BLOCKER 1 контролёра `url-guard`: сервер
+    // отвечал здесь 301 с телом Astro, в котором meta-refresh указывал НАЗАД на
+    // источник (цикл для клиента, предпочитающего meta заголовку), а на 3xx
+    // уезжали чужие robots и относительный canonical.
+    //
+    // Ожидание — 404 без Location: формы со слешем после расширения не было ни на
+    // прежнем сайте, ни на этом, и ровно так же сайт отвечает на `/staraya.php/`.
+    // Проверять это нужно ЖИВЬЁМ и именно здесь: юнит-тест правила в таблице не
+    // видит, а `smoke:slash` гоняется на пустой таблице — и «404, потому что
+    // правила нет» неотличимо от «404, потому что форма не адрес».
+    for (const from of legacyFilePaths) {
+      const withSlash = `${from}/?utm_source=mail`;
+      const response = await request(withSlash);
+      record(
+        `форма со слешем не подменяет правило переноса: ${withSlash}`,
+        response.status === 404 && response.headers.location === undefined,
+        `${String(response.status)}, Location: ${String(response.headers.location)}`,
+      );
+      record(
+        `и не отдаёт тела 3xx: ${withSlash}`,
+        !(response.status >= 300 && response.status < 400) &&
+          !response.body.includes('http-equiv="refresh"'),
+        `${String(Buffer.byteLength(response.body))} байт`,
       );
     }
 
