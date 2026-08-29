@@ -8,7 +8,12 @@ import { buildConfig } from 'payload';
 import { reservedRoutes } from '@otkritka/shared';
 
 import { LinkAuditReport } from './audit/report';
-import { linkAuditJobsAccess, linkAuditTask } from './audit/task';
+import {
+  linkAuditJobsAccess,
+  linkAuditJobsCollectionOverrides,
+  linkAuditTask,
+  sealJobsInternals,
+} from './audit/task';
 import { CardImages } from './collections/card-images';
 import { Cards } from './collections/cards';
 import { Collections } from './collections/collections';
@@ -64,7 +69,7 @@ reservedRoutes();
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export default buildConfig({
+const config = buildConfig({
   admin: {
     components: {
       // Дашборд SEO-здоровья (Э5-04, ТЗ §8.4) — стартовый экран админки.
@@ -128,11 +133,15 @@ export default buildConfig({
   // два процесса делили бы одну очередь. Расписание крутит внешний планировщик
   // (`payload jobs:run --handle-schedules --queue seo-audit`), см. src/audit/task.ts.
   //
-  // Права сужены до `admin`: по умолчанию Payload разрешает ставить и запускать
-  // задания любому аутентифицированному, то есть и сервисному аккаунту
-  // `ai-editor`, а новых рычагов у него появляться не должно.
+  // Права сужены до `admin` ДВУМЯ разными ключами, и оба обязательны:
+  // `access` закрывает ручки очереди (запустить, поставить, отменить), а
+  // `jobsCollectionOverrides` — саму автогенерируемую коллекцию `payload-jobs`,
+  // у которой иначе остаётся дефолт «любой аутентифицированный» на все четыре
+  // глагола, то есть прямой CRUD над заданиями через REST и GraphQL. Разбор,
+  // почему одного ключа мало, — в src/audit/task.ts.
   jobs: {
     access: linkAuditJobsAccess,
+    jobsCollectionOverrides: linkAuditJobsCollectionOverrides,
     tasks: [linkAuditTask],
   },
 
@@ -166,3 +175,15 @@ export default buildConfig({
     outputFile: path.resolve(dirname, 'payload-types.ts'),
   },
 });
+
+/**
+ * Конфиг уходит наружу через `sealJobsInternals` (см. `./audit/task.ts`).
+ *
+ * Очередь заданий приносит с собой объекты, которых в этом файле нет и настроить
+ * которые в нём нечем: автогенерируемый глобал `payload-jobs-stats` появляется
+ * внутри самой санитизации, как только у задачи есть расписание. Обёртка
+ * получает уже собранный конфиг и досуживает права до `admin`. Тип экспорта не
+ * меняется: `buildConfig` и без того возвращает промис, а Payload ждёт именно
+ * его.
+ */
+export default sealJobsInternals(config);
