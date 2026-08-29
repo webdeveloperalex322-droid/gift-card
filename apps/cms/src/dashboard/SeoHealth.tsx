@@ -212,7 +212,7 @@ export function SeoHealthView(props: { model: DashboardModel }) {
               `Сирот (нет ссылок либо глубже ${String(LINK_AUDIT_MAX_CLICKS)} переходов): ${String(audit.orphans)}`,
               `Битых внутренних ссылок: ${String(audit.broken)}`,
               `Ссылок через редирект: ${String(audit.redirected)}`,
-              `Опубликованных записей с адресом не 200: ${String(audit.unhealthy)}`,
+              `Опубликованных записей, чей адрес не отдал 200 (включая не ответившие вовсе): ${String(audit.unhealthy)}`,
               `Адресов, которые не успели спросить: ${String(audit.notMeasured)}`,
             ]}
           />
@@ -243,7 +243,11 @@ export function SeoHealthView(props: { model: DashboardModel }) {
 
       <Section note="Журнал seo-history: кто и что менял." title="Последние изменения">
         <Rows
-          empty="Изменений пока нет."
+          empty={
+            model.historyAbsence === 'forbidden'
+              ? 'Журнал изменений не отдан вашей роли. Это НЕ «изменений не было»: что менялось, отсюда не видно.'
+              : 'Изменений пока нет.'
+          }
           items={model.history.map(
             (entry) =>
               `${moment(entry.changedAt)} — ${entry.documentPath ?? 'путь не собран'}: ${entry.field} ` +
@@ -256,19 +260,52 @@ export function SeoHealthView(props: { model: DashboardModel }) {
 }
 
 /**
+ * Что показывается вместо дашборда, когда сбор не состоялся.
+ *
+ * Отдельный блок, а не пустое место: экран, который молча исчез, читается как
+ * «показывать нечего», то есть как «всё хорошо». Причина печатается прямо на
+ * экране — админка это внутренний интерфейс за авторизацией, и текст ошибки в
+ * ней стоит дешевле, чем поход в журнал сервера за тем же самым.
+ */
+export function SeoHealthFailure(props: { reason: string }) {
+  return (
+    <div style={{ marginBottom: '2rem' }}>
+      <h2>SEO-здоровье</h2>
+      <p>
+        <strong>Сводка не собралась.</strong> Это отказ СБОРА, а не результат
+        проверки: считать, что нарушений нет, по этому экрану сейчас нельзя.
+      </p>
+      <p style={{ opacity: 0.75 }}>Причина: {props.reason}</p>
+    </div>
+  );
+}
+
+/**
  * Точка входа для `admin.components.beforeDashboard`.
  *
  * `req` собирается из пользователя, открывшего экран: все запросы пойдут его
- * правами. Ошибка сбора не роняет админку целиком — стартовый экран, который
- * падает из-за отчёта, хуже стартового экрана без одного блока.
+ * правами.
+ *
+ * Весь сбор обёрнут в `try`, и обещание «ошибка сбора не роняет админку» держит
+ * именно он. До ревизии 2026-08-29 обещание стояло в этом комментарии, а
+ * обёртки не было: падение чтения записей уносило весь стартовый экран, потому
+ * что `beforeDashboard`-компонент рисуется на сервере вместе с ним. Отдельные
+ * блоки при этом продолжают отвечать за себя сами (`collectAudit`,
+ * `collectHistory` возвращают причину отсутствия), а здесь — последняя сеть.
  */
 export async function SeoHealth(props: { payload: Payload; user?: TypedUser }) {
-  const req = await createLocalReq(
-    props.user === undefined ? {} : { user: props.user },
-    props.payload,
-  );
-  const model = await collectDashboardModel({ payload: props.payload, req });
-  return <SeoHealthView model={model} />;
+  try {
+    const req = await createLocalReq(
+      props.user === undefined ? {} : { user: props.user },
+      props.payload,
+    );
+    const model = await collectDashboardModel({ payload: props.payload, req });
+    return <SeoHealthView model={model} />;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    props.payload.logger.error(`[seo-health] Дашборд не собрался: ${reason}`);
+    return <SeoHealthFailure reason={reason} />;
+  }
 }
 
 export default SeoHealth;

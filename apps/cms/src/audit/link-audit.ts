@@ -34,9 +34,15 @@
  *     только считая ссылки по данным CMS — то есть отвечая на другой вопрос;
  *   - `too-deep` — путь от главной есть, но длиннее {@link LINK_AUDIT_MAX_CLICKS}
  *     переходов;
- *   - `not-200` — адрес опубликованной записи ответил не 200. Это не про ссылки
- *     вовсе, но молчать об этом в отчёте о достижимости нельзя;
- *   - `not-measured` — адрес не спрошен: обход упёрся в предел. Пустое место в
+ *   - `not-200` — адрес опубликованной записи ОТВЕТИЛ, и ответ не 200. Это не
+ *     про ссылки вовсе, но молчать об этом в отчёте о достижимости нельзя;
+ *   - `no-response` — адрес спросили, и он не ответил вовсе (соединение не
+ *     состоялось, запрос упал). Отдельно от `not-200` намеренно: «ответил 404» и
+ *     «не ответил» чинятся разным — первое правкой контента или редиректом,
+ *     второе поднятием сервиса, — а подпись «ответил не 200» у адреса, который
+ *     ничем не ответил, называет находку тем, чего не измеряли. Находка ревизии
+ *     от 2026-08-29;
+ *   - `not-measured` — адрес НЕ спрошен: обход упёрся в предел. Пустое место в
  *     отчёте обязано называться «не измерено», а не «всё хорошо».
  *
  * Битой считается внутренняя ссылка, чей адрес ответил 4xx/5xx или не ответил
@@ -56,7 +62,15 @@
  */
 import { isPageRoute } from '@otkritka/shared';
 
-import { type SiteProbe, mapWithConcurrency } from '../export/inventory';
+import { type SiteProbe, mapWithConcurrency, resolveInternalTarget } from '../export/inventory';
+
+/**
+ * Правило «куда ходить можно» одно на оба отчёта и живёт в слое опроса
+ * (`../export/inventory.ts`), рядом с {@link SiteProbe}. Здесь оно только
+ * ре-экспортируется: обход берёт его для каждого `href`, выгрузка — для каждого
+ * `<loc>` карты сайта, и второй копии этой проверки в проекте быть не должно.
+ */
+export { resolveInternalTarget };
 
 /**
  * Норма достижимости: сколько переходов от главной допустимо (п. 5.1.5, п.
@@ -123,39 +137,6 @@ export function extractHrefs(html: string): readonly string[] {
     hrefs.push(match[1] ?? match[2] ?? match[3] ?? '');
   }
   return hrefs;
-}
-
-/**
- * Приводит `href` к абсолютному адресу СВОЕГО origin либо отвергает его.
- *
- * `null` возвращается для всего, что обходу не принадлежит: пустая ссылка, якорь
- * на той же странице, `mailto:`/`tel:`/`javascript:`, чужой хост, неразбираемый
- * адрес. Фрагмент отбрасывается — `#blok` не создаёт другого адреса; строка
- * запроса СОХРАНЯЕТСЯ: `?page=2` — это другой ответ сервера, и молча склеивать
- * его с базовым адресом значило бы не заметить ссылку на неканоническую форму.
- */
-export function resolveInternalTarget(
-  href: string,
-  pageUrl: string,
-  origin: string,
-): string | null {
-  const raw = href.trim();
-  if (raw === '' || raw.startsWith('#')) {
-    return null;
-  }
-  let url: URL;
-  try {
-    url = new URL(raw, pageUrl);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    return null;
-  }
-  if (url.origin !== origin) {
-    return null;
-  }
-  return `${url.origin}${url.pathname}${url.search}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -390,7 +371,22 @@ export interface AuditedRecord {
   readonly url: string;
 }
 
-export type RecordFindingReason = 'not-200' | 'not-linked' | 'not-measured' | 'too-deep';
+export type RecordFindingReason =
+  | 'no-response'
+  | 'not-200'
+  | 'not-linked'
+  | 'not-measured'
+  | 'too-deep';
+
+/**
+ * Находки, означающие «адрес опубликованной записи не отдаёт 200».
+ *
+ * Список, а не одно значение: причин две и они разные, но счётчик отчёта у них
+ * общий. Набор объявлен здесь, чтобы `run.ts` считал по нему, а не перечислял
+ * значения заново — иначе третья такая причина попала бы в отчёт и выпала бы из
+ * счётчика молча.
+ */
+export const UNHEALTHY_RECORD_REASONS: readonly RecordFindingReason[] = ['no-response', 'not-200'];
 
 export interface RecordFinding {
   readonly collection: 'cards' | 'collections';
@@ -507,10 +503,14 @@ export function classifyLinkAudit(args: {
       continue;
     }
     if (target.status === null) {
+      // Кода ответа нет по одной из двух причин, и они называются по-разному:
+      // либо адрес не спрашивали вовсе (предел обхода), либо спрашивали и не
+      // получили ответа. Свести их к «ответил не 200» нельзя — ни один из
+      // случаев ответом не является.
       records.push({
         ...shared,
         depth: target.depth,
-        reason: target.failure === null ? 'not-measured' : 'not-200',
+        reason: target.failure === null ? 'not-measured' : 'no-response',
         status: null,
       });
       continue;
@@ -542,7 +542,8 @@ export function classifyLinkAudit(args: {
 
 /** Подписи находок — те же в отчёте, в дашборде и в журнале. */
 export const RECORD_FINDING_LABELS: Readonly<Record<RecordFindingReason, string>> = {
-  'not-200': 'адрес опубликованной записи ответил не 200',
+  'no-response': 'адрес опубликованной записи не ответил вовсе: запрос не удался',
+  'not-200': 'адрес опубликованной записи ответил, и ответ не 200',
   'not-linked': 'в обходе от главной не встретилось ни одной ссылки на этот адрес',
   'not-measured': 'адрес не спрошен: обход оборвался по пределу',
   'too-deep': `путь от главной длиннее ${String(LINK_AUDIT_MAX_CLICKS)} переходов`,

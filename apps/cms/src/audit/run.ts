@@ -28,6 +28,7 @@ import { contentDocumentPath } from '../seo/paths';
 import {
   type AuditedRecord,
   type LinkFinding,
+  UNHEALTHY_RECORD_REASONS,
   classifyLinkAudit,
   crawlSite,
   orphanCount,
@@ -158,7 +159,12 @@ export async function runLinkAudit(args: {
       orphans: orphanCount(findings),
       publishedRecords: inventory.records.length,
       redirected: findings.redirectedTotal,
-      unhealthy: findings.records.filter((record) => record.reason === 'not-200').length,
+      // Обе причины «адрес не отдал 200» разом: и ответ не 200, и отсутствие
+      // ответа. Набор берётся из `link-audit.ts`, а не перечисляется здесь —
+      // иначе новая причина выпала бы из счётчика молча.
+      unhealthy: findings.records.filter((record) =>
+        UNHEALTHY_RECORD_REASONS.includes(record.reason),
+      ).length,
     },
     crawl: { requested: crawl.requested, truncated: crawl.truncated },
     finishedAt: clock().toISOString(),

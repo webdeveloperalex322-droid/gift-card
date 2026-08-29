@@ -115,6 +115,17 @@ export interface AuditSummary {
 /** Почему отчёта проверки ссылок нет. */
 export type AuditAbsence = 'forbidden' | 'never-run';
 
+/**
+ * Почему в журнале изменений пусто.
+ *
+ * Ровно та же развилка, что у {@link AuditAbsence}, и заведена по той же
+ * причине: «журнал закрыт для вашей роли» и «изменений не было» — разные факты,
+ * а пустой список у них один. Сводить их к «Изменений пока нет» — это уверенно
+ * соврать на экране, по которому судят о состоянии сайта (находка ревизии от
+ * 2026-08-29).
+ */
+export type HistoryAbsence = 'empty' | 'forbidden';
+
 /* ------------------------------------------------------------------ */
 /* Чтение сырых документов                                             */
 /* ------------------------------------------------------------------ */
@@ -483,6 +494,7 @@ export interface DashboardModel {
   readonly audit: AuditSummary | null;
   readonly auditAbsence: AuditAbsence | null;
   readonly history: readonly HistoryEntry[];
+  readonly historyAbsence: HistoryAbsence | null;
   readonly metaKeys: MetaKeySummary;
   readonly metaSnapshots: MetaSnapshotSummary;
   readonly review: ReviewSummary;
@@ -496,6 +508,7 @@ export function buildDashboard(input: {
   readonly audit: AuditSummary | null;
   readonly auditAbsence: AuditAbsence | null;
   readonly history: readonly HistoryEntry[];
+  readonly historyAbsence: HistoryAbsence | null;
   readonly now: Date;
   readonly records: readonly DashboardRecord[];
   /** Записей больше, чем прочитано: числа — нижняя граница. */
@@ -505,6 +518,7 @@ export function buildDashboard(input: {
     audit: input.audit,
     auditAbsence: input.auditAbsence,
     history: input.history.slice(0, DASHBOARD_HISTORY_LIMIT),
+    historyAbsence: input.historyAbsence,
     metaKeys: findMetaKeyDuplicates(input.records),
     metaSnapshots: collectMetaSnapshots(input.records),
     review: collectReview(input.records),

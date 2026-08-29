@@ -14,6 +14,8 @@ import type { ProbeResponse, SiteProbe } from '../export/inventory';
 import {
   type AuditedRecord,
   LINK_AUDIT_MAX_CLICKS,
+  RECORD_FINDING_LABELS,
+  UNHEALTHY_RECORD_REASONS,
   classifyLinkAudit,
   crawlSite,
   extractHrefs,
@@ -250,6 +252,46 @@ describe('разбор находок', () => {
     expect(findings.records[0]?.reason).toBe('not-200');
     expect(findings.records[0]?.status).toBe(404);
     expect(orphanCount(findings)).toBe(0);
+  });
+
+  /**
+   * Находка ревизии от 2026-08-29: адрес, не ответивший ВОВСЕ, получал причину
+   * `not-200` с подписью «ответил не 200». Модуль сам настаивает, что находки
+   * названы по измеренному, — а тут называлось то, чего не измеряли.
+   */
+  it('адрес, не ответивший вовсе, назван своей причиной, а не «ответил не 200»', async () => {
+    const failing: SiteProbe = (url) =>
+      url === `${ORIGIN}/`
+        ? Promise.resolve(page('/upavshaya'))
+        : Promise.reject(new Error('ECONNRESET'));
+    const result = await crawlSite({ origin: ORIGIN, probe: failing });
+    const findings = classifyLinkAudit({
+      crawl: result,
+      records: [record('/upavshaya')],
+      sitemapUrls: null,
+    });
+
+    expect(findings.records[0]?.reason).toBe('no-response');
+    expect(findings.records[0]?.status).toBeNull();
+    expect(RECORD_FINDING_LABELS['no-response']).not.toContain('ответил не 200');
+    // Сиротой такая запись не считается: причина не в перелинковке.
+    expect(orphanCount(findings)).toBe(0);
+    // Но в общий счётчик «адрес не отдал 200» она входит — вместе с 404.
+    expect(UNHEALTHY_RECORD_REASONS).toContain('no-response');
+    expect(UNHEALTHY_RECORD_REASONS).toContain('not-200');
+  });
+
+  it('не спрошенный адрес по-прежнему «не измерено», а не «не ответил»', async () => {
+    // Разница между «спрашивали и не получили» и «не спрашивали» — та самая, из-за
+    // которой обе причины и заведены отдельно.
+    const result = await crawl({ [`${ORIGIN}/`]: page('/a', '/b') }, 1);
+    const findings = classifyLinkAudit({
+      crawl: result,
+      records: [record('/a')],
+      sitemapUrls: null,
+    });
+
+    expect(findings.records[0]?.reason).toBe('not-measured');
   });
 
   it('усечённый обход объявляет находки о достижимости ненадёжными', async () => {

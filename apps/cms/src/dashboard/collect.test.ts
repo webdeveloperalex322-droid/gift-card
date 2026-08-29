@@ -10,7 +10,7 @@
 import type { Payload, PayloadRequest } from 'payload';
 import { describe, expect, it } from 'vitest';
 
-import { collectAudit, collectDashboardModel } from './collect';
+import { collectAudit, collectDashboardModel, collectHistory } from './collect';
 
 interface Call {
   readonly args: Record<string, unknown>;
@@ -23,6 +23,7 @@ function fakePayload(options: {
   readonly globalDoc?: Record<string, unknown>;
   readonly globalThrows?: boolean;
   readonly history?: Record<string, unknown>[];
+  readonly historyThrows?: boolean;
 }) {
   const calls: Call[] = [];
   const payload = {
@@ -33,6 +34,9 @@ function fakePayload(options: {
       }
       if (args.collection === 'collections') {
         return Promise.resolve({ docs: options.collections ?? [] });
+      }
+      if (options.historyThrows === true) {
+        return Promise.reject(new Error('Forbidden'));
       }
       return Promise.resolve({ docs: options.history ?? [] });
     },
@@ -74,6 +78,60 @@ describe('права смотрящего', () => {
     const audit = await collectAudit({ payload, req: viewer });
 
     expect(audit.absence).toBe('never-run');
+  });
+});
+
+/**
+ * Журнал изменений: три исхода вместо одного.
+ *
+ * Находка ревизии от 2026-08-29: голый `catch` сводил «нет прав», «запрос упал»
+ * и «изменений не было» к пустому списку, и экран печатал «Изменений пока нет».
+ * Рядом, в `collectAudit`, тот же класс уже был разведён — здесь теперь так же.
+ */
+describe('журнал изменений', () => {
+  it('закрытый журнал даёт «не отдан», а не «изменений не было»', async () => {
+    const { payload } = fakePayload({ historyThrows: true });
+    const history = await collectHistory({ payload, req: viewer });
+
+    expect(history.entries).toEqual([]);
+    expect(history.absence).toBe('forbidden');
+  });
+
+  it('пустой доступный журнал назван пустым, а не закрытым', async () => {
+    const { payload } = fakePayload({ history: [] });
+    const history = await collectHistory({ payload, req: viewer });
+
+    expect(history.absence).toBe('empty');
+  });
+
+  it('при записях причины отсутствия нет вовсе', async () => {
+    const { payload } = fakePayload({
+      history: [
+        {
+          authorRole: 'ai-editor',
+          changedAt: '2026-08-29T10:00:00.000Z',
+          changedBy: 7,
+          documentPath: '/otkrytki/roza',
+          field: 'title',
+          operation: 'update',
+        },
+      ],
+    });
+    const history = await collectHistory({ payload, req: viewer });
+
+    expect(history.absence).toBeNull();
+    expect(history.entries[0]).toMatchObject({ authorRole: 'ai-editor', changedBy: '7' });
+  });
+
+  it('падение журнала не уносит остальную модель', async () => {
+    const { payload } = fakePayload({
+      cards: [{ id: 1, slug: 'roza', status: 'published', title: 'Роза' }],
+      historyThrows: true,
+    });
+    const model = await collectDashboardModel({ payload, req: viewer });
+
+    expect(model.historyAbsence).toBe('forbidden');
+    expect(model.statuses[0]).toMatchObject({ collection: 'cards', published: 1 });
   });
 });
 

@@ -28,6 +28,7 @@
  */
 import type { Payload, PayloadRequest } from 'payload';
 
+import type { Card, Collection } from '../payload-types';
 import { contentDocumentPath } from '../seo/paths';
 import { LINK_AUDIT_SLUG } from '../audit/report';
 import {
@@ -35,8 +36,10 @@ import {
   type AuditSummary,
   DASHBOARD_HISTORY_LIMIT,
   DASHBOARD_SCAN_LIMIT,
+  type DashboardCollection,
   type DashboardModel,
   type DashboardRecord,
+  type HistoryAbsence,
   type HistoryEntry,
   buildDashboard,
   toDashboardRecord,
@@ -108,27 +111,71 @@ export async function collectDashboardRecords(args: {
     },
   });
 
-  const records: DashboardRecord[] = [];
-  for (const [collection, page] of [
-    ['cards', cards],
-    ['collections', collections],
-  ] as const) {
-    for (const doc of page.docs.slice(0, DASHBOARD_SCAN_LIMIT)) {
-      const raw = doc as unknown as Record<string, unknown>;
-      records.push(toDashboardRecord(collection, raw, contentDocumentPath(collection, doc)));
-    }
-  }
+  const records: DashboardRecord[] = [
+    ...cards.docs.slice(0, DASHBOARD_SCAN_LIMIT).map((doc) => dashboardRecordOf('cards', doc)),
+    ...collections.docs
+      .slice(0, DASHBOARD_SCAN_LIMIT)
+      .map((doc) => dashboardRecordOf('collections', doc)),
+  ];
   return {
     records,
     truncated: cards.docs.length > DASHBOARD_SCAN_LIMIT || collections.docs.length > DASHBOARD_SCAN_LIMIT,
   };
 }
 
-/** Последние изменения SEO-полей. Журнал читают только аутентифицированные. */
+/**
+ * Поля документа, которые нужны дашборду, — названные ЧЕРЕЗ СГЕНЕРИРОВАННЫЙ ТИП.
+ *
+ * До ревизии 2026-08-29 документ приводился к `Record<string, unknown>` и
+ * разбирался по строковым именам: переименование поля в коллекции компилировалось
+ * молча и обнуляло блок дашборда. Здесь имена читаются у `Card`/`Collection`,
+ * поэтому та же правка теперь ломает сборку — то есть обнаруживается там, где
+ * делается.
+ *
+ * Форма на выходе всё равно «мешок значений»: `toDashboardRecord` терпим к
+ * отсутствию полей НАМЕРЕННО — часть групп (`metaConflict`, `visualDuplicate`)
+ * закрыта доступом на уровне поля, и у смотрящего без прав их в документе нет,
+ * хотя тип обещает обратное. Отличается только то, что состав имён теперь
+ * проверен компилятором.
+ */
+function dashboardRecordOf(
+  collection: DashboardCollection,
+  doc: Partial<Card> | Partial<Collection>,
+): DashboardRecord {
+  const raw: Record<string, unknown> = {
+    id: doc.id,
+    metaConflict: doc.metaConflict,
+    metaDescriptionKey: doc.metaDescriptionKey,
+    // Путь: у карточки выводится из slug, у подборки хранится в `path`. Оба
+    // имени тоже проверены типом — `path` есть только у подборки.
+    path: 'path' in doc ? doc.path : undefined,
+    robots: doc.robots,
+    seasonal: 'seasonal' in doc ? doc.seasonal : undefined,
+    slug: doc.slug,
+    status: doc.status,
+    title: doc.title,
+    titleKey: doc.titleKey,
+    updatedAt: doc.updatedAt,
+    visualDuplicate: 'visualDuplicate' in doc ? doc.visualDuplicate : undefined,
+  };
+  return toDashboardRecord(collection, raw, contentDocumentPath(collection, raw));
+}
+
+/**
+ * Последние изменения SEO-полей.
+ *
+ * Три исхода, и они РАЗНЫЕ — ровно как у {@link collectAudit}: записи есть;
+ * журнал доступен, но пуст; журнал смотрящему не отдан. До ревизии 2026-08-29
+ * все три сводились к пустому списку, и экран печатал «Изменений пока нет» тому,
+ * кому журнал просто закрыт. Различать «по роли смотрящего» на стороне экрана
+ * нельзя: правило доступа живёт в коллекции и может смениться, а вывод на экране
+ * останется прежним.
+ */
 export async function collectHistory(args: {
   readonly payload: Payload;
   readonly req: PayloadRequest;
-}): Promise<HistoryEntry[]> {
+}): Promise<{ absence: HistoryAbsence | null; entries: HistoryEntry[] }> {
+  let docs: readonly unknown[];
   try {
     const page = await args.payload.find({
       collection: 'seo-history',
@@ -138,23 +185,27 @@ export async function collectHistory(args: {
       req: args.req,
       sort: '-changedAt',
     });
-    return page.docs.map((doc) => {
-      const raw = doc as unknown as Record<string, unknown>;
-      return {
-        authorRole: textOf(raw.authorRole),
-        changedAt: optionalTextOf(raw.changedAt),
-        changedBy: identifierOf(raw.changedBy),
-        documentPath: optionalTextOf(raw.documentPath),
-        field: textOf(raw.field),
-        operation: textOf(raw.operation),
-      };
-    });
+    docs = page.docs;
   } catch {
-    // Нет прав на журнал — пустой список, а не падение экрана. Отличить «нет
-    // прав» от «изменений не было» помогает роль смотрящего: журнал закрыт от
-    // анонима целиком.
-    return [];
+    // Отказ доступа Payload отдаёт исключением, и отличить его от «запрос упал»
+    // здесь нечем — дашборд честно говорит «журнал не отдан», а не «изменений
+    // нет». Экран при этом не падает: стартовый экран без одного блока лучше
+    // отсутствующего стартового экрана.
+    return { absence: 'forbidden', entries: [] };
   }
+
+  const entries = docs.map((doc) => {
+    const raw = doc as Record<string, unknown>;
+    return {
+      authorRole: textOf(raw.authorRole),
+      changedAt: optionalTextOf(raw.changedAt),
+      changedBy: identifierOf(raw.changedBy),
+      documentPath: optionalTextOf(raw.documentPath),
+      field: textOf(raw.field),
+      operation: textOf(raw.operation),
+    };
+  });
+  return { absence: entries.length === 0 ? 'empty' : null, entries };
 }
 
 /**
@@ -218,7 +269,8 @@ export async function collectDashboardModel(args: {
   return buildDashboard({
     audit: audit.summary,
     auditAbsence: audit.absence,
-    history,
+    history: history.entries,
+    historyAbsence: history.absence,
     now: args.now ?? new Date(),
     records: inventory.records,
     scanTruncated: inventory.truncated,

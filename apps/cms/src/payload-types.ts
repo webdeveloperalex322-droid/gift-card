@@ -1645,6 +1645,9 @@ export interface SeoLinkAudit {
      * Не битые: работают. Но каждая тратит переход и спорит с правилом «внутренние ссылки — канонические».
      */
     redirected?: number | null;
+    /**
+     * Считаются обе находки: «ответил, и ответ не 200» и «не ответил вовсе». В списке находок они названы порознь, потому что чинятся разным.
+     */
     unhealthy?: number | null;
     notMeasured?: number | null;
   };
@@ -1654,7 +1657,7 @@ export interface SeoLinkAudit {
   records?:
     | {
         url?: string | null;
-        reason?: ('not-linked' | 'too-deep' | 'not-200' | 'not-measured') | null;
+        reason?: ('not-linked' | 'too-deep' | 'not-200' | 'no-response' | 'not-measured') | null;
         documentCollection?: ('cards' | 'collections') | null;
         /**
          * Идентификатор строкой, а не связью: отчёт обязан переживать удаление записи — иначе исчезал бы след ровно того события, ради которого его смотрят.

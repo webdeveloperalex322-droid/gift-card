@@ -276,6 +276,7 @@ describe('сборка модели', () => {
       audit: null,
       auditAbsence: 'never-run',
       history: [],
+      historyAbsence: 'empty',
       now: new Date('2027-01-22T00:00:00.000Z'),
       records: [],
       scanTruncated: false,
@@ -285,11 +286,28 @@ describe('сборка модели', () => {
     expect(model.auditAbsence).toBe('never-run');
   });
 
+  it('«журнал закрыт» и «изменений не было» доходят до модели разными значениями', () => {
+    // Пустой список у обоих один и тот же; разница вся в этом поле, и без неё
+    // экран печатает «Изменений пока нет» тому, кому журнал просто не отдан.
+    const forbidden = buildDashboard({
+      audit: null,
+      auditAbsence: 'never-run',
+      history: [],
+      historyAbsence: 'forbidden',
+      now: new Date('2027-01-22T00:00:00.000Z'),
+      records: [],
+      scanTruncated: false,
+    });
+    expect(forbidden.history).toEqual([]);
+    expect(forbidden.historyAbsence).toBe('forbidden');
+  });
+
   it('усечённый обход записей помечается: числа — нижняя граница', () => {
     const model = buildDashboard({
       audit: null,
       auditAbsence: 'never-run',
       history: [],
+      historyAbsence: 'empty',
       now: new Date('2027-01-22T00:00:00.000Z'),
       records: [record({ id: '1' })],
       scanTruncated: true,

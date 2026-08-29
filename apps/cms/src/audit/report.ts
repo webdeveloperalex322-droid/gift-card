@@ -45,7 +45,8 @@ export const RECORD_FINDING_OPTIONS: readonly { label: string; value: RecordFind
     label: `Путь от главной длиннее ${String(LINK_AUDIT_MAX_CLICKS)} переходов`,
     value: 'too-deep',
   },
-  { label: 'Адрес опубликованной записи ответил не 200', value: 'not-200' },
+  { label: 'Адрес опубликованной записи ответил, и ответ не 200', value: 'not-200' },
+  { label: 'Адрес опубликованной записи не ответил вовсе', value: 'no-response' },
   { label: 'Адрес не спрошен: обход оборвался по пределу', value: 'not-measured' },
 ];
 
@@ -217,8 +218,13 @@ export const LinkAuditReport: GlobalConfig = {
         {
           name: 'unhealthy',
           type: 'number',
-          label: 'Опубликованных записей с адресом не 200',
-          admin: { readOnly: true },
+          label: 'Опубликованных записей, чей адрес не отдал 200',
+          admin: {
+            description:
+              'Считаются обе находки: «ответил, и ответ не 200» и «не ответил вовсе». В ' +
+              'списке находок они названы порознь, потому что чинятся разным.',
+            readOnly: true,
+          },
         },
         {
           name: 'notMeasured',
