@@ -180,9 +180,20 @@ export function inventoryRow(args: {
 /* Опрос живого сайта                                                  */
 /* ------------------------------------------------------------------ */
 
-/** Ответ сайта в объёме, который нужен выгрузке. */
+/**
+ * Ответ сайта в объёме, который нужен ОТЧЁТАМ — выгрузке (Э5-05) и проверке
+ * внутренних ссылок (Э5-03).
+ *
+ * `location` появился ради второй: за редиректом не идёт ни один из отчётов, но
+ * проверке ссылок нужно знать, КУДА ведёт 301, — иначе цель переезда выпадала бы
+ * из обхода, и все страницы за переехавшим узлом выглядели бы сиротами. Поле
+ * необязательное: опрос, который его не заполняет, остаётся законным (тогда
+ * цель редиректа просто неизвестна), а выгрузке оно не нужно вовсе.
+ */
 export interface ProbeResponse {
   readonly body: string;
+  /** `Location` ответа 3xx как он пришёл; `null`/отсутствует — неизвестно. */
+  readonly location?: string | null;
   readonly status: number;
 }
 
@@ -269,8 +280,14 @@ function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Выполняет задачи с ограничением одновременности, сохраняя порядок результата. */
-async function mapWithConcurrency<T, R>(
+/**
+ * Выполняет задачи с ограничением одновременности, сохраняя порядок результата.
+ *
+ * Экспортируется ради проверки внутренних ссылок (Э5-03): она опрашивает тот же
+ * сайт тем же слоем, и второй пул с другим пределом означал бы, что нагрузка на
+ * сайт зависит от того, какой отчёт его спросил.
+ */
+export async function mapWithConcurrency<T, R>(
   items: readonly T[],
   limit: number,
   run: (item: T) => Promise<R>,
@@ -432,6 +449,10 @@ export async function buildInventoryCsv(args: {
 export function fetchProbe(): SiteProbe {
   return async (url: string): Promise<ProbeResponse> => {
     const response = await fetch(url, { cache: 'no-store', redirect: 'manual' });
-    return { body: await response.text(), status: response.status };
+    return {
+      body: await response.text(),
+      location: response.headers.get('location'),
+      status: response.status,
+    };
   };
 }
