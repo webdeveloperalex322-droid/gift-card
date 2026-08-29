@@ -15,6 +15,7 @@ import { Redirects } from './collections/redirects';
 import { SeoHistory } from './collections/seo-history';
 import { Users } from './collections/users';
 import { adminPath, databasePush, loadEnvFiles, requireEnv } from './env.mjs';
+import { seoInventoryEndpoint } from './export/endpoint';
 import { SiteSettings } from './globals/site-settings';
 import { MAX_UPLOAD_BYTES } from './images/upload-validation';
 import { seedFirstAdmin } from './seed-first-admin';
@@ -93,6 +94,12 @@ export default buildConfig({
   // Редактор объявлен явно: без него Payload не собирает текстовые поля, а
   // коллекции контента (Э1-04, Э1-05) состоят из них целиком.
   editor: lexicalEditor(),
+
+  // Выгрузка SEO-инвентаря (Э5-05, ТЗ §8.5). Ручка не CRUD и не обёртка над ним:
+  // часть колонок отчёта — фактический ответ живого сайта, выразить это запросом
+  // к коллекции нельзя. Записи она читает с overrideAccess: false, то есть через
+  // тот же access control, что REST и GraphQL, и анониму не отвечает вовсе.
+  endpoints: [seoInventoryEndpoint],
 
   // Глобалы. «Настройки сайта» (Э3-00) — единственное место, где живут значения,
   // вынесенные решениями человека из кода в админку: данные организации (Ч-17),
