@@ -66,7 +66,16 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default buildConfig({
   admin: {
+    components: {
+      // Дашборд SEO-здоровья (Э5-04, ТЗ §8.4) — стартовый экран админки.
+      // Серверный компонент: числа считаются на сервере правами смотрящего.
+      beforeDashboard: ['/dashboard/SeoHealth#SeoHealth'],
+    },
     importMap: {
+      // Каталог, относительно которого разбираются пути компонентов, задан явно:
+      // по умолчанию это `process.cwd()`, а конфиг поднимается из ДВУХ рабочих
+      // каталогов — apps/cms (админка) и apps/web (рендер через Local API).
+      baseDir: dirname,
       // Физический каталог маршрута админки — всегда `admin`, каким бы ни был
       // PAYLOAD_ADMIN_PATH (см. src/env.mjs). Автоопределение Payload ищет
       // каталог по значению routes.admin и при нестандартном пути не находит
