@@ -525,6 +525,54 @@ async function main(): Promise<void> {
         .map((match) => `#${String(relationId(match.card))}:${String(match.distance)}`)
         .join(', '),
     );
+    /* --------------------------------------------------------------- */
+    /* 8. Внутренние снимки не уходят в публичный ответ                 */
+    /* --------------------------------------------------------------- */
+
+    // Записи в review анониму не отдаются вовсе, но их адреса и id стоят в
+    // снимках у СОСЕДНЕЙ карточки. Проверяется на опубликованной записи —
+    // единственной, которую аноним вправе прочитать. Публикация здесь
+    // временная: следом запись снимается с решением о судьбе URL, и счётчик
+    // published после смоука обязан вернуться к исходному.
+    const published = await expectOk('подготовка: карточка публикуется администратором', () =>
+      payload.update({
+        collection: 'cards',
+        id: rivalCard.id,
+        data: { status: 'published' },
+        overrideAccess: false,
+        user: admin,
+      }),
+    );
+    record('карточка действительно опубликована', published?.status === 'published');
+
+    const anonymous = await payload.findByID({
+      collection: 'cards',
+      id: rivalCard.id,
+      overrideAccess: false,
+    });
+    record(
+      'аноним читает опубликованную карточку',
+      anonymous.slug === `smouk-e5-vtoraya-${STAMP}`,
+      `slug=${String(anonymous.slug)}`,
+    );
+    record(
+      'но снимки дублей ему не отдаются: в них адреса и id непубличных записей',
+      anonymous.metaConflict === undefined && anonymous.visualDuplicate === undefined,
+      `metaConflict=${JSON.stringify(anonymous.metaConflict)} visualDuplicate=${JSON.stringify(
+        anonymous.visualDuplicate,
+      )}`,
+    );
+
+    const withdrawn = await expectOk('карточка снимается с публикации с решением о судьбе URL', () =>
+      payload.update({
+        collection: 'cards',
+        id: rivalCard.id,
+        data: { status: 'draft', withdrawal: { mode: '410', redirectTo: null } },
+        overrideAccess: false,
+        user: admin,
+      }),
+    );
+    record('после снятия карточка снова черновик', withdrawn?.status === 'draft');
   } finally {
     for (const id of created.cards) {
       await payload.delete({ collection: 'cards', id }).catch(() => undefined);

@@ -1,6 +1,7 @@
 import type { CollectionConfig, Field } from 'payload';
 
 import {
+  authenticatedFieldAccess,
   cardImageFieldAccess,
   contentDeleteAccess,
   contentReadAccess,
@@ -167,6 +168,12 @@ const cardFields: Field[] = [
   {
     name: 'visualDuplicate',
     type: 'group',
+    // Читают только аутентифицированные — по той же причине, что и снимок
+    // дублей метатегов: набор похожих называет карточки в статусе `review`, а
+    // их `contentReadAccess` анониму не отдаёт. Пробел найден при сверке Э5-02:
+    // публичный ответ по опубликованной карточке перечислял идентификаторы
+    // непубличных записей.
+    access: { read: authenticatedFieldAccess },
     label: 'Проверка визуальных дублей',
     admin: {
       description:

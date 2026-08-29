@@ -12,6 +12,7 @@ import type { Field } from 'payload';
 import { describe, expect, it } from 'vitest';
 
 import {
+  authenticatedFieldAccess,
   canonicalFieldAccess,
   contentDeleteAccess,
   contentReadAccess,
@@ -220,6 +221,31 @@ describe('cards: служебные поля не пишутся снаружи'
       expect(access?.create, `${name}.create`).toBe(systemFieldAccess);
       expect(access?.update, `${name}.update`).toBe(systemFieldAccess);
     }
+  });
+
+  it('внутренние снимки анониму не отдаются: в них есть адреса и id записей в review', () => {
+    // `contentReadAccess` не отдаёт анониму записи в review вовсе. Снимок
+    // дублей их называет — путём (метатеги) и идентификатором (изображения),
+    // поэтому без ограничения на чтение поля непубличная запись утекала бы в
+    // публичный ответ по СОСЕДНЕЙ, опубликованной карточке.
+    for (const name of ['metaConflict', 'visualDuplicate']) {
+      const group = findField(Cards.fields, name);
+      const access = 'access' in group ? group.access : undefined;
+      expect(access?.read, `${name}.read`).toBe(authenticatedFieldAccess);
+    }
+  });
+
+  it('ограничение чтения именно «аноним не читает», а не «никто не читает»', () => {
+    // Формальная опора предыдущего теста: редактор и сервисный аккаунт снимок
+    // видеть обязаны — он и есть предупреждение, которое им адресовано.
+    const anonymous = authenticatedFieldAccess({
+      req: { user: null },
+    } as unknown as Parameters<typeof authenticatedFieldAccess>[0]);
+    const editor = authenticatedFieldAccess({
+      req: { user: { collection: 'users', id: 2, role: 'ai-editor' } },
+    } as unknown as Parameters<typeof authenticatedFieldAccess>[0]);
+    expect(anonymous).toBe(false);
+    expect(editor).toBe(true);
   });
 
   it('systemFieldAccess отказывает обеим ролям, а не только сервисному аккаунту', () => {

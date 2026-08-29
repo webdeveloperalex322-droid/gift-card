@@ -35,6 +35,7 @@ import {
 
 import {
   adminOnlyFieldAccess,
+  authenticatedFieldAccess,
   canSetIndexFollow,
   canonicalFieldAccess,
   contentStatusFieldAccess,
@@ -433,6 +434,12 @@ export function metaConflictField(): Field {
   return {
     name: 'metaConflict',
     type: 'group',
+    // Читают только аутентифицированные. Снимок называет АДРЕСА конфликтующих
+    // страниц, а среди них бывают записи в `review` — их `contentReadAccess`
+    // анониму не отдаёт вовсе. Без этой строки путь непубличной страницы
+    // утекал бы в публичный ответ по опубликованной карточке: правило чтения
+    // соблюдалось бы для самой записи и обходилось бы через чужой снимок.
+    access: { read: authenticatedFieldAccess },
     label: 'Проверка дублей метатегов',
     admin: {
       description:
