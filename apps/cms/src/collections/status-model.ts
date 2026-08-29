@@ -39,6 +39,9 @@ import { type RoledUser, isAdmin } from '../access/roles';
 import { DEFAULT_ROBOTS, type RobotsDirective, isIndexableRobots, isRobotsDirective } from '../seo/robots';
 
 export type ContentRuleCode =
+  // Задача Э5-06: массовая ОТВЯЗКА карточек от подборок, записанная пустым
+  // списком связи. См. `assertBulkChangeAllowed`.
+  | 'bulk-collections-clear'
   | 'bulk-requires-admin'
   | 'bulk-requires-explicit-selection'
   | 'bulk-too-large'
@@ -889,10 +892,23 @@ export interface BulkIntent {
   /**
    * `publish` — перевод в published; `index` — включение index,follow;
    * `status` — любая другая пакетная смена статуса (в том числе уход из
-   * published); `other` — пакет, статуса и индексации не касающийся.
+   * published); `attach` — массовая привязка карточек к подборке (ТЗ §8.5);
+   * `other` — пакет, ничего из перечисленного не касающийся.
    */
-  readonly kind: 'index' | 'other' | 'publish' | 'status';
+  readonly kind: 'attach' | 'index' | 'other' | 'publish' | 'status';
 }
+
+/**
+ * Поле связи карточки с подборками.
+ *
+ * Имя объявлено здесь, рядом с {@link URL_SHAPE_FIELDS}, по той же причине:
+ * пакетный гейт обязан узнавать поле по имени, а сравнение с литералом в двух
+ * местах даёт не ошибку компиляции, а тихо пропущенную операцию. Работа со
+ * значением связи (чтение идентификаторов, слияние) живёт в
+ * `./card-collections.ts` — он импортирует эту константу, обратной зависимости
+ * нет.
+ */
+export const CARD_COLLECTIONS_FIELD = 'collections';
 
 function readIdClause(clause: unknown): readonly (number | string)[] | null {
   if (typeof clause !== 'object' || clause === null) {
@@ -1038,7 +1054,13 @@ function bulkCarriesWithdrawalDecision(value: unknown): boolean {
  * Роль: `admin` требуется для публикации и для включения индексации. Пакетная
  * смена `draft ↔ review` доступна и сервисному аккаунту (ТЗ §9) — а если в его
  * выборку попала опубликованная запись, её отклонит проверка КАЖДОЙ записи
- * (`unpublish-requires-admin`, `unpublish-requires-decision`).
+ * (`unpublish-requires-admin`, `unpublish-requires-decision`). Массовая привязка
+ * карточек к подборке (ТЗ §8.5) роли не требует вовсе: CLAUDE.md прямо относит
+ * «привязывать карточки к подборкам» к тому, что `ai-editor` может.
+ *
+ * Чего гейт НЕ делает: он не превращает привязку в замену списка. Слияние
+ * (добавить, не переставляя уже выбранные) живёт в `./card-collections.ts` и
+ * применяется хуком карточки — здесь только допуск операции.
  *
  * @throws ContentRuleError
  */
@@ -1072,12 +1094,38 @@ export function assertBulkChangeAllowed(input: {
     );
   }
 
+  // Массовая привязка карточек к подборке (ТЗ §8.5). Пустой список — это не
+  // привязка, а массовая ОТВЯЗКА: одной операцией у выборки карточек исчезли бы
+  // все подборки сразу, вместе с основной, из которой строятся хлебные крошки.
+  const attaching = CARD_COLLECTIONS_FIELD in incoming;
+  if (attaching) {
+    const value = incoming[CARD_COLLECTIONS_FIELD];
+    if (!Array.isArray(value) || value.length === 0) {
+      fail(
+        'bulk-collections-clear',
+        'Пустой список подборок в пакетной операции — это массовая отвязка карточек, а не ' +
+          'привязка: одним значением исчезли бы все связи выборки, включая ПЕРВУЮ, из ' +
+          'которой строятся хлебные крошки карточки. Пакетом подборки только добавляются ' +
+          '(ТЗ §8.5 — «массовая привязка»); снимайте связь у карточки по одной.',
+      );
+    }
+  }
+
   const statusChange = 'status' in incoming;
   const publishing = incoming.status === 'published';
   const indexing = isIndexableRobots(incoming.robots);
 
   if (!statusChange && !indexing) {
-    return { ids: null, kind: 'other' };
+    if (!attaching) {
+      return { ids: null, kind: 'other' };
+    }
+    // Роль не проверяется: привязывать карточки к подборкам вправе и сервисный
+    // аккаунт (CLAUDE.md, права `ai-editor`). Явная выборка — проверяется:
+    // наполнение подборки решает, пройдёт ли она порог п. 5.1
+    // (`thin-content-for-index`) и границу «совсем пусто» (`empty-for-publish`),
+    // а привязка «всех карточек по фильтру» дотянула бы подборку до порога
+    // набором, которого человек не видел.
+    return { ids: requireHumanSelection(where), kind: 'attach' };
   }
 
   if (publishing && indexing) {
@@ -1100,11 +1148,29 @@ export function assertBulkChangeAllowed(input: {
     );
   }
 
+  return {
+    ids: requireHumanSelection(where),
+    kind: publishing ? 'publish' : indexing ? 'index' : 'status',
+  };
+}
+
+/**
+ * Выборка, составленная ЧЕЛОВЕКОМ, — или отказ.
+ *
+ * Единственное место, где это требование выражено: и смена статуса, и массовая
+ * привязка (ТЗ §8.5) спрашивают отсюда. Два вызова `readExplicitIdSelection` с
+ * двумя своими проверками предела разошлись бы молча — а разойтись им нельзя:
+ * «список идентификаторов, а не фильтр» — это и есть машинная разница между
+ * решением человека и массовой операцией по признаку.
+ *
+ * @throws ContentRuleError
+ */
+function requireHumanSelection(where: unknown): readonly (number | string)[] {
   const ids = readExplicitIdSelection(where);
   if (ids === null) {
     fail(
       'bulk-requires-explicit-selection',
-      'Пакетная смена статуса применяется только к ЯВНО выбранным записям (ТЗ §8.5 — ' +
+      'Пакетная операция применяется только к ЯВНО выбранным записям (ТЗ §8.5 — ' +
         '«для выбранных записей»; решение Ч-07 — «выборка, которую выбрал сам»). Условие ' +
         'вида «все записи в review» или «все опубликованные» — это операция по фильтру: ' +
         'человек не видел, что именно уйдёт в индекс и что именно исчезнет из него. ' +
@@ -1122,7 +1188,7 @@ export function assertBulkChangeAllowed(input: {
     );
   }
 
-  return { ids, kind: publishing ? 'publish' : indexing ? 'index' : 'status' };
+  return ids;
 }
 
 function describe(value: unknown): string {

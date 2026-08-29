@@ -890,6 +890,79 @@ describe('пакетная операция (решение Ч-07, точка в
       'bulk-url-change',
     );
   });
+
+  /**
+   * Массовая привязка карточек к подборке (ТЗ §8.5, задача Э5-06).
+   *
+   * Гейт тот же, что у пакетной смены статуса, и это осознанно: привязка меняет
+   * наполнение подборки, а от наполнения зависит и порог п. 5.1
+   * (`thin-content-for-index`), и граница «совсем пусто» (`empty-for-publish`).
+   * Привязка «всех карточек, подходящих под фильтр» дотянула бы подборку до
+   * порога набором, которого человек не видел.
+   */
+  describe('массовая привязка карточек к подборке', () => {
+    it('привязка по явной выборке разрешена и сервисному аккаунту', () => {
+      // CLAUDE.md, права ai-editor: «привязывать карточки к подборкам» — может.
+      expect(
+        assertBulkChangeAllowed({
+          incoming: { collections: [12] },
+          user: aiEditor,
+          where: selection,
+        }),
+      ).toEqual({ ids: [1, 2, 3], kind: 'attach' });
+    });
+
+    it('привязка по фильтру отклоняется: выборку составляет человек', () => {
+      expectRule(
+        () =>
+          assertBulkChangeAllowed({
+            incoming: { collections: [12] },
+            user: admin,
+            where: { status: { equals: 'draft' } },
+          }),
+        'bulk-requires-explicit-selection',
+      );
+    });
+
+    it('предел выборки действует и на привязку', () => {
+      const ids = Array.from({ length: MAX_BATCH_SELECTION + 1 }, (_, index) => index + 1);
+      expectRule(
+        () =>
+          assertBulkChangeAllowed({
+            incoming: { collections: [12] },
+            user: admin,
+            where: { id: { in: ids } },
+          }),
+        'bulk-too-large',
+      );
+    });
+
+    it('пустой список — это массовая ОТВЯЗКА, и она отклоняется', () => {
+      for (const empty of [[], null, '']) {
+        expectRule(
+          () =>
+            assertBulkChangeAllowed({
+              incoming: { collections: empty },
+              user: admin,
+              where: selection,
+            }),
+          'bulk-collections-clear',
+        );
+      }
+    });
+
+    it('привязка вместе со сменой статуса подчиняется обоим правилам', () => {
+      expectRule(
+        () =>
+          assertBulkChangeAllowed({
+            incoming: { collections: [12], status: 'published' },
+            user: aiEditor,
+            where: selection,
+          }),
+        'bulk-requires-admin',
+      );
+    });
+  });
 });
 
 describe('index,follow без описания: решение человека, которое не применится', () => {

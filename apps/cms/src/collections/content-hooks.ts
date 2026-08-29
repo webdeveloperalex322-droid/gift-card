@@ -13,6 +13,7 @@ import { findYearInSlug } from '@otkritka/shared';
 
 import { hasBeenPublished } from '../access/policies';
 import { contentDocumentPath, yearInPathRefusal } from '../seo/paths';
+import { markBulkUpdate } from './card-collections';
 import {
   type MetaConflict,
   type MetaConflictFacts,
@@ -251,6 +252,11 @@ function guardIncomingOperation(options: ContentHooksOptions) {
       } catch (error) {
         rethrow(error);
       }
+      // Признак пакета ставится ПОСЛЕ гейта: отклонённая операция пакетом не
+      // считается. Дальше его читают хуки записи — им аргументы операции не
+      // видны, а различить пакет и одиночную правку можно только здесь
+      // (задача Э5-06, `./card-collections.ts`).
+      markBulkUpdate(req, options.collectionSlug);
       return;
     }
 

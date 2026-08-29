@@ -11,6 +11,7 @@ import {
 import { cardImageHooks } from '../images/card-image-hooks';
 import { imageVariantFields } from '../images/image-mirror';
 import { CARD_PATH_PREFIX, contentDocumentPath } from '../seo/paths';
+import { attachCollectionsInBulk } from './card-collections';
 import { collectFieldNames, contentHooks } from './content-hooks';
 import {
   canonicalField,
@@ -153,7 +154,10 @@ const cardFields: Field[] = [
         'Подборки, в которые входит открытка (m:n, ТЗ §8.1). ПЕРВАЯ — основная: ' +
         'из неё строятся хлебные крошки. Открытка входит в несколько подборок БЕЗ ' +
         'дублирования URL: канонический адрес карточки остаётся один навсегда — ' +
-        '/otkrytki/<slug>, копии карточки внутри подборок не создаются.',
+        '/otkrytki/<slug>, копии карточки внутри подборок не создаются. В ПАКЕТНОЙ ' +
+        'операции (ТЗ §8.5, массовая привязка) значение читается как «добавить ' +
+        'вдобавок»: уже выбранные подборки сохраняются в прежнем порядке, поэтому ' +
+        'основная не переставляется; отвязать пакетом нельзя.',
     },
   },
   statusField(),
@@ -459,7 +463,10 @@ function cardHooks(): NonNullable<CollectionConfig['hooks']> {
     ...base,
     beforeChange: [...base.beforeChange, ...image.beforeChange],
     beforeOperation: [...base.beforeOperation, ...image.beforeOperation],
-    beforeValidate: [...base.beforeValidate, ...image.beforeValidate],
+    // Привязка подборок идёт ПЕРВОЙ в фазе: она переписывает значение связи, и
+    // все правила ниже обязаны видеть итоговый список, а не «одну подборку на
+    // всю выборку», которую прислал пакет (задача Э5-06).
+    beforeValidate: [attachCollectionsInBulk(), ...base.beforeValidate, ...image.beforeValidate],
   };
 }
 
