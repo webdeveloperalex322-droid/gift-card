@@ -178,6 +178,67 @@ describe('чтение карты сайта', () => {
     expect(reading.urls).toBeNull();
     expect(reading.warnings.join(' ')).toContain('недоступен');
   });
+
+  /**
+   * Куда выгрузка ходит — правило КОДА, а не свойство данных.
+   *
+   * Находка ревизии от 2026-08-29: `<loc>` индекса запрашивались как есть.
+   * Сегодня их собирает наш же шаблон из того же `SITE_URL`, поэтому вреда не
+   * было; но между обещанием «только origin из SITE_URL» и запросом стоял файл,
+   * который отдаёт сайт, а не проверка.
+   */
+  it('файл карты с ЧУЖОГО origin не запрашивается вовсе и назван в предупреждении', async () => {
+    const asked: string[] = [];
+    const probe: SiteProbe = (url: string) => {
+      asked.push(url);
+      if (url === 'https://primer.test/sitemap.xml') {
+        return Promise.resolve({
+          body:
+            '<sitemapindex><sitemap><loc>https://chuzhoy.test/sitemap-cards-1.xml</loc></sitemap>' +
+            '<sitemap><loc>https://primer.test/sitemap-sections.xml</loc></sitemap></sitemapindex>',
+          status: 200,
+        });
+      }
+      if (url === 'https://primer.test/sitemap-sections.xml') {
+        return Promise.resolve({
+          body: '<urlset><url><loc>https://primer.test/podborki</loc></url></urlset>',
+          status: 200,
+        });
+      }
+      return Promise.reject(new Error('ECONNREFUSED'));
+    };
+
+    const reading = await readSitemapUrls({ origin: 'https://primer.test', probe });
+
+    expect(asked).not.toContain('https://chuzhoy.test/sitemap-cards-1.xml');
+    expect(reading.warnings.join(' ')).toContain('chuzhoy.test');
+    // Свой файл при этом прочитан: отказ точечный, а не «карта не прочитана».
+    expect([...(reading.urls ?? [])]).toEqual(['https://primer.test/podborki']);
+  });
+
+  it('относительный <loc> разрешается ОТ индекса и остаётся своим', async () => {
+    const probe = respond({
+      'https://primer.test/sitemap-cards-1.xml': {
+        body: '<urlset><url><loc>https://primer.test/otkrytki/roza</loc></url></urlset>',
+        status: 200,
+      },
+      'https://primer.test/sitemap.xml': {
+        body: '<sitemapindex><sitemap><loc>/sitemap-cards-1.xml</loc></sitemap></sitemapindex>',
+        status: 200,
+      },
+    });
+    const reading = await readSitemapUrls({ origin: 'https://primer.test', probe });
+    expect([...(reading.urls ?? [])]).toEqual(['https://primer.test/otkrytki/roza']);
+  });
+
+  it('хвостовой слеш у origin не превращает адрес индекса в двойной', async () => {
+    const probe = respond({
+      'https://primer.test/sitemap.xml': { body: '<sitemapindex></sitemapindex>', status: 200 },
+    });
+    const reading = await readSitemapUrls({ origin: 'https://primer.test/', probe });
+    expect(reading.indexStatus).toBe(200);
+    expect(reading.urls).toEqual(new Set());
+  });
 });
 
 describe('сборка файла', () => {
@@ -232,6 +293,25 @@ describe('сборка файла', () => {
     const result = await buildInventoryCsv({ env, probe: null, records: [card] });
     expect(result.warnings[0]).toContain('Сайт не опрашивался');
     expect(result.rows).toBe(1);
+  });
+
+  it('опрос, запрещённый ролью, объясняется отдельно от «не просили»', async () => {
+    // Пустые ячейки в обоих случаях одинаковые, а причины разные — и читателю
+    // отчёта нужна именно причина: одна означает «спросите с probe=1», другая —
+    // «этой роли опрос недоступен».
+    const forbidden = await buildInventoryCsv({
+      env,
+      probe: null,
+      probeAbsence: 'forbidden',
+      records: [card],
+    });
+    expect(forbidden.warnings[0]).toContain('только роли admin');
+    expect(forbidden.warnings[0]).not.toBe(
+      (await buildInventoryCsv({ env, probe: null, records: [card] })).warnings[0],
+    );
+    // Строки при этом на месте: закрыт опрос, а не отчёт.
+    expect(forbidden.rows).toBe(1);
+    expect(forbidden.csv.split(CSV_EOL)[1]).toContain('https://primer.test/otkrytki/8-marta-mame');
   });
 
   it('запись без собранного пути в файл не попадает и названа в предупреждении', async () => {

@@ -13,13 +13,29 @@
  *
  *   1. аноним получает 403 и ни строки. Публично отдавать даже список
  *      опубликованных адресов через эту ручку незачем: у сайта для этого есть
- *      карта, а здесь каждая строка стоит запроса CMS к сайту — то есть
- *      неаутентифицированный вызов был бы рычагом обхода всего сайта по одному
- *      HTTP-запросу;
+ *      карта;
  *   2. записи читаются с `overrideAccess: false` и с `req` вызывающего, то есть
  *      через тот же `contentReadAccess`, что REST и GraphQL. Роль, которой
  *      черновики не видны, не увидит их и в выгрузке — это свойство не
- *      обещанием держится, а тем же предикатом доступа.
+ *      обещанием держится, а тем же предикатом доступа;
+ *   3. ОПРОС САЙТА — только `admin`. Разделение прав внутри одной ручки сделано
+ *      сознательно, и вот почему именно так, а не «вся ручка админу».
+ *
+ *      Опасен здесь не отчёт, а усиление: без опроса выгрузка стоит двух
+ *      запросов к базе — ровно столько же, сколько тот же `find` через REST,
+ *      который вызывающему и так доступен. С опросом одна строка отчёта
+ *      превращается в один HTTP-запрос CMS к собственному сайту, то есть
+ *      `MAX_INVENTORY_ROWS` запросов на вызов; при лимите Ч-14 (60 вызовов в
+ *      минуту на ключ) сервисный аккаунт получал бы сотни тысяч запросов к
+ *      сайту с сервера CMS. Закрыть ручку целиком значило бы отнять у
+ *      `ai-editor` безобидную половину — список СВОИХ же записей, который он
+ *      читает и без неё, — и ничего сверх того не защитить. Поэтому ограничена
+ *      ровно та часть, которая является рычагом.
+ *
+ *      Отказ не молчаливый: колонки измерений остаются ПУСТЫМИ, а в
+ *      предупреждениях (и в заголовке {@link SEO_INVENTORY_WARNINGS_HEADER})
+ *      стоит причина. Пустая ячейка без объяснения читается как «страницы нет»
+ *      — это тот же принцип, по которому выгрузка объясняет и недоступный сайт.
  *
  * Урок прошлой волны (Э5-02): снимок визуальных дублей уходил анониму вместе с
  * идентификаторами записей в `review`. Класс ошибки тот же — «отчётное поле
@@ -29,17 +45,20 @@
  * ═══ ПАРАМЕТРЫ ═══
  *
  *   `?probe=0` — не спрашивать сайт: колонки ответа останутся пустыми, зато
- *   выгрузка мгновенна. Полезно, когда сайт заведомо не поднят.
+ *   выгрузка мгновенна. Полезно, когда сайт заведомо не поднят. Обратного
+ *   параметра «спрашивать, несмотря на роль» нет и быть не может.
  *
  * Адреса, куда ходить, параметром не задаются: origin всегда из `SITE_URL`
  * (см. `./inventory.ts`).
  */
 import type { Endpoint, PayloadRequest, Where } from 'payload';
 
+import { isAdmin } from '../access/roles';
 import { contentDocumentPath } from '../seo/paths';
 import {
   type InventoryRecord,
   MAX_INVENTORY_ROWS,
+  type ProbeAbsence,
   buildInventoryCsv,
   fetchProbe,
 } from './inventory';
@@ -136,10 +155,31 @@ export async function collectInventoryRecords(req: PayloadRequest): Promise<Inve
   return records;
 }
 
-/** Спрашивать ли сайт. Выключается только явным `probe=0` / `probe=false`. */
+/** Просят ли опрос сайта. Выключается только явным `probe=0` / `probe=false`. */
 export function shouldProbeSite(url: string): boolean {
   const value = new URL(url, 'http://placeholder.invalid').searchParams.get('probe');
   return value !== '0' && value !== 'false';
+}
+
+/**
+ * Решение об опросе сайта: будет ли он и, если нет, почему.
+ *
+ * Чистая функция, а не три условия внутри обработчика: это правило прав, и
+ * проверяется оно юнит-тестом без поднятой базы. Порядок причин значим — «вы
+ * попросили не спрашивать» называется раньше, чем «вам нельзя»: если вызывающий
+ * сам поставил `probe=0`, отказ по роли ему не про что.
+ */
+export function planSiteProbe(input: {
+  readonly requested: boolean;
+  readonly user: { readonly role?: string | null } | null | undefined;
+}): { readonly absence: ProbeAbsence | null; readonly probe: boolean } {
+  if (!input.requested) {
+    return { absence: 'not-requested', probe: false };
+  }
+  if (!isAdmin(input.user)) {
+    return { absence: 'forbidden', probe: false };
+  }
+  return { absence: null, probe: true };
 }
 
 export const seoInventoryEndpoint: Endpoint = {
@@ -161,8 +201,15 @@ export const seoInventoryEndpoint: Endpoint = {
     }
 
     const records = await collectInventoryRecords(req);
-    const probe = shouldProbeSite(req.url ?? '/') ? fetchProbe() : null;
-    const result = await buildInventoryCsv({ probe, records });
+    const plan = planSiteProbe({
+      requested: shouldProbeSite(req.url ?? '/'),
+      user: req.user,
+    });
+    const result = await buildInventoryCsv({
+      probe: plan.probe ? fetchProbe() : null,
+      ...(plan.absence === null ? {} : { probeAbsence: plan.absence }),
+      records,
+    });
 
     for (const warning of result.warnings) {
       req.payload.logger.warn(`[seo-inventory] ${warning}`);

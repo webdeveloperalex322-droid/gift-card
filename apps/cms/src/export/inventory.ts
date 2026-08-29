@@ -117,6 +117,26 @@ export interface SiteObservation {
 export const UNOBSERVED: SiteObservation = { canonical: null, httpStatus: null, inSitemap: null };
 
 /**
+ * Почему сайт не спрашивали. Причины РАЗНЫЕ, и колонки от них не зависят —
+ * зависит объяснение: «вы попросили не спрашивать» и «спрашивать вам нельзя» —
+ * это разные состояния мира, а пустая ячейка в обоих одинаковая.
+ */
+export type ProbeAbsence = 'forbidden' | 'not-requested';
+
+export const PROBE_ABSENCE_NOTES: Readonly<Record<ProbeAbsence, string>> = {
+  forbidden:
+    'Сайт не опрашивался: опрос доступен только роли admin, поэтому колонки ' +
+    '«HTTP-статус», «canonical» и «В sitemap» пусты у ВСЕХ строк. Пустая ячейка означает ' +
+    '«не измерено», а не «страницы нет». Ограничение по роли стоит потому, что каждая ' +
+    `строка отчёта стоит одного запроса CMS к сайту, а строк бывает до ${String(MAX_INVENTORY_ROWS)}: ` +
+    'без ограничения выгрузка была бы способом заставить CMS обойти весь сайт одним ' +
+    'вызовом API.',
+  'not-requested':
+    'Сайт не опрашивался: колонки «HTTP-статус», «canonical» и «В sitemap» пусты. ' +
+    'Пустая ячейка означает «не измерено», а не «страницы нет».',
+};
+
+/**
  * Подпись типа страницы.
  *
  * У подборок берётся из `COLLECTION_NODE_KIND_LABELS` — тех же подписей, что
@@ -209,6 +229,47 @@ export function parseSitemapLocations(xml: string): readonly string[] {
 }
 
 /**
+ * Приводит адрес к абсолютному адресу СВОЕГО origin либо отвергает его.
+ *
+ * Живёт здесь, рядом с {@link SiteProbe}, потому что это правило о том, КУДА
+ * отчётам разрешено ходить, а отчётов два: выгрузка (Э5-05) читает по этому
+ * правилу `<loc>` карты сайта, проверка ссылок (Э5-03) — каждый `href` обхода.
+ * Две копии одного правила означали бы, что один отчёт уже перестал ходить на
+ * чужой хост, а второй ещё ходит; поэтому функция одна, а `link-audit.ts` её
+ * ре-экспортирует для своих читателей.
+ *
+ * `null` возвращается для всего, что нашему origin не принадлежит: пустая
+ * ссылка, якорь на той же странице, `mailto:`/`tel:`/`javascript:`, чужой хост,
+ * неразбираемый адрес. Фрагмент отбрасывается — `#blok` не создаёт другого
+ * адреса; строка запроса СОХРАНЯЕТСЯ: `?page=2` — это другой ответ сервера, и
+ * молча склеивать его с базовым адресом значило бы не заметить ссылку на
+ * неканоническую форму.
+ */
+export function resolveInternalTarget(
+  href: string,
+  pageUrl: string,
+  origin: string,
+): string | null {
+  const raw = href.trim();
+  if (raw === '' || raw.startsWith('#')) {
+    return null;
+  }
+  let url: URL;
+  try {
+    url = new URL(raw, pageUrl);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return null;
+  }
+  if (url.origin !== origin) {
+    return null;
+  }
+  return `${url.origin}${url.pathname}${url.search}`;
+}
+
+/**
  * `href` из `<link rel="canonical">`.
  *
  * Это НАБЛЮДЕНИЕ за нашим же ответом, а не разбор произвольного HTML: порядок
@@ -245,13 +306,20 @@ export interface SitemapReading {
  * остаётся `null`, и колонка «В sitemap» будет пустой у всех строк: сказать
  * «нет» означало бы утверждать, что страницы в карте нет, тогда как известно
  * лишь то, что карту не удалось прочитать.
+ *
+ * Адрес каждого файла карты проходит {@link resolveInternalTarget} — ту же
+ * проверку origin, что и ссылки при обходе. Без неё обещание «выгрузка ходит
+ * только на origin из SITE_URL» держалось бы на ДАННЫХ: сегодня `<loc>` собирает
+ * наш же шаблон из того же `SITE_URL`, но между обещанием и кодом стоял бы файл,
+ * который отдаёт сайт. Находка ревизии от 2026-08-29.
  */
 export async function readSitemapUrls(args: {
   readonly origin: string;
   readonly probe: SiteProbe;
 }): Promise<SitemapReading> {
   const warnings: string[] = [];
-  const indexUrl = `${args.origin}/sitemap.xml`;
+  const origin = args.origin.replace(/\/+$/, '');
+  const indexUrl = `${origin}/sitemap.xml`;
   let indexBody: string;
   let indexStatus: number | null = null;
   try {
@@ -274,7 +342,16 @@ export async function readSitemapUrls(args: {
   }
 
   const urls = new Set<string>();
-  for (const file of parseSitemapLocations(indexBody)) {
+  for (const location of parseSitemapLocations(indexBody)) {
+    const file = resolveInternalTarget(location, indexUrl, origin);
+    if (file === null) {
+      warnings.push(
+        `Файл карты «${location}» не запрошен: он не на origin ${origin}. Выгрузка ходит ` +
+          'только на origin из SITE_URL — иначе она была бы инструментом запросов с сервера ' +
+          'CMS на произвольный хост, а адрес для этого достаточно вписать в карту сайта.',
+      );
+      continue;
+    }
     try {
       const response = await args.probe(file);
       if (response.status !== 200) {
@@ -387,6 +464,8 @@ export interface InventoryCsv {
 export async function buildInventoryCsv(args: {
   readonly env?: SharedEnv;
   readonly probe: SiteProbe | null;
+  /** Почему опроса не было. Значимо только при `probe === null`. */
+  readonly probeAbsence?: ProbeAbsence;
   readonly records: readonly InventoryRecord[];
 }): Promise<InventoryCsv> {
   const warnings: string[] = [];
@@ -414,10 +493,7 @@ export async function buildInventoryCsv(args: {
   const observations = new Map<string, { canonical: string | null; httpStatus: number }>();
 
   if (args.probe === null) {
-    warnings.push(
-      'Сайт не опрашивался: колонки «HTTP-статус», «canonical» и «В sitemap» пусты. ' +
-        'Пустая ячейка означает «не измерено», а не «страницы нет».',
-    );
+    warnings.push(PROBE_ABSENCE_NOTES[args.probeAbsence ?? 'not-requested']);
   } else {
     const origin = resolveSiteOrigin(args.env);
     const sitemap = await readSitemapUrls({ origin, probe: args.probe });
