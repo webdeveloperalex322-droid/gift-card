@@ -37,6 +37,8 @@ const beforeChange = asHook(hooks.beforeChange[0]);
 interface Stand {
   readonly findByIdCalls: string[];
   readonly req: PayloadRequest;
+  /** Условия всех выборок карточек: по ним проверяется КРУГ ПОИСКА. */
+  readonly whereCalls: unknown[];
 }
 
 /** Условие выборки в том виде, в каком его строит хук. */
@@ -80,6 +82,7 @@ function stand(options: {
   readonly user: Doc | null;
 }): Stand {
   const findByIdCalls: string[] = [];
+  const whereCalls: unknown[] = [];
   const req = {
     context: {},
     payload: {
@@ -87,6 +90,7 @@ function stand(options: {
         if (collection !== 'cards') {
           return Promise.resolve({ docs: [] });
         }
+        whereCalls.push(where);
         const cursor = readCursor(where);
         const docs = [...(options.cards ?? [])]
           .filter((doc) => typeof doc.id === 'number' && doc.id > cursor)
@@ -106,7 +110,7 @@ function stand(options: {
     user: options.user,
   } as unknown as PayloadRequest;
 
-  return { findByIdCalls, req };
+  return { findByIdCalls, req, whereCalls };
 }
 
 const ADMIN = { collection: 'users', id: 1, role: 'admin' };
@@ -576,6 +580,52 @@ describe('блокировка перевода в review при похожем 
     })) as Doc;
 
     expect((result.visualDuplicate as Doc).similar).toEqual([{ card: 42, distance: 4 }]);
+  });
+
+  it('решение редактора записывается вместе с автором (DoD Э5-02)', async () => {
+    // «Решение записано» без автора — решение без ответственного: принять его
+    // вправе и сервисный аккаунт, а именно оно пропускает похожую картинку.
+    const { req } = stand({ cards: [similarCard], images: { '100': image }, user: AI_EDITOR });
+
+    const result = (await beforeValidate({
+      data: {
+        image: 100,
+        status: 'review',
+        visualDuplicate: { confirm: true, decision: 'unique' },
+      },
+      operation: 'update',
+      originalDoc: { ...DRAFT_CARD, status: 'draft' },
+      req,
+    })) as Doc;
+
+    const gate = result.visualDuplicate as Doc;
+    expect(gate.decidedBy).toBe(AI_EDITOR.id);
+    expect(typeof gate.decidedAt).toBe('string');
+  });
+
+  it('КРУГ ПОИСКА в самом запросе — published и review, а не один published', async () => {
+    // Проверяется не константа, а условие выборки: сужение круга прямо в
+    // запросе (`status: { equals: "published" }`) при неизменной константе не
+    // валило ни одного теста — замер мутацией 2026-08-29. Похожая карточка,
+    // стоящая в review, тогда переставала находиться молча.
+    const { req, whereCalls } = stand({ cards: [similarCard], images: { '100': image }, user: ADMIN });
+
+    await beforeValidate({
+      data: { image: 100, status: 'draft' },
+      operation: 'update',
+      originalDoc: { ...DRAFT_CARD, status: 'draft' },
+      req,
+    });
+
+    expect(whereCalls.length).toBeGreaterThan(0);
+    const statuses = whereCalls.flatMap((where) => {
+      const clauses = (where as { and?: unknown[] }).and ?? [];
+      return clauses.flatMap((clause) => {
+        const value = (clause as { status?: { in?: unknown } }).status?.in;
+        return Array.isArray(value) ? value.map((item) => String(item)) : [];
+      });
+    });
+    expect([...new Set(statuses)].sort()).toEqual(['published', 'review']);
   });
 
   it('своя же запись похожей не считается', async () => {

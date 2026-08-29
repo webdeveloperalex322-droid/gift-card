@@ -48,6 +48,7 @@ import type {
 
 import { canReplaceImage } from '../access/policies';
 import { rethrow } from '../collections/content-hooks';
+import { describeHistoryAuthor, readAuthorUserId } from '../collections/seo-history-diff';
 import { ContentRuleError, readRelationId } from '../collections/status-model';
 import {
   type CardId,
@@ -357,6 +358,13 @@ function mirrorImageAndGuardDuplicates(
     next.visualDuplicate = {
       ...gate,
       decidedAt: confirmed ? new Date().toISOString() : (storedGate.decidedAt ?? null),
+      // Автор решения пишется тем же приёмом и той же функцией, что автор записи
+      // в `seo-history`: решение «уникально» у визуального дубля вправе принять и
+      // сервисный аккаунт, и без автора оно осталось бы решением без
+      // ответственного (DoD Э5-02 — «решение записано и прослеживается»).
+      decidedBy: confirmed
+        ? readAuthorUserId(describeHistoryAuthor(req.user).userId)
+        : (storedGate.decidedBy ?? null),
       decision,
       decisionFor,
       // Полнота проверки — часть её результата: без этих двух полей «похожих не

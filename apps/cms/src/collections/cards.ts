@@ -242,6 +242,24 @@ const cardFields: Field[] = [
         admin: { description: 'Когда решение подтверждено.', readOnly: true },
       },
       {
+        name: 'decidedBy',
+        type: 'relationship',
+        relationTo: 'users',
+        access: {
+          create: systemFieldAccess,
+          update: systemFieldAccess,
+        },
+        admin: {
+          description:
+            'Кто принял решение о похожих. Записывается потому, что принять его вправе и ' +
+            'сервисный аккаунт ai-editor — перевод draft → review его штатное действие ' +
+            '(ТЗ §9). DoD Э5-02 требует, чтобы решение было не только записано, но и ' +
+            'прослеживаемо: без автора «уникально» у визуального дубля остаётся решением ' +
+            'без ответственного.',
+          readOnly: true,
+        },
+      },
+      {
         name: 'scanned',
         type: 'number',
         access: {

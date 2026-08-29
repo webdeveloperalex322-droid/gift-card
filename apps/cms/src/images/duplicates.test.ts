@@ -10,7 +10,9 @@
  *   - решение редактора привязано к ОТПЕЧАТКУ найденного набора: подтверждение,
  *     выданное для прежнего изображения, не открывает дорогу новому.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { DEFAULT_PHASH_DISTANCE_THRESHOLD } from '@otkritka/images';
 
 import { ContentRuleError } from '../collections/status-model';
 import {
@@ -68,6 +70,56 @@ describe('круг поиска похожих', () => {
       threshold: 14,
     });
     expect(matches.map((match) => match.id)).toEqual([3]);
+  });
+});
+
+/**
+ * Порог — параметр окружения (Ч-08, значение 14), а не число в коде.
+ *
+ * Проверка появилась по замеру мутацией 2026-08-29: если зашить порог числом
+ * прямо в `findSimilarCards`, набор `apps/cms` + `packages` остаётся полностью
+ * зелёным. То есть связь «настройка → круг похожих» держалась ни на чём:
+ * `PHASH_DISTANCE_THRESHOLD` мог перестать действовать целиком и незаметно.
+ * Тесты `packages/images` проверяют разбор значения, но не то, что CMS его
+ * СПРАШИВАЕТ.
+ *
+ * Мутация окружения здесь — не удобство, а единственный способ проверить путь в
+ * том виде, в каком он работает в проде: прежнее значение сохраняется и
+ * возвращается, а подозрение на утечку окружения между тестовыми файлами было
+ * снято замером на этапе 4 (см. `../collections/content-hooks.test.ts`).
+ */
+describe('порог похожести берётся из окружения', () => {
+  const KEY = 'PHASH_DISTANCE_THRESHOLD';
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env[KEY];
+  });
+
+  afterEach(() => {
+    if (saved === undefined) {
+      delete process.env[KEY];
+    } else {
+      process.env[KEY] = saved;
+    }
+  });
+
+  it('без явного порога действует значение переменной, а не число в коде', () => {
+    const candidates = [{ hash: NEAR, id: 2 }];
+
+    process.env[KEY] = '2';
+    expect(findSimilarCards({ candidates, hash: HASH })).toEqual([]);
+
+    process.env[KEY] = '14';
+    expect(findSimilarCards({ candidates, hash: HASH }).map((match) => match.id)).toEqual([2]);
+  });
+
+  it('без переменной действует утверждённое значение Ч-08 — 14', () => {
+    delete process.env[KEY];
+    expect(DEFAULT_PHASH_DISTANCE_THRESHOLD).toBe(14);
+    // Расстояние 4 попадает в порог 14, расстояние 64 — нет.
+    expect(findSimilarCards({ candidates: [{ hash: NEAR, id: 2 }], hash: HASH })).toHaveLength(1);
+    expect(findSimilarCards({ candidates: [{ hash: FAR, id: 3 }], hash: HASH })).toHaveLength(0);
   });
 });
 
