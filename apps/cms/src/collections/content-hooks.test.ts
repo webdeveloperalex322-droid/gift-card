@@ -192,6 +192,16 @@ interface Harness {
     data: Doc,
     user: unknown,
   ) => Promise<{ readonly errors: readonly string[]; readonly updated: readonly Doc[] }>;
+  /**
+   * Удаление в том виде, в каком его видит защита: одна фаза `beforeOperation`.
+   *
+   * `args` передаётся буквально — с `id` для поштучного удаления и с `where` для
+   * удаления по условию. Payload 3.88 зовёт хук с одной строкой `'delete'` в
+   * обоих случаях (`collections/operations/delete.js`, `deleteByID.js`), и
+   * различать их можно только по аргументам; стенд повторяет это буквально,
+   * иначе он проверял бы поведение, которого нет.
+   */
+  readonly runDelete: (slug: string, args: Doc, user: unknown) => Promise<void>;
   readonly seed: (slug: string, doc: Doc) => Doc;
   readonly update: (slug: string, id: number, data: Doc, user: unknown) => Promise<Doc>;
   readonly warnings: readonly string[];
@@ -365,6 +375,21 @@ function createHarness(): Harness {
         }
       }
       return { errors, updated };
+    },
+    runDelete: async (slug, args, user) => {
+      const config = CONFIGS[slug];
+      if (config === undefined) {
+        throw new Error(`Коллекция «${slug}» в стенде не объявлена`);
+      }
+      for (const hook of hooksOf(config, 'beforeOperation')) {
+        await asHook(hook)({
+          args,
+          collection: config,
+          context: {},
+          operation: 'delete',
+          req: requestFor(user),
+        });
+      }
     },
     seed: (slug, doc) => {
       const id = typeof doc.id === 'number' ? doc.id : nextId++;
@@ -2102,5 +2127,173 @@ describe('Э5-01: дубли метатегов', () => {
     expect(saved.metaDescriptionKey).toBe(
       normalizeMetaValue(completeCard('otkrytka-8-marta').metaDescription),
     );
+  });
+
+  /**
+   * Уникальность метатегов на КАЛИТКЕ ИНДЕКСАЦИИ (добор по ревизии 2026-08-29).
+   *
+   * Здесь важна именно проводка: у уже опубликованной записи включение
+   * `index,follow` не меняет ни статуса, ни метатегов, поэтому калитка перехода
+   * не срабатывает вовсе, а условие п. 5.1 «уникальные title/H1/вводный текст»
+   * применяется ровно в этот момент.
+   */
+  describe('открытие в index,follow при совпадении метатегов', () => {
+    const conflictingPublishedCard = (harness: Harness): void => {
+      seedRivalNode(harness);
+      harness.seed('cards', {
+        ...publishedCard('otkrytka-8-marta', 5),
+        title: CONFLICTING_TITLE,
+        titleKey: CONFLICTING_TITLE.toLowerCase(),
+      });
+    };
+
+    it('отклоняется, и запись остаётся noindex', async () => {
+      const harness = createHarness();
+      conflictingPublishedCard(harness);
+
+      await expectApiRule(
+        () => harness.update('cards', 5, { robots: 'index,follow' }, admin),
+        'index-requires-unique-meta',
+      );
+      expect(harness.docs('cards').find((doc) => doc.id === 5)?.robots).toBe('noindex,follow');
+    });
+
+    it('подтверждение в том же сохранении открывает: решает человек', async () => {
+      const harness = createHarness();
+      conflictingPublishedCard(harness);
+
+      const opened = await harness.update(
+        'cards',
+        5,
+        { metaConflict: { confirm: true }, robots: 'index,follow' },
+        admin,
+      );
+      expect(opened.robots).toBe('index,follow');
+    });
+
+    it('виза из записи калитку индексации не открывает', async () => {
+      // Подтверждение могло быть выдано на переходе draft → review, и выдать его
+      // мог сервисный аккаунт. Открытие страницы в индекс — отдельное решение
+      // администратора, и совпадение заголовков он обязан увидеть сам.
+      const harness = createHarness();
+      conflictingPublishedCard(harness);
+      // Сохранение с подтверждением: отпечаток набора ложится в запись.
+      await harness.update('cards', 5, { metaConflict: { confirm: true } }, admin);
+
+      await expectApiRule(
+        () => harness.update('cards', 5, { robots: 'index,follow' }, admin),
+        'index-requires-unique-meta',
+      );
+    });
+
+    it('без совпадений индексация открывается как раньше', async () => {
+      const harness = createHarness();
+      harness.seed('cards', publishedCard('otkrytka-8-marta', 5));
+
+      const opened = await harness.update('cards', 5, { robots: 'index,follow' }, admin);
+      expect(opened.robots).toBe('index,follow');
+    });
+
+    it('сохранение уже индексируемой записи калитку не трогает', async () => {
+      // Директива не меняется этой операцией — значит и решения об индексации
+      // здесь никто не принимает. Иначе любая правка живой страницы падала бы.
+      const harness = createHarness();
+      seedRivalNode(harness);
+      harness.seed('cards', {
+        ...publishedCard('otkrytka-8-marta', 5),
+        robots: 'index,follow',
+        title: CONFLICTING_TITLE,
+        titleKey: CONFLICTING_TITLE.toLowerCase(),
+      });
+
+      const saved = await harness.update('cards', 5, { caption: 'Другая подпись' }, admin);
+      expect(saved.robots).toBe('index,follow');
+    });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Массовое удаление опубликованных (добор по ревизии 2026-08-29)      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Пакетный гейт стоял только на `update` по `where`; `delete` по `where` не был
+ * закрыт ничем — `beforeDelete` есть лишь у подборок и ловит вложенные узлы.
+ * Значит, одной операцией удалялась выборка опубликованных карточек без решения
+ * «301 или 404» по каждому адресу — того самого, которого требует
+ * `bulk-withdrawal-forbidden` при обычном снятии с публикации.
+ */
+describe('удаление выборки: опубликованные записи не удаляются пакетом', () => {
+  it('выборка с опубликованной записью отклоняется даже у admin', async () => {
+    const harness = createHarness();
+    harness.seed('cards', publishedCard('opublikovannaya', 5));
+    harness.seed('cards', { ...completeCard('chernovik'), id: 6, status: 'draft' });
+
+    await expectApiRule(
+      () => harness.runDelete('cards', { where: { id: { in: [5, 6] } } }, admin),
+      'bulk-delete-published-forbidden',
+    );
+  });
+
+  it('фильтр «все опубликованные» отклоняется тем же правилом', async () => {
+    const harness = createHarness();
+    harness.seed('cards', publishedCard('opublikovannaya', 5));
+
+    await expectApiRule(
+      () => harness.runDelete('cards', { where: { status: { equals: 'published' } } }, admin),
+      'bulk-delete-published-forbidden',
+    );
+  });
+
+  it('то же правило действует и для подборок', async () => {
+    const harness = createHarness();
+    harness.seed('collections', {
+      id: 90,
+      nodeKind: 'occasion',
+      path: '/podborki/prazdniki/8-marta',
+      publishedAt: '2026-01-10T00:00:00.000Z',
+      robots: 'noindex,follow',
+      slug: '8-marta',
+      status: 'published',
+      title: 'Открытки на 8 Марта',
+    });
+
+    await expectApiRule(
+      () => harness.runDelete('collections', { where: { id: { in: [90] } } }, admin),
+      'bulk-delete-published-forbidden',
+    );
+  });
+
+  it('выборка из одних черновиков удаляется: публичного URL у них не было', async () => {
+    const harness = createHarness();
+    harness.seed('cards', { ...completeCard('chernovik-odin'), id: 5, status: 'draft' });
+    harness.seed('cards', { ...completeCard('chernovik-dva'), id: 6, status: 'review' });
+
+    await expect(
+      harness.runDelete('cards', { where: { id: { in: [5, 6] } } }, admin),
+    ).resolves.toBeUndefined();
+  });
+
+  it('условие неизвестной формы трактуется как «вся коллекция», а не как пустое', async () => {
+    // Иначе мусорный `where` был бы способом обойти проверку: считать нечего —
+    // значит и запрещать нечего.
+    const harness = createHarness();
+    harness.seed('cards', publishedCard('opublikovannaya', 5));
+
+    await expectApiRule(
+      () => harness.runDelete('cards', { where: 'вообще не условие' }, admin),
+      'bulk-delete-published-forbidden',
+    );
+  });
+
+  it('поштучное удаление опубликованной записи правилом НЕ закрыто', async () => {
+    // Осознанно оставленный пробел, а не недосмотр: у удаления записи нет места,
+    // куда писать решение о судьбе URL (`withdrawal` живёт в самой записи).
+    // Заведено строкой Э5-08-A в docs/otkrytye-voprosy.md; тест фиксирует
+    // ГРАНИЦУ правила, чтобы её нельзя было расширить или сузить молча.
+    const harness = createHarness();
+    harness.seed('cards', publishedCard('opublikovannaya', 5));
+
+    await expect(harness.runDelete('cards', { id: 5 }, admin)).resolves.toBeUndefined();
   });
 });

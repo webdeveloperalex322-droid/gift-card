@@ -6,6 +6,7 @@ import type {
   Field,
   PayloadRequest,
   TypeWithID,
+  Where,
 } from 'payload';
 import { APIError } from 'payload';
 
@@ -13,6 +14,7 @@ import { findYearInSlug } from '@otkritka/shared';
 
 import { hasBeenPublished } from '../access/policies';
 import { contentDocumentPath, yearInPathRefusal } from '../seo/paths';
+import { isIndexableRobots } from '../seo/robots';
 import { markBulkUpdate } from './card-collections';
 import {
   type MetaConflict,
@@ -22,6 +24,7 @@ import {
   MAX_LISTED_META_CONFLICTS,
   META_DUPLICATE_SEARCH_STATUSES,
   assertMetaConflictResolved,
+  assertMetaUniqueForIndex,
   describeMetaConflicts,
   metaConflictFingerprint,
   normalizeMetaValue,
@@ -33,6 +36,7 @@ import {
   type ContentRuleCode,
   type ReviewRequirement,
   assertBulkChangeAllowed,
+  assertBulkDeleteAllowed,
   assertCreateStatus,
   assertDescriptionForIndex,
   assertIncomingChangeAllowed,
@@ -108,6 +112,7 @@ export interface ContentHooksOptions {
 
 /** Отказы по правам отдаются как 403, отказы по данным — как 400. */
 const FORBIDDEN_RULES: ReadonlySet<ContentRuleCode> = new Set<ContentRuleCode>([
+  'bulk-delete-published-forbidden',
   'bulk-requires-admin',
   'bulk-requires-explicit-selection',
   'bulk-too-large',
@@ -205,6 +210,18 @@ function readOperationId(value: unknown): number | string | null {
 }
 
 /**
+ * Условие выборки из аргументов операции — или `null`, если его нет.
+ *
+ * `null` НЕ означает «пустая выборка»: он означает «условие неизвестно», и
+ * вызывающий обязан трактовать это как самый широкий случай. Разница важна: у
+ * пакетного удаления неизвестное условие должно считаться «может задеть всё»,
+ * а не «не задевает ничего».
+ */
+function readOperationWhere(value: unknown): Where | null {
+  return typeof value === 'object' && value !== null ? { ...value } : null;
+}
+
+/**
  * Громкий отказ на запрещённую попытку — на СЫРЫХ данных запроса.
  *
  * Здесь же разделяются одиночная и пакетная операции, и различаются они по
@@ -217,6 +234,12 @@ function readOperationId(value: unknown): number | string | null {
  * операцией, а значит любая публикация поштучно была бы отклонена как «массовая
  * по фильтру». Надёжный признак — наличие `id` (одна запись) против `where`
  * (выборка).
+ *
+ * По тому же признаку разбирается и УДАЛЕНИЕ: `deleteByID` и `delete` по `where`
+ * тоже приходят сюда с одной строкой `'delete'` (проверено по исходникам,
+ * `collections/operations/delete.js` и `deleteByID.js`). Удаление выборки, в
+ * которой есть опубликованные записи, отклоняется целиком — разбор в
+ * `assertBulkDeleteAllowed`.
  */
 function guardIncomingOperation(options: ContentHooksOptions) {
   return async (input: BeforeOperationArgs): Promise<void> => {
@@ -231,6 +254,34 @@ function guardIncomingOperation(options: ContentHooksOptions) {
           stored: null,
           user: req.user,
         });
+      } catch (error) {
+        rethrow(error);
+      }
+      return;
+    }
+
+    if (operation === 'delete') {
+      if (readOperationId(args.id) !== null) {
+        // Удаление ОДНОЙ записи. Пакетным оно не является, и правило пакета к
+        // нему не применяется — см. `assertBulkDeleteAllowed` и названный там
+        // пробел Э5-08-A.
+        return;
+      }
+      // Удаление по условию. Считаем ОПУБЛИКОВАННЫЕ записи, которых оно
+      // коснётся; неизвестное условие трактуется как «вся коллекция» — иначе
+      // мусорный `where` был бы способом обойти проверку.
+      const scope = readOperationWhere(args.where);
+      const published = await req.payload.count({
+        collection: options.collectionSlug,
+        overrideAccess: true,
+        req,
+        where:
+          scope === null
+            ? { status: { equals: 'published' } }
+            : { and: [scope, { status: { equals: 'published' } }] },
+      });
+      try {
+        assertBulkDeleteAllowed({ publishedInSelection: published.totalDocs });
       } catch (error) {
         rethrow(error);
       }
@@ -597,9 +648,15 @@ async function findMetaConflicts(args: {
  *      этом проходит: ТЗ требует предупредить, а не отказать. Строка в журнале
  *      добавляется рядом, но самостоятельным каналом не является: внешний
  *      AI-редактор журнала не видит;
- *   2. КАЛИТКА. Перевод вперёд по статусам при неразрешённом совпадении
+ *   2. КАЛИТКА ПЕРЕХОДА. Перевод вперёд по статусам при неразрешённом совпадении
  *      отклоняется (`assertMetaConflictResolved`) — там же разобрано, почему это
- *      отказ, а не второе предупреждение.
+ *      отказ, а не второе предупреждение, и почему подтверждение, выданное на
+ *      переходе в `review`, не переносится на публикацию;
+ *   3. КАЛИТКА ИНДЕКСАЦИИ. Включение `index,follow` при совпадении отклоняется
+ *      (`assertMetaUniqueForIndex`). Это ОТДЕЛЬНЫЙ момент: у уже опубликованной
+ *      записи ни статус, ни метатеги не меняются, поэтому калитка перехода на
+ *      нём не срабатывает вовсе — а условие п. 5.1 «уникальные title/H1/вводный
+ *      текст» применяется именно здесь.
  *
  * Нормализованные ключи пишутся ВСЕГДА, даже когда конфликтов нет: по ним
  * работает и сам поиск, и будущий дашборд (Э5-04), которому иначе пришлось бы
@@ -622,6 +679,7 @@ function checkMetaDuplicates(
 
     const titleKey = normalizeMetaValue(pick(TITLE_FIELD));
     const descriptionKey = normalizeMetaValue(pick(META_DESCRIPTION_FIELD));
+    const nextRobots = pick('robots');
 
     const facts = await findMetaConflicts({
       descriptionKey,
@@ -685,6 +743,7 @@ function checkMetaDuplicates(
       assertMetaConflictResolved({
         conflicts: facts.conflicts,
         confirmedFor,
+        confirmedNow: confirmed,
         fingerprint,
         metaChanged:
           operation === 'update' &&
@@ -692,6 +751,20 @@ function checkMetaDuplicates(
             descriptionKey !== normalizeMetaValue(previous[META_DESCRIPTION_FIELD])),
         nextStatus: 'status' in next ? next.status : previous.status,
         previousStatus: previous.status,
+      });
+
+      // Директива читается ИТОГОВАЯ: `enforceContentRules` стоит раньше в той же
+      // фазе и уже подставил `plan.robots` в данные, поэтому здесь видно то, что
+      // будет записано, а не то, что прислали. Порядок хуков зафиксирован в
+      // `contentHooks` и значим — см. комментарий там.
+      assertMetaUniqueForIndex({
+        conflicts: facts.conflicts,
+        confirmedNow: confirmed,
+        indexOpening:
+          operation === 'update' &&
+          isIndexableRobots(nextRobots) &&
+          nextRobots !== previous.robots,
+        path: options.pathOf(next) ?? options.pathOf(previous),
       });
     } catch (error) {
       rethrow(error);

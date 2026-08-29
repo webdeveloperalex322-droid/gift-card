@@ -21,6 +21,7 @@ import {
   META_DUPLICATE_FIELDS,
   META_DUPLICATE_SEARCH_STATUSES,
   assertMetaConflictResolved,
+  assertMetaUniqueForIndex,
   describeMetaConflicts,
   metaConflictFingerprint,
   normalizeMetaValue,
@@ -143,6 +144,7 @@ describe('перевод в review при неразрешённом конфл�
       assertMetaConflictResolved({
         conflicts: [],
         confirmedFor: null,
+        confirmedNow: false,
         fingerprint: fingerprintOf([]),
         metaChanged: true,
         nextStatus: 'review',
@@ -156,6 +158,7 @@ describe('перевод в review при неразрешённом конфл�
       assertMetaConflictResolved({
         conflicts,
         confirmedFor: null,
+        confirmedNow: false,
         fingerprint,
         metaChanged: false,
         nextStatus: 'review',
@@ -175,6 +178,7 @@ describe('перевод в review при неразрешённом конфл�
       assertMetaConflictResolved({
         conflicts,
         confirmedFor: null,
+        confirmedNow: false,
         fingerprint,
         metaChanged: false,
         nextStatus: 'published',
@@ -188,10 +192,72 @@ describe('перевод в review при неразрешённом конфл�
       assertMetaConflictResolved({
         conflicts,
         confirmedFor: fingerprint,
+        confirmedNow: false,
         fingerprint,
         metaChanged: false,
         nextStatus: 'review',
         previousStatus: 'draft',
+      }),
+    ).not.toThrow();
+  });
+
+  /**
+   * Находка ревизии от 2026-08-29.
+   *
+   * Сценарий целиком: `ai-editor` подтвердил совпадение на переходе
+   * `draft → review`; набор конфликтующих страниц с тех пор не изменился, значит
+   * отпечаток совпадает; публикацию делает уже `admin` — и она проходила молча.
+   * Прежний тест «review → published тоже закрыт» этот путь не ловил: он подавал
+   * `confirmedFor: null`, то есть проверял случай, когда визы НЕТ, а не случай,
+   * когда виза унаследована.
+   */
+  it('виза, выданная на прежнем переходе, не переносится на публикацию', () => {
+    try {
+      assertMetaConflictResolved({
+        conflicts,
+        confirmedFor: fingerprint,
+        confirmedNow: false,
+        fingerprint,
+        metaChanged: false,
+        nextStatus: 'published',
+        previousStatus: 'review',
+      });
+      throw new Error('публикация прошла по унаследованному подтверждению');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ContentRuleError);
+      expect((error as ContentRuleError).rule).toBe('meta-duplicate-unresolved');
+      // Отказ обязан объяснить, что дело не в устаревшей визе, а в чужой.
+      expect((error as ContentRuleError).message).toMatch(/раньше и другим переходом/i);
+      expect((error as ContentRuleError).message).not.toMatch(/устарел/i);
+    }
+  });
+
+  it('подтверждение В ТОМ ЖЕ сохранении публикацию открывает', () => {
+    expect(() =>
+      assertMetaConflictResolved({
+        conflicts,
+        confirmedFor: fingerprint,
+        confirmedNow: true,
+        fingerprint,
+        metaChanged: false,
+        nextStatus: 'published',
+        previousStatus: 'review',
+      }),
+    ).not.toThrow();
+  });
+
+  it('на переход в review унаследованной визы по-прежнему достаточно', () => {
+    // Иначе штатный путь агента (подтвердил и сохранил) требовал бы повторного
+    // подтверждения на каждое следующее сохранение черновика.
+    expect(() =>
+      assertMetaConflictResolved({
+        conflicts,
+        confirmedFor: fingerprint,
+        confirmedNow: false,
+        fingerprint,
+        metaChanged: true,
+        nextStatus: 'review',
+        previousStatus: 'review',
       }),
     ).not.toThrow();
   });
@@ -201,6 +267,7 @@ describe('перевод в review при неразрешённом конфл�
       assertMetaConflictResolved({
         conflicts,
         confirmedFor: fingerprintOf([NODE_CONFLICT]),
+        confirmedNow: false,
         fingerprint,
         metaChanged: false,
         nextStatus: 'review',
@@ -214,6 +281,7 @@ describe('перевод в review при неразрешённом конфл�
       assertMetaConflictResolved({
         conflicts,
         confirmedFor: null,
+        confirmedNow: false,
         fingerprint,
         metaChanged: true,
         nextStatus: 'draft',
@@ -227,6 +295,7 @@ describe('перевод в review при неразрешённом конфл�
       assertMetaConflictResolved({
         conflicts,
         confirmedFor: null,
+        confirmedNow: false,
         fingerprint,
         metaChanged: true,
         nextStatus: 'draft',
@@ -252,6 +321,7 @@ describe('правка метатега у записи, которая уже �
       assertMetaConflictResolved({
         conflicts,
         confirmedFor: null,
+        confirmedNow: false,
         fingerprint,
         metaChanged: true,
         nextStatus: 'published',
@@ -267,12 +337,99 @@ describe('правка метатега у записи, которая уже �
       assertMetaConflictResolved({
         conflicts,
         confirmedFor: null,
+        confirmedNow: false,
         fingerprint,
         metaChanged: false,
         nextStatus: 'published',
         previousStatus: 'published',
       }),
     ).not.toThrow();
+  });
+});
+
+/**
+ * Уникальность метатегов как условие ИНДЕКСАЦИИ (п. 5.1, чек-лист п. 22).
+ *
+ * Находка ревизии от 2026-08-29: включение `index,follow` у уже опубликованной
+ * записи не меняет ни статуса, ни метатегов, поэтому калитка перехода на нём не
+ * срабатывала вовсе — механика уникальности была построена, но к решению об
+ * индексации не подключена.
+ */
+describe('открытие в index,follow при совпадении метатегов', () => {
+  const conflicts = [CARD_CONFLICT];
+
+  it('отклоняется, и отказ называет и страницу, и конфликтующую', () => {
+    try {
+      assertMetaUniqueForIndex({
+        conflicts,
+        confirmedNow: false,
+        indexOpening: true,
+        path: '/podborki/prazdniki/8-marta',
+      });
+      throw new Error('индексация открылась при совпадении заголовков');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ContentRuleError);
+      expect((error as ContentRuleError).rule).toBe('index-requires-unique-meta');
+      expect((error as ContentRuleError).message).toContain('/podborki/prazdniki/8-marta');
+      expect((error as ContentRuleError).message).toContain('/otkrytki/otkrytka-mame');
+    }
+  });
+
+  it('совпадение по description закрывает индексацию так же, как по title', () => {
+    // Оба поля — отдельные пункты чек-листа приёмки п. 22; блокировать только
+    // заголовок значило бы отдать description приёмке, где он стоит дороже.
+    expect(() =>
+      assertMetaUniqueForIndex({
+        conflicts: [NODE_CONFLICT],
+        confirmedNow: false,
+        indexOpening: true,
+        path: '/otkrytki/otkrytka-mame',
+      }),
+    ).toThrow(ContentRuleError);
+  });
+
+  it('без совпадений и без открытия индексации калитка молчит', () => {
+    expect(() =>
+      assertMetaUniqueForIndex({
+        conflicts: [],
+        confirmedNow: false,
+        indexOpening: true,
+        path: '/otkrytki/otkrytka-mame',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertMetaUniqueForIndex({
+        conflicts,
+        confirmedNow: false,
+        indexOpening: false,
+        path: '/otkrytki/otkrytka-mame',
+      }),
+    ).not.toThrow();
+  });
+
+  it('явное подтверждение в том же сохранении открывает: решает человек', () => {
+    expect(() =>
+      assertMetaUniqueForIndex({
+        conflicts,
+        confirmedNow: true,
+        indexOpening: true,
+        path: '/otkrytki/otkrytka-mame',
+      }),
+    ).not.toThrow();
+  });
+
+  it('унаследованного подтверждения мало: параметра «виза из записи» здесь нет', () => {
+    // Калитка принимает только `confirmedNow`. Это не упущение: индексацию
+    // открывает admin отдельным действием, и решение по совпадению — часть
+    // именно этого действия.
+    expect(() =>
+      assertMetaUniqueForIndex({
+        conflicts,
+        confirmedNow: false,
+        indexOpening: true,
+        path: null,
+      }),
+    ).toThrow(ContentRuleError);
   });
 });
 
