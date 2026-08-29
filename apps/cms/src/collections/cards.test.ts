@@ -186,6 +186,42 @@ describe('cards: служебные поля не пишутся снаружи'
     expect(access?.update).toBe(systemFieldAccess);
   });
 
+  it('снимок дублей метатегов и виза закрыты от записи снаружи (Э5-01)', () => {
+    // Открытые на запись, они означали бы, что калитка снимается самим
+    // запросом: клиент прислал бы «конфликтов нет» и отпечаток чужого набора —
+    // и перевод в review прошёл бы без единой проверки.
+    const group = findField(Cards.fields, 'metaConflict');
+    for (const name of [
+      'checkedAt',
+      'conflicts',
+      'confirmedAt',
+      'confirmedBy',
+      'confirmedFor',
+      'total',
+      'truncated',
+    ]) {
+      const field = findField(subFields(group), name);
+      const access = 'access' in field ? field.access : undefined;
+      expect(access?.create, `metaConflict.${name}.create`).toBe(systemFieldAccess);
+      expect(access?.update, `metaConflict.${name}.update`).toBe(systemFieldAccess);
+    }
+  });
+
+  it('подтверждение конфликта доступно обеим ролям, а нормализованные ключи — никому', () => {
+    // Подтверждать вправе и `ai-editor`: перевод draft → review — его штатное
+    // действие (ТЗ §9), и запретить ему подтверждение значило бы запретить
+    // сам переход. Прослеживаемость даёт не запрет, а поле `confirmedBy`.
+    const confirm = findField(subFields(findField(Cards.fields, 'metaConflict')), 'confirm');
+    expect('access' in confirm ? confirm.access : undefined).toBeUndefined();
+
+    for (const name of ['titleKey', 'metaDescriptionKey']) {
+      const field = findField(Cards.fields, name);
+      const access = 'access' in field ? field.access : undefined;
+      expect(access?.create, `${name}.create`).toBe(systemFieldAccess);
+      expect(access?.update, `${name}.update`).toBe(systemFieldAccess);
+    }
+  });
+
   it('systemFieldAccess отказывает обеим ролям, а не только сервисному аккаунту', () => {
     // Формальная опора предыдущего теста: «закрыто» означает отказ и админу
     // тоже. Значение ставит сервер; ручная правка ключа производной означала бы

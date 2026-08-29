@@ -23,7 +23,7 @@ import {
 import { ROLES, type RoledUser } from '../access/roles';
 import type { Collection } from '../payload-types';
 import { publicRichTextEditor, publicRichTextHooks } from '../editor/public-rich-text';
-import { COLLECTION_PATH_PREFIX } from '../seo/paths';
+import { COLLECTION_PATH_PREFIX, contentDocumentPath } from '../seo/paths';
 import { isIndexableRobots, isRobotsDirective } from '../seo/robots';
 import {
   ALLOWED_PARENT_KINDS,
@@ -45,7 +45,9 @@ import { collectFieldNames, contentHooks, rethrow } from './content-hooks';
 import {
   canonicalField,
   headingField,
+  metaConflictField,
   metaDescriptionField,
+  metaDuplicateKeyFields,
   publishedAtField,
   robotsField,
   slugField,
@@ -711,6 +713,8 @@ const collectionFields: Field[] = [
   updatedContentAtField(),
   withdrawalField(),
   urlChangeField(),
+  ...metaDuplicateKeyFields(),
+  metaConflictField(),
   {
     name: 'responsibleEditor',
     type: 'relationship',
@@ -807,7 +811,10 @@ const collectionFields: Field[] = [
 const collectionContentHooks = contentHooks({
   collectionSlug: 'collections',
   knownFields: collectFieldNames(collectionFields),
-  pathOf: (doc) => (typeof doc.path === 'string' && doc.path !== '' ? doc.path : null),
+  // Вывод адреса из документа — в `../seo/paths`, одним местом на обе
+  // коллекции: проверка дублей метатегов (Э5-01) называет редактору путь чужой
+  // страницы, и вторая копия правила разошлась бы с этой молча.
+  pathOf: (doc) => contentDocumentPath('collections', doc),
   reviewRequirements: COLLECTION_REVIEW_REQUIREMENTS,
 });
 

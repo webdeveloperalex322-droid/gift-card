@@ -9,12 +9,14 @@ import {
 } from '../access/policies';
 import { cardImageHooks } from '../images/card-image-hooks';
 import { imageVariantFields } from '../images/image-mirror';
-import { CARD_PATH_PREFIX, buildCardPath } from '../seo/paths';
+import { CARD_PATH_PREFIX, contentDocumentPath } from '../seo/paths';
 import { collectFieldNames, contentHooks } from './content-hooks';
 import {
   canonicalField,
   headingField,
+  metaConflictField,
   metaDescriptionField,
+  metaDuplicateKeyFields,
   publishedAtField,
   robotsField,
   slugField,
@@ -160,6 +162,8 @@ const cardFields: Field[] = [
   updatedContentAtField(),
   withdrawalField(),
   urlChangeField(),
+  ...metaDuplicateKeyFields(),
+  metaConflictField(),
   {
     name: 'visualDuplicate',
     type: 'group',
@@ -418,8 +422,10 @@ function cardHooks(): NonNullable<CollectionConfig['hooks']> {
     knownFields: collectFieldNames(cardFields),
     // Канонический URL карточки — /otkrytki/<slug>, один навсегда: путь не
     // хранится, потому что выводится из slug однозначно и другого источника у
-    // него нет.
-    pathOf: (doc) => (typeof doc.slug === 'string' && doc.slug !== '' ? buildCardPath(doc.slug) : null),
+    // него нет. Само выведение живёт в `../seo/paths` — проверка дублей
+    // метатегов (Э5-01) называет редактору адрес ЧУЖОЙ страницы, и второй копии
+    // этого правила быть не должно.
+    pathOf: (doc) => contentDocumentPath('cards', doc),
     reviewRequirements: CARD_REVIEW_REQUIREMENTS,
   });
   const image = cardImageHooks();

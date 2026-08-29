@@ -12,7 +12,19 @@ import { APIError } from 'payload';
 import { findYearInSlug } from '@otkritka/shared';
 
 import { hasBeenPublished } from '../access/policies';
-import { yearInPathRefusal } from '../seo/paths';
+import { contentDocumentPath, yearInPathRefusal } from '../seo/paths';
+import {
+  type MetaConflict,
+  type MetaConflictFacts,
+  type MetaDocumentCollection,
+  type MetaDuplicateField,
+  MAX_LISTED_META_CONFLICTS,
+  META_DUPLICATE_SEARCH_STATUSES,
+  assertMetaConflictResolved,
+  describeMetaConflicts,
+  metaConflictFingerprint,
+  normalizeMetaValue,
+} from './meta-duplicates';
 import { ensureSingleRedirect, releaseRedirectsFrom } from './redirect-sync';
 import { describeHistoryAuthor, diffSeoFields, readAuthorUserId } from './seo-history-diff';
 import {
@@ -160,6 +172,9 @@ function asRecord(value: unknown): Record<string, unknown> {
  * пропустило бы запись молча.
  */
 const META_DESCRIPTION_FIELD = 'metaDescription';
+
+/** Имя поля заголовка. Та же причина, что у {@link META_DESCRIPTION_FIELD}. */
+const TITLE_FIELD = 'title';
 
 /** Поля, из-за которых стоит читать документ в `beforeOperation`. */
 const CONTESTED_FIELDS = ['status', 'robots', 'slug', 'parent', 'nodeKind', 'urlChange'] as const;
@@ -407,6 +422,279 @@ function enforceContentRules(
   };
 }
 
+/* ------------------------------------------------------------------ */
+/* Дубли метатегов (задача Э5-01, ТЗ §8.3.1)                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Коллекции, по которым идёт поиск совпадений: ОБЕ контентные, всегда.
+ *
+ * Пространства имён карточек и подборок разведены, но title и description — это
+ * выдача поисковика, а не путь: одинаковый заголовок у карточки и у подборки
+ * конкурирует в выдаче ровно так же, как у двух карточек. Поиск «внутри своей
+ * коллекции» пропускал бы половину случаев, причём молча.
+ */
+const META_DUPLICATE_COLLECTIONS: readonly MetaDocumentCollection[] = ['cards', 'collections'];
+
+/** Страница выборки: только те поля, которые запрошены в `select`. */
+interface MetaScanPage {
+  readonly docs: readonly {
+    readonly id: number | string;
+    readonly metaDescriptionKey?: string | null;
+    readonly path?: string | null;
+    readonly slug?: string | null;
+    readonly status?: string | null;
+    readonly title?: string | null;
+    readonly titleKey?: string | null;
+  }[];
+  readonly totalDocs?: number;
+}
+
+type MetaKeyClause = Readonly<Record<string, { readonly equals: string }>>;
+
+/**
+ * Конфликтующие записи из ОБЕИХ контентных коллекций.
+ *
+ * Поиск идёт по НОРМАЛИЗОВАННЫМ ключам под индексом (`titleKey`,
+ * `metaDescriptionKey`), а не обходом каталога: обход уже стоит у визуальных
+ * дублей и стоит дорого, а здесь сравнение точное и ложится на индекс.
+ *
+ * Своя запись исключается ДВАЖДЫ: условием выборки и фильтром в коде. Условие
+ * снимает её из подсчёта `totalDocs`, фильтр страхует от того, что условие не
+ * применилось, — а если бы запись нашла сама себя, ни одна из них не могла бы
+ * уйти в `review` вовсе.
+ */
+async function findMetaConflicts(args: {
+  readonly descriptionKey: string | null;
+  readonly ownCollection: MetaDocumentCollection;
+  /** Идентификатор своей записи; `null` — записи ещё нет (create). */
+  readonly ownId: number | string | null;
+  readonly req: PayloadRequest;
+  readonly titleKey: string | null;
+}): Promise<MetaConflictFacts> {
+  const valueClauses: MetaKeyClause[] = [
+    ...(args.titleKey === null ? [] : [{ titleKey: { equals: args.titleKey } }]),
+    ...(args.descriptionKey === null
+      ? []
+      : [{ metaDescriptionKey: { equals: args.descriptionKey } }]),
+  ];
+
+  if (valueClauses.length === 0) {
+    // Пустые метатеги конфликтом не являются: пустоту наказывает другое правило
+    // (`index-requires-description`), а «все пустые совпадают со всеми пустыми»
+    // сделало бы предупреждение бессмысленным.
+    return { conflicts: [], total: 0, truncated: false };
+  }
+
+  const ownId = args.ownId === null ? null : String(args.ownId);
+  const rows: MetaConflict[] = [];
+  let total = 0;
+  let truncated = false;
+
+  for (const collection of META_DUPLICATE_COLLECTIONS) {
+    const where = {
+      and: [
+        { status: { in: [...META_DUPLICATE_SEARCH_STATUSES] } },
+        { or: valueClauses },
+        ...(collection === args.ownCollection && ownId !== null
+          ? [{ id: { not_equals: ownId } }]
+          : []),
+      ],
+    };
+    // Предел на один больше показываемого: так видно, что найдено больше, чем
+    // помещается в список, даже если база не вернула общего числа.
+    const limit = MAX_LISTED_META_CONFLICTS + 1;
+
+    // Ветвление по литералу коллекции, а не переменная в одном вызове: состав
+    // `select` у коллекций разный (у карточки адрес выводится из slug, у
+    // подборки хранится в path), и лишнее имя поля в выборке — это запрос к
+    // несуществующей колонке.
+    const page: MetaScanPage =
+      collection === 'cards'
+        ? await args.req.payload.find({
+            collection: 'cards',
+            depth: 0,
+            limit,
+            overrideAccess: true,
+            req: args.req,
+            select: {
+              metaDescriptionKey: true,
+              slug: true,
+              status: true,
+              title: true,
+              titleKey: true,
+            },
+            sort: 'id',
+            where,
+          })
+        : await args.req.payload.find({
+            collection: 'collections',
+            depth: 0,
+            limit,
+            overrideAccess: true,
+            req: args.req,
+            select: {
+              metaDescriptionKey: true,
+              path: true,
+              status: true,
+              title: true,
+              titleKey: true,
+            },
+            sort: 'id',
+            where,
+          });
+
+    const docs = page.docs.filter(
+      (doc) => !(collection === args.ownCollection && ownId !== null && String(doc.id) === ownId),
+    );
+    const rawTotal = typeof page.totalDocs === 'number' ? page.totalDocs : page.docs.length;
+    const selfInPage = page.docs.length - docs.length;
+    const found = Math.max(rawTotal - selfInPage, docs.length);
+
+    total += found;
+    truncated = truncated || found > docs.length;
+
+    for (const doc of docs) {
+      const matched: MetaDuplicateField[] = [
+        ...(args.titleKey !== null && doc.titleKey === args.titleKey
+          ? (['title'] as const)
+          : []),
+        ...(args.descriptionKey !== null && doc.metaDescriptionKey === args.descriptionKey
+          ? (['metaDescription'] as const)
+          : []),
+      ];
+      for (const field of matched) {
+        rows.push({
+          documentCollection: collection,
+          documentId: String(doc.id),
+          field,
+          path: contentDocumentPath(collection, { ...doc }),
+          status: typeof doc.status === 'string' ? doc.status : null,
+          title: typeof doc.title === 'string' ? doc.title : null,
+        });
+      }
+    }
+  }
+
+  const conflicts = rows.slice(0, MAX_LISTED_META_CONFLICTS);
+  return { conflicts, total, truncated: truncated || conflicts.length < rows.length };
+}
+
+/**
+ * Проверка дублей метатегов при сохранении (ТЗ §8.3.1).
+ *
+ * ДВЕ РАЗНЫЕ ВЕЩИ в одном хуке, и обе обязательны:
+ *
+ *   1. ПРЕДУПРЕЖДЕНИЕ. Снимок найденных совпадений пишется в саму запись
+ *      (группа `metaConflict`), поэтому возвращается в ответе на то же
+ *      сохранение — одинаково в админке, в REST и в GraphQL. Сохранение при
+ *      этом проходит: ТЗ требует предупредить, а не отказать. Строка в журнале
+ *      добавляется рядом, но самостоятельным каналом не является: внешний
+ *      AI-редактор журнала не видит;
+ *   2. КАЛИТКА. Перевод вперёд по статусам при неразрешённом совпадении
+ *      отклоняется (`assertMetaConflictResolved`) — там же разобрано, почему это
+ *      отказ, а не второе предупреждение.
+ *
+ * Нормализованные ключи пишутся ВСЕГДА, даже когда конфликтов нет: по ним
+ * работает и сам поиск, и будущий дашборд (Э5-04), которому иначе пришлось бы
+ * обходить каталог заново.
+ */
+function checkMetaDuplicates(
+  options: ContentHooksOptions,
+): CollectionBeforeValidateHook<ContentRecord> {
+  return async ({ data, operation, originalDoc, req }) => {
+    if (!options.knownFields.has(TITLE_FIELD) && !options.knownFields.has(META_DESCRIPTION_FIELD)) {
+      return data;
+    }
+
+    const next: Record<string, unknown> = { ...asRecord(data) };
+    const previous = asRecord(originalDoc);
+    // Значение берётся из слитых данных, но с оглядкой на отсутствие ключа:
+    // явная очистка поля обязана дойти до правила, а PATCH, в котором поля нет
+    // вовсе, не должен читаться как очистка.
+    const pick = (field: string): unknown => (field in next ? next[field] : previous[field]);
+
+    const titleKey = normalizeMetaValue(pick(TITLE_FIELD));
+    const descriptionKey = normalizeMetaValue(pick(META_DESCRIPTION_FIELD));
+
+    const facts = await findMetaConflicts({
+      descriptionKey,
+      ownCollection: options.collectionSlug,
+      ownId:
+        operation === 'update' &&
+        (typeof previous.id === 'number' || typeof previous.id === 'string')
+          ? previous.id
+          : null,
+      req,
+      titleKey,
+    });
+    const fingerprint = metaConflictFingerprint({
+      conflicts: facts.conflicts,
+      descriptionKey,
+      titleKey,
+      total: facts.total,
+    });
+
+    const gate = asRecord(next.metaConflict);
+    const storedGate = asRecord(previous.metaConflict);
+    const confirmed = gate.confirm === true;
+    // Отпечаток переписывается ТОЛЬКО вместе с явным подтверждением: иначе
+    // сохранение формы админки, где значения приходят в каждом запросе, само
+    // продлевало бы устаревшую визу. Тот же приём, что у визуальных дублей.
+    const confirmedFor = confirmed
+      ? fingerprint
+      : typeof storedGate.confirmedFor === 'string' && storedGate.confirmedFor !== ''
+        ? storedGate.confirmedFor
+        : null;
+    const now = new Date().toISOString();
+
+    next[`${TITLE_FIELD}Key`] = titleKey;
+    next[`${META_DESCRIPTION_FIELD}Key`] = descriptionKey;
+    next.metaConflict = {
+      ...gate,
+      checkedAt: now,
+      confirmedAt: confirmed ? now : (storedGate.confirmedAt ?? null),
+      confirmedBy: confirmed
+        ? readAuthorUserId(describeHistoryAuthor(req.user).userId)
+        : (storedGate.confirmedBy ?? null),
+      confirmedFor,
+      conflicts: facts.conflicts.map((conflict) => ({ ...conflict })),
+      total: facts.total,
+      truncated: facts.truncated,
+    };
+
+    if (facts.conflicts.length > 0) {
+      const subject =
+        options.pathOf(next) ??
+        options.pathOf(previous) ??
+        (typeof previous.id === 'number' || typeof previous.id === 'string'
+          ? `#${String(previous.id)}`
+          : 'новая запись');
+      req.payload.logger.warn(
+        `[${options.collectionSlug}] ${subject}: ${describeMetaConflicts(facts)}`,
+      );
+    }
+
+    try {
+      assertMetaConflictResolved({
+        conflicts: facts.conflicts,
+        confirmedFor,
+        fingerprint,
+        metaChanged:
+          operation === 'update' &&
+          (titleKey !== normalizeMetaValue(previous[TITLE_FIELD]) ||
+            descriptionKey !== normalizeMetaValue(previous[META_DESCRIPTION_FIELD])),
+        nextStatus: 'status' in next ? next.status : previous.status,
+        previousStatus: previous.status,
+      });
+    } catch (error) {
+      rethrow(error);
+    }
+
+    return next;
+  };
+}
+
 /**
  * Заполняет служебные поля: дату первой публикации и сброс одноразовых флагов.
  *
@@ -424,6 +712,10 @@ function stampSystemFields(
     const next: Record<string, unknown> = { ...asRecord(data) };
 
     next.urlChange = { ...asRecord(next.urlChange), confirm: false };
+    // Подтверждение конфликта метатегов сбрасывается по той же причине и тем же
+    // приёмом: флаг — свойство ОПЕРАЦИИ, а не записи. Сохранившись в документе,
+    // он подтверждал бы и следующее совпадение молча.
+    next.metaConflict = { ...asRecord(next.metaConflict), confirm: false };
 
     if (operation === 'create') {
       return next;
@@ -604,6 +896,10 @@ export function contentHooks(options: ContentHooksOptions): ContentHooks {
     afterChange: [syncUrlRedirects(options), recordSeoHistory(options)],
     beforeChange: [stampSystemFields(options)],
     beforeOperation: [guardIncomingOperation(options)],
-    beforeValidate: [enforceContentRules(options)],
+    // Порядок значим: сначала правила статусной модели (право на переход,
+    // полнота записи), потом проверка дублей метатегов. Отказ по правам обязан
+    // звучать раньше отказа «такой заголовок уже есть», и лишний запрос к базе
+    // на запись, которая всё равно будет отклонена, тратить незачем.
+    beforeValidate: [enforceContentRules(options), checkMetaDuplicates(options)],
   };
 }

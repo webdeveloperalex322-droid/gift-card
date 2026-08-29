@@ -44,6 +44,12 @@ import {
   systemFieldAccess,
 } from '../access/policies';
 import { validateContentSlug } from '../seo/paths';
+import {
+  META_DUPLICATE_FIELDS,
+  META_DUPLICATE_FIELD_LABELS,
+  describeMetaConflicts,
+  readMetaConflictFacts,
+} from './meta-duplicates';
 import { normalizeRedirectPath } from './redirects-plan';
 import { WITHDRAWAL_MODES } from './status-model';
 import {
@@ -341,6 +347,243 @@ export function metaDescriptionField(note?: string): Field {
         `Meta description.${note === undefined ? '' : ` ${note}`} Совпадения по каталогу ` +
         `проверяются при сохранении (задача Э5-01). ${INDEX_NEEDS_DESCRIPTION_HINT}`,
     },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Дубли метатегов (задача Э5-01, ТЗ §8.3.1)                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Нормализованные ключи метатегов — то, по чему ищется совпадение.
+ *
+ * ПОЧЕМУ ХРАНИМЫЕ ПОЛЯ, А НЕ ПОИСК ПО ИСХОДНЫМ ЗНАЧЕНИЯМ. Совпадение считается
+ * по нормализованному значению (регистр и пробелы не создают «разных»
+ * заголовков), а нормализованного значения в базе иначе нет: искать пришлось бы
+ * полным обходом обеих коллекций на каждом сохранении — тем самым, который уже
+ * стоит у визуальных дублей и стоит дорого. С хранимым ключом под индексом
+ * поиск конфликта превращается в одно точное сравнение.
+ *
+ * Второе следствие, ради которого выбрана именно эта форма: дашборд (Э5-04)
+ * получает список дублей одной группировкой по этому полю, а не повторным
+ * обходом каталога.
+ *
+ * Поля служебные: снаружи не пишутся никем (`systemFieldAccess`) и скрыты из
+ * формы админки — редактор правит title, а не его нормализованную копию. В REST
+ * и GraphQL они приходят: `admin.hidden` прячет поле из интерфейса, но не из API.
+ *
+ * ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ: ключ появляется у записи при первом сохранении после
+ * появления этих полей. Записи, не сохранявшиеся с тех пор, в поиске конфликтов
+ * не участвуют (их ключ пуст). На пустом каталоге это ничего не значит, но перед
+ * переносом накопленных данных потребуется разовое пересохранение — отмечено в
+ * отчёте этапа.
+ */
+export function metaDuplicateKeyFields(): Field[] {
+  return [
+    {
+      name: 'titleKey',
+      type: 'text',
+      index: true,
+      access: { create: systemFieldAccess, update: systemFieldAccess },
+      admin: { hidden: true },
+    },
+    {
+      name: 'metaDescriptionKey',
+      type: 'text',
+      index: true,
+      access: { create: systemFieldAccess, update: systemFieldAccess },
+      admin: { hidden: true },
+    },
+  ];
+}
+
+/**
+ * Человеческое описание снимка конфликтов — вычисляется НА ЧТЕНИИ.
+ *
+ * Виртуальное поле, а не хранимая строка: хранимая копия описания разошлась бы
+ * со списком при первой же правке, а виртуальная считается из соседних полей той
+ * же группы. Тот же приём, что у `indexationState` в глобале настроек (Э4).
+ */
+const readMetaConflictSummary: FieldHook = ({ siblingData }) =>
+  describeMetaConflicts(readMetaConflictFacts(siblingData));
+
+/**
+ * Группа «Проверка дублей метатегов» (ТЗ §8.3.1).
+ *
+ * ФОРМА ПРЕДУПРЕЖДЕНИЯ. ТЗ требует «предупреждение со ссылками на конфликтующие
+ * страницы», то есть сохранение обязано пройти. Предупреждать в CMS сегодня
+ * нечем: единственный сквозной канал — журнал сервера, которого внешний
+ * AI-редактор через REST и GraphQL не видит (разбор этапа 4). Поэтому
+ * предупреждение выражено СНИМКОМ В САМОЙ ЗАПИСИ: хук заполняет группу при
+ * каждом сохранении, и она возвращается в ответе на то же сохранение — одинаково
+ * в форме админки, в REST и в GraphQL.
+ *
+ * Снимок именно снимок, и это сказано в подписи поля: он верен на момент
+ * последнего сохранения записи (`checkedAt`). Держать его всегда актуальным
+ * можно было бы только запросом на каждое чтение, включая список из полусотни
+ * строк, — а всегда актуальный ответ на вопрос «где дубли» даёт не он, а
+ * нормализованные ключи ({@link metaDuplicateKeyFields}).
+ *
+ * Подтверждение (`confirm`) — ОДНОРАЗОВЫЙ флаг операции, тем же приёмом, что
+ * подтверждение смены URL (Э1-09) и решение о визуальном дубле (Э2-05): хук
+ * сбрасывает его после сохранения, а действует оно только для того набора
+ * конфликтов, отпечаток которого записан в `confirmedFor`.
+ */
+export function metaConflictField(): Field {
+  return {
+    name: 'metaConflict',
+    type: 'group',
+    label: 'Проверка дублей метатегов',
+    admin: {
+      description:
+        'Совпадения title и meta description с другими страницами — по открыткам и ' +
+        'подборкам сразу, в статусах published и review (ТЗ §8.3.1). Сохранение при ' +
+        'совпадении проходит: это предупреждение. А перевод в review и дальше — только ' +
+        'после правки текста или явного подтверждения.',
+    },
+    fields: [
+      {
+        name: 'conflicts',
+        type: 'array',
+        label: 'Конфликтующие страницы',
+        access: { create: systemFieldAccess, update: systemFieldAccess },
+        admin: {
+          description:
+            'Заполняется хуком при каждом сохранении: чей текст совпал, по какому полю и ' +
+            'по какому адресу лежит страница. Снаружи не пишется.',
+          readOnly: true,
+        },
+        fields: [
+          {
+            name: 'field',
+            type: 'select',
+            options: META_DUPLICATE_FIELDS.map((field) => ({
+              label: META_DUPLICATE_FIELD_LABELS[field],
+              value: field,
+            })),
+          },
+          {
+            name: 'documentCollection',
+            type: 'select',
+            options: [
+              { label: 'Открытки', value: 'cards' },
+              { label: 'Подборки', value: 'collections' },
+            ],
+          },
+          {
+            name: 'documentId',
+            type: 'text',
+            admin: {
+              description:
+                'Идентификатор конфликтующей записи строкой, а не связью: снимок обязан ' +
+                'переживать удаление той записи — иначе исчезал бы след ровно того ' +
+                'события, ради которого снимок и смотрят.',
+            },
+          },
+          { name: 'path', type: 'text', label: 'Адрес конфликтующей страницы' },
+          { name: 'status', type: 'text' },
+          { name: 'title', type: 'text', label: 'Заголовок конфликтующей записи' },
+        ],
+      },
+      {
+        name: 'total',
+        type: 'number',
+        access: { create: systemFieldAccess, update: systemFieldAccess },
+        admin: {
+          description:
+            'Сколько совпадений найдено ВСЕГО. Отдельно от длины списка: список ограничен, ' +
+            'а по этому числу видно, что за ним стоит.',
+          readOnly: true,
+        },
+      },
+      {
+        name: 'truncated',
+        type: 'checkbox',
+        defaultValue: false,
+        access: { create: systemFieldAccess, update: systemFieldAccess },
+        admin: {
+          description: 'Список показан не полностью: найдено больше, чем помещается.',
+          readOnly: true,
+        },
+      },
+      {
+        name: 'checkedAt',
+        type: 'date',
+        access: { create: systemFieldAccess, update: systemFieldAccess },
+        admin: {
+          date: { displayFormat: 'dd.MM.yyyy HH:mm:ss' },
+          description:
+            'Когда снимок сделан. Снимок верен НА ЭТОТ МОМЕНТ: конфликтующую страницу с тех ' +
+            'пор могли переименовать или удалить.',
+          readOnly: true,
+        },
+      },
+      {
+        name: 'confirm',
+        type: 'checkbox',
+        defaultValue: false,
+        admin: {
+          description:
+            'ОДНОРАЗОВОЕ подтверждение: «совпадение вижу, веду страницу дальше». Отметьте ' +
+            'его в том же сохранении, которым переводите запись в review. Хук снимает флаг ' +
+            'после сохранения, а само подтверждение действует только для ТОГО набора ' +
+            'совпадений, который был на момент отметки: изменился текст или круг ' +
+            'конфликтующих страниц — подтверждайте заново.',
+        },
+      },
+      {
+        name: 'confirmedFor',
+        type: 'text',
+        access: { create: systemFieldAccess, update: systemFieldAccess },
+        admin: {
+          description:
+            'Отпечаток набора совпадений, для которого выдано подтверждение. Не совпал с ' +
+            'текущим — подтверждение устарело, и переход снова заблокирован.',
+          readOnly: true,
+        },
+      },
+      {
+        name: 'confirmedAt',
+        type: 'date',
+        access: { create: systemFieldAccess, update: systemFieldAccess },
+        admin: {
+          date: { displayFormat: 'dd.MM.yyyy HH:mm:ss' },
+          description: 'Когда подтверждение выдано.',
+          readOnly: true,
+        },
+      },
+      {
+        name: 'confirmedBy',
+        type: 'relationship',
+        relationTo: 'users',
+        access: { create: systemFieldAccess, update: systemFieldAccess },
+        admin: {
+          description:
+            'Кто подтвердил совпадение. Записывается потому, что подтверждать вправе и ' +
+            'сервисный аккаунт ai-editor (перевод draft → review — его штатное действие), ' +
+            'а решение «две страницы с одинаковым заголовком допустимы» обязано быть ' +
+            'прослеживаемым.',
+          readOnly: true,
+        },
+      },
+      {
+        // Идёт ПОСЛЕДНИМ намеренно: значение считается по соседним полям, а
+        // порядок обхода полей на чтении — их порядок здесь.
+        name: 'summary',
+        type: 'text',
+        label: 'Что сейчас с дублями метатегов',
+        // Виртуальное: в базе не хранится, вычисляется на чтении. Хранимая копия
+        // описания разошлась бы со списком и врала бы уверенно.
+        virtual: true,
+        hooks: { afterRead: [readMetaConflictSummary] },
+        admin: {
+          description:
+            'Одной строкой по тому же снимку. Поле приходит в REST и GraphQL: правило, ' +
+            'видимое только в форме админки, для внешнего клиента не существует.',
+          readOnly: true,
+        },
+      },
+    ],
   };
 }
 

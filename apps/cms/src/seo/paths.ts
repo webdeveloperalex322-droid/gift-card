@@ -45,6 +45,30 @@ export function buildCardPath(slug: string): string {
   return `${CARD_PATH_PREFIX}/${slug}`;
 }
 
+/** Контентные коллекции, у записей которых есть собственный публичный адрес. */
+export type ContentCollectionSlug = 'cards' | 'collections';
+
+/**
+ * Путь записи контента по её коллекции — ЕДИНСТВЕННЫЙ вывод адреса из документа.
+ *
+ * Функция появилась, когда адрес записи понадобился не только её собственным
+ * хукам: проверка дублей метатегов (Э5-01) ищет совпадения в ОБЕИХ коллекциях и
+ * обязана назвать редактору путь чужой страницы. Копия правила «у карточки адрес
+ * из slug, у подборки — хранимый path» в двух местах разошлась бы молча, и в
+ * предупреждении о дубле оказался бы адрес, которого нет.
+ *
+ * @returns `null`, если адрес ещё не собран (пустой slug, несобранный path)
+ */
+export function contentDocumentPath(
+  collection: ContentCollectionSlug,
+  doc: Readonly<Record<string, unknown>>,
+): string | null {
+  if (collection === 'cards') {
+    return typeof doc.slug === 'string' && doc.slug !== '' ? buildCardPath(doc.slug) : null;
+  }
+  return typeof doc.path === 'string' && doc.path !== '' ? doc.path : null;
+}
+
 export interface ContentSlugOptions {
   /** Префикс пространства имён: {@link CARD_PATH_PREFIX} или путь родителя. */
   readonly prefix: string;

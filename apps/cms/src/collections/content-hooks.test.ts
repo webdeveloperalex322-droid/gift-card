@@ -27,6 +27,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ROLES } from '../access/roles';
 import { Cards } from './cards';
 import { Collections } from './collections';
+import {
+  metaConflictFingerprint,
+  normalizeMetaValue,
+  readMetaConflictFacts,
+} from './meta-duplicates';
 import { Redirects } from './redirects';
 import { SeoHistory } from './seo-history';
 
@@ -390,7 +395,14 @@ function completeCard(slug: string): Doc {
     // Требование полноты появилось по вердикту ревизии Э3-05/Э3-06: без
     // description карточка законно доходила до published, а п. 5.1 требует
     // уникальные title/H1/description.
-    metaDescription: 'Открытка с тюльпанами к 8 Марта',
+    //
+    // Описание СВОЁ у каждой записи, и это не косметика фикстуры: до Э5-01
+    // здесь стояла одна строка на все карточки, и пакетная публикация трёх
+    // «готовых» записей проходила с тремя одинаковыми description. Теперь такой
+    // пакет отклоняется правилом дублей метатегов — то есть общая строка
+    // означала бы, что стенд проверяет состояние, которое модель больше не
+    // допускает.
+    metaDescription: `Открытка ${slug}: описание для проверки полноты`,
     robots: 'noindex,follow',
     slug,
     status: 'draft',
@@ -1709,7 +1721,7 @@ describe('Э4: индексируемая директива при пустом
       () => harness.update('cards', 5, { metaDescription: '' }, admin),
       'index-requires-description',
     );
-    expect(harness.docs('cards')[0]?.metaDescription).toBe('Открытка с тюльпанами к 8 Марта');
+    expect(harness.docs('cards')[0]?.metaDescription).toBe(completeCard('mame').metaDescription);
   });
 
   it('правило проходит тем же слоем, что REST и GraphQL: сервисный аккаунт получает тот же отказ', async () => {
@@ -1768,5 +1780,327 @@ describe('Э4: индексируемая директива при пустом
     expect(opened.updated.map((doc) => doc.id)).toEqual([5]);
     expect(opened.errors).toHaveLength(1);
     expect(opened.errors[0]).toContain('index,follow');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Э5-01: дубли метатегов (ТЗ §8.3.1)                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Проводка правила в фазы Payload. Само правило проверено как чистая функция в
+ * `meta-duplicates.test.ts`; здесь — то, чего чистой функцией не проверить: что
+ * поиск действительно идёт по ОБЕИМ коллекциям, что предупреждение попадает в
+ * саму запись (а значит в ответ REST и GraphQL), и что визу нельзя ни подделать
+ * значением поля, ни продлить следующим сохранением.
+ */
+describe('Э5-01: дубли метатегов', () => {
+  const CONFLICTING_TITLE = 'Открытки на 8 Марта';
+
+  /** Подборка в review с тем же заголовком: конфликт из ДРУГОЙ коллекции. */
+  const seedRivalNode = (harness: Harness, title = CONFLICTING_TITLE): Doc =>
+    harness.seed('collections', {
+      id: 90,
+      metaDescription: 'Описание подборки',
+      metaDescriptionKey: 'описание подборки',
+      nodeKind: 'occasion',
+      path: '/podborki/prazdniki/8-marta',
+      robots: 'noindex,follow',
+      slug: '8-marta',
+      status: 'review',
+      title,
+      titleKey: title.toLowerCase(),
+    });
+
+  const draftCard = (title: string): Doc => ({
+    ...completeCard('otkrytka-8-marta'),
+    id: 5,
+    status: 'draft',
+    title,
+  });
+
+  function gateOf(doc: Doc | undefined): Doc {
+    const gate = doc?.metaConflict;
+    return typeof gate === 'object' && gate !== null ? (gate as Doc) : {};
+  }
+
+  it('совпадение ищется в ОБЕИХ коллекциях: заголовок карточки против подборки', async () => {
+    // Пространства имён разведены, но title — это выдача поисковика, а не путь.
+    const harness = createHarness();
+    seedRivalNode(harness);
+    harness.seed('cards', draftCard('Черновик'));
+
+    const saved = await harness.update('cards', 5, { title: CONFLICTING_TITLE }, aiEditor);
+
+    const gate = gateOf(saved);
+    expect(gate.total).toBe(1);
+    expect(gate.conflicts).toEqual([
+      {
+        documentCollection: 'collections',
+        documentId: '90',
+        field: 'title',
+        path: '/podborki/prazdniki/8-marta',
+        status: 'review',
+        title: CONFLICTING_TITLE,
+      },
+    ]);
+  });
+
+  it('предупреждение приходит В ЗАПИСИ, а не только в журнал сервера', async () => {
+    // Журнал внешний AI-редактор не видит; снимок в записи возвращается в
+    // ответе на то же сохранение — и в админке, и в REST, и в GraphQL.
+    const harness = createHarness();
+    seedRivalNode(harness);
+    harness.seed('cards', draftCard('Черновик'));
+
+    const saved = await harness.update('cards', 5, { title: CONFLICTING_TITLE }, aiEditor);
+
+    expect(saved.status).toBe('draft');
+    expect(typeof gateOf(saved).checkedAt).toBe('string');
+    // Журнал тоже пишется — но как дополнение, а не как единственный канал.
+    expect(harness.warnings.some((line) => line.includes('/podborki/prazdniki/8-marta'))).toBe(true);
+  });
+
+  it('перевод в review при неразрешённом конфликте отклоняется', async () => {
+    const harness = createHarness();
+    seedRivalNode(harness);
+    harness.seed('cards', draftCard(CONFLICTING_TITLE));
+
+    await expectApiRule(
+      () => harness.update('cards', 5, { status: 'review' }, aiEditor),
+      'meta-duplicate-unresolved',
+    );
+    expect(harness.docs('cards').find((doc) => doc.id === 5)?.status).toBe('draft');
+  });
+
+  it('подтверждение в том же сохранении открывает переход и записывает автора', async () => {
+    const harness = createHarness();
+    seedRivalNode(harness);
+    harness.seed('cards', draftCard(CONFLICTING_TITLE));
+
+    const moved = await harness.update(
+      'cards',
+      5,
+      { metaConflict: { confirm: true }, status: 'review' },
+      aiEditor,
+    );
+
+    expect(moved.status).toBe('review');
+    const gate = gateOf(moved);
+    expect(typeof gate.confirmedFor).toBe('string');
+    expect(gate.confirmedBy).toBe(aiEditor.id);
+    expect(typeof gate.confirmedAt).toBe('string');
+    // Флаг одноразовый: сохранившись, он подтверждал бы и следующий конфликт.
+    expect(gate.confirm).toBe(false);
+  });
+
+  it('подтверждение не переживает смену заголовка: виза привязана к набору', async () => {
+    const harness = createHarness();
+    seedRivalNode(harness);
+    harness.seed('cards', draftCard(CONFLICTING_TITLE));
+    await harness.update(
+      'cards',
+      5,
+      { metaConflict: { confirm: true }, status: 'review' },
+      aiEditor,
+    );
+
+    // Заголовок сменили на другой, тоже конфликтующий — с ДРУГОЙ страницей.
+    harness.seed('collections', {
+      id: 91,
+      nodeKind: 'occasion',
+      path: '/podborki/prazdniki/9-maya',
+      slug: '9-maya',
+      status: 'published',
+      title: 'Открытки на 9 Мая',
+      titleKey: 'открытки на 9 мая',
+    });
+
+    await expectApiRule(
+      () => harness.update('cards', 5, { title: 'Открытки на 9 Мая' }, aiEditor),
+      'meta-duplicate-unresolved',
+    );
+  });
+
+  it('подделанный confirmedFor во входных данных визой не становится', async () => {
+    // Поле закрыто `systemFieldAccess`, но проверяется здесь ВТОРОЙ рубеж — хук:
+    // он берёт отпечаток из записи, а не из запроса. Иначе внешний клиент
+    // открывал бы себе переход одним лишним полем в теле.
+    const harness = createHarness();
+    seedRivalNode(harness);
+    harness.seed('cards', draftCard(CONFLICTING_TITLE));
+
+    const saved = await harness.update('cards', 5, {}, aiEditor);
+    const facts = readMetaConflictFacts(gateOf(saved));
+    const forged = metaConflictFingerprint({
+      conflicts: facts.conflicts,
+      descriptionKey: normalizeMetaValue(saved.metaDescription),
+      titleKey: normalizeMetaValue(saved.title),
+      total: facts.total,
+    });
+    expect(facts.conflicts).toHaveLength(1);
+
+    await expectApiRule(
+      () =>
+        harness.update(
+          'cards',
+          5,
+          { metaConflict: { confirmedFor: forged }, status: 'review' },
+          aiEditor,
+        ),
+      'meta-duplicate-unresolved',
+    );
+  });
+
+  it('регистр и лишние пробелы конфликт не снимают', async () => {
+    const harness = createHarness();
+    seedRivalNode(harness);
+    harness.seed('cards', draftCard('Черновик'));
+
+    await expectApiRule(
+      () =>
+        harness.update(
+          'cards',
+          5,
+          { status: 'review', title: '  ОТКРЫТКИ   НА 8 МАРТА ' },
+          aiEditor,
+        ),
+      'meta-duplicate-unresolved',
+    );
+  });
+
+  it('совпадение по metaDescription при разных заголовках — тоже конфликт', async () => {
+    const harness = createHarness();
+    seedRivalNode(harness, 'Совсем другой заголовок');
+    harness.seed('cards', draftCard('Уникальный заголовок карточки'));
+
+    await expectApiRule(
+      () =>
+        harness.update(
+          'cards',
+          5,
+          { metaDescription: 'Описание подборки', status: 'review' },
+          aiEditor,
+        ),
+      'meta-duplicate-unresolved',
+    );
+  });
+
+  it('пустые метатеги друг с другом не конфликтуют', async () => {
+    // Иначе все незаполненные записи считались бы дублями друг друга, и
+    // предупреждение перестали бы читать. Пустоту наказывает другое правило.
+    const harness = createHarness();
+    harness.seed('collections', {
+      id: 90,
+      metaDescription: '',
+      metaDescriptionKey: null,
+      nodeKind: 'occasion',
+      path: '/podborki/prazdniki/8-marta',
+      status: 'review',
+      title: 'Своя подборка',
+      titleKey: 'своя подборка',
+    });
+    harness.seed('cards', { ...draftCard('Своя карточка'), metaDescription: '' });
+
+    const saved = await harness.update('cards', 5, { status: 'draft' }, aiEditor);
+    expect(gateOf(saved).total).toBe(0);
+    expect(gateOf(saved).conflicts).toEqual([]);
+  });
+
+  it('черновик в круг поиска не входит: сравниваются published и review', async () => {
+    const harness = createHarness();
+    harness.seed('collections', {
+      id: 90,
+      nodeKind: 'occasion',
+      path: '/podborki/prazdniki/8-marta',
+      status: 'draft',
+      title: CONFLICTING_TITLE,
+      titleKey: CONFLICTING_TITLE.toLowerCase(),
+    });
+    harness.seed('cards', draftCard(CONFLICTING_TITLE));
+
+    const moved = await harness.update('cards', 5, { status: 'review' }, aiEditor);
+    expect(moved.status).toBe('review');
+    expect(gateOf(moved).total).toBe(0);
+  });
+
+  it('запись не конфликтует сама с собой', async () => {
+    // Иначе ни одна запись не смогла бы уйти в review вовсе: её собственный
+    // ключ совпадает с её собственным ключом всегда.
+    const harness = createHarness();
+    harness.seed('cards', {
+      ...draftCard('Единственная карточка'),
+      metaDescriptionKey: 'описание единственной',
+      status: 'review',
+      titleKey: 'единственная карточка',
+    });
+
+    const saved = await harness.update('cards', 5, { status: 'review' }, aiEditor);
+    expect(gateOf(saved).total).toBe(0);
+  });
+
+  it('правка заголовка у ОПУБЛИКОВАННОЙ записи в конфликт отклоняется', async () => {
+    // Статус не меняется, а две страницы с одинаковым title появляются сразу:
+    // обе уже видны. Тот же класс, что подмена изображения у опубликованной
+    // карточки (находка ревизии от 2026-08-22).
+    const harness = createHarness();
+    seedRivalNode(harness);
+    harness.seed('cards', publishedCard('otkrytka-8-marta', 5));
+
+    await expectApiRule(
+      () => harness.update('cards', 5, { title: CONFLICTING_TITLE }, admin),
+      'meta-duplicate-unresolved',
+    );
+  });
+
+  it('сохранение опубликованной записи без правки метатегов не блокируется', async () => {
+    // Иначе на калитке падала бы любая правка текста живой страницы — включая
+    // ту, которой конфликт и разрешают.
+    const harness = createHarness();
+    harness.seed('cards', {
+      ...publishedCard('otkrytka-8-marta', 5),
+      title: CONFLICTING_TITLE,
+      titleKey: CONFLICTING_TITLE.toLowerCase(),
+    });
+    seedRivalNode(harness);
+
+    const saved = await harness.update('cards', 5, { caption: 'Другая подпись' }, admin);
+    expect(saved.status).toBe('published');
+    expect(gateOf(saved).total).toBe(1);
+  });
+
+  it('пакетный перевод в review проверяет КАЖДУЮ запись выборки', async () => {
+    // Пакет не отменяет ни одной проверки: Payload прогоняет хуки поштучно.
+    const harness = createHarness();
+    seedRivalNode(harness);
+    harness.seed('cards', { ...completeCard('chistaya'), id: 5, status: 'draft' });
+    harness.seed('cards', {
+      ...completeCard('dublirujushchaya'),
+      id: 6,
+      status: 'draft',
+      title: CONFLICTING_TITLE,
+    });
+
+    const result = await harness.runBulk(
+      'cards',
+      { id: { in: [5, 6] } },
+      { status: 'review' },
+      aiEditor,
+    );
+
+    expect(result.updated.map((doc) => doc.id)).toEqual([5]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('/podborki/prazdniki/8-marta');
+  });
+
+  it('нормализованные ключи пишутся всегда — на них живёт дашборд (Э5-04)', async () => {
+    const harness = createHarness();
+    harness.seed('cards', draftCard('  Заголовок   Карточки '));
+
+    const saved = await harness.update('cards', 5, {}, aiEditor);
+    expect(saved.titleKey).toBe('заголовок карточки');
+    expect(saved.metaDescriptionKey).toBe(
+      normalizeMetaValue(completeCard('otkrytka-8-marta').metaDescription),
+    );
   });
 });

@@ -58,6 +58,12 @@ export type ContentRuleCode =
   // действует на сайте — см. `assertDescriptionForIndex`.
   | 'index-requires-description'
   | 'index-requires-published'
+  // Задача Э5-01: перевод вперёд по статусам при неразрешённом совпадении
+  // title или metaDescription. Правило живёт в `./meta-duplicates.ts` (там же
+  // нормализация значений и круг поиска), а код отказа — здесь, потому что
+  // набор кодов один на все правила контента: внешний клиент разбирает отказы
+  // по нему, а не по тексту сообщения.
+  | 'meta-duplicate-unresolved'
   | 'publish-requires-admin'
   // Две границы наполненности подборки. Правила живут в
   // `./collection-volume.ts` (там же порог и области подсчёта), а коды отказа —
