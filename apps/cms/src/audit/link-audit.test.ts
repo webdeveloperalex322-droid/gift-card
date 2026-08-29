@@ -176,7 +176,11 @@ describe('разбор находок', () => {
 
   async function crawl(site: Readonly<Record<string, ProbeResponse>>, maxRequests?: number) {
     const { probe } = siteProbe(site);
-    return crawlSite({ maxRequests, origin: ORIGIN, probe });
+    return crawlSite({
+      origin: ORIGIN,
+      probe,
+      ...(maxRequests === undefined ? {} : { maxRequests }),
+    });
   }
 
   it('ссылка на 404 названа битой и показывает страницу-источник', async () => {

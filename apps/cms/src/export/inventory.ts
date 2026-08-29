@@ -226,6 +226,14 @@ export function parseCanonical(html: string): string | null {
 
 /** Результат опроса карты сайта. `urls === null` — карта не прочитана. */
 export interface SitemapReading {
+  /**
+   * Чем ответил индекс `/sitemap.xml`; `null` — не ответил вовсе.
+   *
+   * Нужен проверке ссылок (Э5-03): дашборд обязан показать НАБЛЮДЕНИЕ за картой
+   * вместо несуществующей «даты последней генерации» — карта собирается на
+   * запросе (Э4-04-A), артефакта на диске нет.
+   */
+  readonly indexStatus: number | null;
   readonly urls: ReadonlySet<string> | null;
   readonly warnings: readonly string[];
 }
@@ -245,17 +253,24 @@ export async function readSitemapUrls(args: {
   const warnings: string[] = [];
   const indexUrl = `${args.origin}/sitemap.xml`;
   let indexBody: string;
+  let indexStatus: number | null = null;
   try {
     const response = await args.probe(indexUrl);
+    indexStatus = response.status;
     if (response.status !== 200) {
       return {
+        indexStatus,
         urls: null,
         warnings: [`Индекс карты сайта ${indexUrl} ответил ${String(response.status)}.`],
       };
     }
     indexBody = response.body;
   } catch (error) {
-    return { urls: null, warnings: [`Индекс карты сайта ${indexUrl} недоступен: ${reason(error)}`] };
+    return {
+      indexStatus: null,
+      urls: null,
+      warnings: [`Индекс карты сайта ${indexUrl} недоступен: ${reason(error)}`],
+    };
   }
 
   const urls = new Set<string>();
@@ -273,7 +288,7 @@ export async function readSitemapUrls(args: {
       warnings.push(`Файл карты ${file} недоступен: ${reason(error)}`);
     }
   }
-  return { urls, warnings };
+  return { indexStatus, urls, warnings };
 }
 
 function reason(error: unknown): string {

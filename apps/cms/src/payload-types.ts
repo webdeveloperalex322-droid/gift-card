@@ -75,6 +75,7 @@ export interface Config {
     'image-name-claims': ImageNameClaim;
     users: User;
     'payload-kv': PayloadKv;
+    'payload-jobs': PayloadJob;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
     'payload-migrations': PayloadMigration;
@@ -89,6 +90,7 @@ export interface Config {
     'image-name-claims': ImageNameClaimsSelect<false> | ImageNameClaimsSelect<true>;
     users: UsersSelect<false> | UsersSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
+    'payload-jobs': PayloadJobsSelect<false> | PayloadJobsSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
     'payload-migrations': PayloadMigrationsSelect<false> | PayloadMigrationsSelect<true>;
@@ -99,9 +101,13 @@ export interface Config {
   fallbackLocale: null;
   globals: {
     'site-settings': SiteSetting;
+    'seo-link-audit': SeoLinkAudit;
+    'payload-jobs-stats': PayloadJobsStat;
   };
   globalsSelect: {
     'site-settings': SiteSettingsSelect<false> | SiteSettingsSelect<true>;
+    'seo-link-audit': SeoLinkAuditSelect<false> | SeoLinkAuditSelect<true>;
+    'payload-jobs-stats': PayloadJobsStatsSelect<false> | PayloadJobsStatsSelect<true>;
   };
   locale: null;
   widgets: {
@@ -109,7 +115,13 @@ export interface Config {
   };
   user: User;
   jobs: {
-    tasks: unknown;
+    tasks: {
+      'seo-link-audit': TaskSeoLinkAudit;
+      inline: {
+        input: unknown;
+        output: unknown;
+      };
+    };
     workflows: unknown;
   };
 }
@@ -817,6 +829,107 @@ export interface PayloadKv {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "payload-jobs".
+ */
+export interface PayloadJob {
+  id: number;
+  /**
+   * Input data provided to the job
+   */
+  input?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  taskStatus?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  completedAt?: string | null;
+  totalTried?: number | null;
+  /**
+   * If hasError is true this job will not be retried
+   */
+  hasError?: boolean | null;
+  /**
+   * If hasError is true, this is the error that caused it
+   */
+  error?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  /**
+   * Task execution log
+   */
+  log?:
+    | {
+        executedAt: string;
+        completedAt: string;
+        taskSlug: 'inline' | 'seo-link-audit';
+        taskID: string;
+        input?:
+          | {
+              [k: string]: unknown;
+            }
+          | unknown[]
+          | string
+          | number
+          | boolean
+          | null;
+        output?:
+          | {
+              [k: string]: unknown;
+            }
+          | unknown[]
+          | string
+          | number
+          | boolean
+          | null;
+        state: 'failed' | 'succeeded';
+        error?:
+          | {
+              [k: string]: unknown;
+            }
+          | unknown[]
+          | string
+          | number
+          | boolean
+          | null;
+        id?: string | null;
+      }[]
+    | null;
+  taskSlug?: ('inline' | 'seo-link-audit') | null;
+  queue?: string | null;
+  waitUntil?: string | null;
+  processing?: boolean | null;
+  meta?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-locked-documents".
  */
 export interface PayloadLockedDocument {
@@ -1177,6 +1290,38 @@ export interface PayloadKvSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "payload-jobs_select".
+ */
+export interface PayloadJobsSelect<T extends boolean = true> {
+  input?: T;
+  taskStatus?: T;
+  completedAt?: T;
+  totalTried?: T;
+  hasError?: T;
+  error?: T;
+  log?:
+    | T
+    | {
+        executedAt?: T;
+        completedAt?: T;
+        taskSlug?: T;
+        taskID?: T;
+        input?: T;
+        output?: T;
+        state?: T;
+        error?: T;
+        id?: T;
+      };
+  taskSlug?: T;
+  queue?: T;
+  waitUntil?: T;
+  processing?: T;
+  meta?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-locked-documents_select".
  */
 export interface PayloadLockedDocumentsSelect<T extends boolean = true> {
@@ -1465,6 +1610,119 @@ export interface SiteSetting {
   createdAt?: string | null;
 }
 /**
+ * Результат ежесуточного обхода сайта от главной (ТЗ §8.3.4). Обход спрашивает только origin из SITE_URL, идёт на глубину 6 переходов и не делает больше 2000 запросов. Отчёт ничего не меняет: ни статусов, ни robots-директив, ни карты сайта.
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "seo-link-audit".
+ */
+export interface SeoLinkAudit {
+  id: number;
+  /**
+   * Когда начат прогон. Отчёт верен НА ЭТОТ МОМЕНТ, а не на момент просмотра.
+   */
+  startedAt?: string | null;
+  /**
+   * Когда прогон закончен.
+   */
+  finishedAt?: string | null;
+  /**
+   * Какой хост обойдён. Значение из SITE_URL и только оттуда: адрес обхода не задаётся ни параметром, ни второй переменной окружения.
+   */
+  origin?: string | null;
+  /**
+   * Можно ли верить находкам о достижимости. Снято — обход оборвался по пределу или главная не ответила 200; тогда «сирот» в отчёте читать нельзя: их там столько, сколько страниц не успели обойти.
+   */
+  reliable?: boolean | null;
+  crawl?: {
+    requested?: number | null;
+    truncated?: boolean | null;
+  };
+  counts?: {
+    publishedRecords?: number | null;
+    orphans?: number | null;
+    broken?: number | null;
+    /**
+     * Не битые: работают. Но каждая тратит переход и спорит с правилом «внутренние ссылки — канонические».
+     */
+    redirected?: number | null;
+    unhealthy?: number | null;
+    notMeasured?: number | null;
+  };
+  /**
+   * Список ограничен 50 строками; общее число — в счётчиках.
+   */
+  records?:
+    | {
+        url?: string | null;
+        reason?: ('not-linked' | 'too-deep' | 'not-200' | 'not-measured') | null;
+        documentCollection?: ('cards' | 'collections') | null;
+        /**
+         * Идентификатор строкой, а не связью: отчёт обязан переживать удаление записи — иначе исчезал бы след ровно того события, ради которого его смотрят.
+         */
+        documentId?: string | null;
+        title?: string | null;
+        depth?: number | null;
+        /**
+         * да / нет / пусто. Пусто — карта не прочитана, то есть «неизвестно», а не «нет».
+         */
+        inSitemap?: string | null;
+        id?: string | null;
+      }[]
+    | null;
+  /**
+   * Список ограничен 50 строками на вид находки.
+   */
+  links?:
+    | {
+        url?: string | null;
+        kind?: ('broken' | 'redirected') | null;
+        status?: number | null;
+        location?: string | null;
+        /**
+         * Через перевод строки. Правится ссылка на странице-источнике.
+         */
+        referrers?: string | null;
+        id?: string | null;
+      }[]
+    | null;
+  /**
+   * Карта сайта собирается НА ЗАПРОСЕ (решение этапа 4): файла на диске нет, отдельной «генерации» не существует, и её дату здесь показать неоткуда. Поэтому здесь стоит то, что действительно измерено: чем ответил /sitemap.xml во время последнего обхода. Расхождение этой формы с формулировкой CLAUDE.md «перегенерируется хуками» заведено вопросом Э4-04-A и ждёт решения человека.
+   */
+  sitemap?: {
+    indexStatus?: number | null;
+    urls?: number | null;
+  };
+  /**
+   * Пустое место в отчёте без объяснения читается как «всё хорошо». Эти строки объясняют, чего проверка не увидела и почему.
+   */
+  warnings?:
+    | {
+        text?: string | null;
+        id?: string | null;
+      }[]
+    | null;
+  updatedAt?: string | null;
+  createdAt?: string | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "payload-jobs-stats".
+ */
+export interface PayloadJobsStat {
+  id: number;
+  stats?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt?: string | null;
+  createdAt?: string | null;
+}
+/**
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "site-settings_select".
  */
@@ -1552,6 +1810,79 @@ export interface SiteSettingsSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "seo-link-audit_select".
+ */
+export interface SeoLinkAuditSelect<T extends boolean = true> {
+  startedAt?: T;
+  finishedAt?: T;
+  origin?: T;
+  reliable?: T;
+  crawl?:
+    | T
+    | {
+        requested?: T;
+        truncated?: T;
+      };
+  counts?:
+    | T
+    | {
+        publishedRecords?: T;
+        orphans?: T;
+        broken?: T;
+        redirected?: T;
+        unhealthy?: T;
+        notMeasured?: T;
+      };
+  records?:
+    | T
+    | {
+        url?: T;
+        reason?: T;
+        documentCollection?: T;
+        documentId?: T;
+        title?: T;
+        depth?: T;
+        inSitemap?: T;
+        id?: T;
+      };
+  links?:
+    | T
+    | {
+        url?: T;
+        kind?: T;
+        status?: T;
+        location?: T;
+        referrers?: T;
+        id?: T;
+      };
+  sitemap?:
+    | T
+    | {
+        indexStatus?: T;
+        urls?: T;
+      };
+  warnings?:
+    | T
+    | {
+        text?: T;
+        id?: T;
+      };
+  updatedAt?: T;
+  createdAt?: T;
+  globalType?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "payload-jobs-stats_select".
+ */
+export interface PayloadJobsStatsSelect<T extends boolean = true> {
+  stats?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  globalType?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "collections_widget".
  */
 export interface CollectionsWidget {
@@ -1559,6 +1890,14 @@ export interface CollectionsWidget {
     [k: string]: unknown;
   };
   width: 'full';
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "TaskSeo-link-audit".
+ */
+export interface TaskSeoLinkAudit {
+  input?: unknown;
+  output?: unknown;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema

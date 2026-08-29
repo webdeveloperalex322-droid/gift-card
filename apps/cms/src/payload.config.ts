@@ -7,6 +7,8 @@ import { buildConfig } from 'payload';
 
 import { reservedRoutes } from '@otkritka/shared';
 
+import { LinkAuditReport } from './audit/report';
+import { linkAuditJobsAccess, linkAuditTask } from './audit/task';
 import { CardImages } from './collections/card-images';
 import { Cards } from './collections/cards';
 import { Collections } from './collections/collections';
@@ -106,7 +108,24 @@ export default buildConfig({
   // лицензия изображений (Ч-10), тексты служебных страниц (Ч-19) и рекламные
   // места (Ч-11). Все поля пустые по умолчанию: пустое поле — команда шаблону
   // промолчать, а не повод подставить правдоподобную заглушку.
-  globals: [SiteSettings],
+  globals: [SiteSettings, LinkAuditReport],
+
+  // Очередь заданий (Э5-03). Единственная задача — ежесуточная проверка
+  // внутренних ссылок; она только читает сайт и складывает отчёт.
+  //
+  // `autoRun` здесь НЕТ намеренно. Этот же конфиг поднимается вторым процессом —
+  // рендером apps/web через Local API, — и внутрипроцессный крон завёлся бы и
+  // там: сайт обходил бы сам себя из процесса, обязанного отдавать страницы, а
+  // два процесса делили бы одну очередь. Расписание крутит внешний планировщик
+  // (`payload jobs:run --handle-schedules --queue seo-audit`), см. src/audit/task.ts.
+  //
+  // Права сужены до `admin`: по умолчанию Payload разрешает ставить и запускать
+  // задания любому аутентифицированному, то есть и сервисному аккаунту
+  // `ai-editor`, а новых рычагов у него появляться не должно.
+  jobs: {
+    access: linkAuditJobsAccess,
+    tasks: [linkAuditTask],
+  },
 
   onInit: seedFirstAdmin,
 

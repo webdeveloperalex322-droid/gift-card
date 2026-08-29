@@ -9,6 +9,8 @@
     "./types": "./src/payload-types.ts"
   },
   "scripts": {
+    "audit:links": "payload run ./scripts/run-link-audit.ts",
+    "audit:links:scheduled": "payload jobs:run --handle-schedules --queue seo-audit",
     "build": "next build",
     "check": "tsc --noEmit",
     "dev": "next dev --port 3010",
