@@ -125,6 +125,7 @@ describe('навигация сайта', () => {
     const paths = SITE_NAV.map((link) => link.path);
 
     expect(paths.filter((path) => path === '/otkrytki')).toHaveLength(1);
+    expect(paths).not.toContain('/podborki');
   });
 
   it('первым звеном меню идёт главная', () => {

@@ -179,6 +179,7 @@ describe('инварианты всех шаблонов страниц', () => 
     expect(markupOf(nav)).not.toContain('href="#"');
     expect(markupOf(nav)).not.toMatch(/<button\b/);
     expect(paths.filter((path) => path === '/otkrytki')).toHaveLength(1);
+    expect(paths).not.toContain('/podborki');
   });
 
   it('BaseLayout печатает подвал, а подвал ведёт на все три служебные страницы', () => {

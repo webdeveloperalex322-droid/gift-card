@@ -60,14 +60,15 @@ if (resolved.kind === 'card') {
     trail: await cardBreadcrumbTrail(resolved.card),
   };
 } else {
+  const collectionPage = resolved.kind === 'redirect' ? 1 : resolved.page;
   const memo = newNodeContentMemo();
   const [cardsPage, children, parent, related] = await Promise.all([
-    listCollectionCards({ collectionId: resolved.node.id, page: resolved.page }),
+    listCollectionCards({ collectionId: resolved.node.id, page: collectionPage }),
     listChildCollections(resolved.node.id, memo),
     findCollectionById(relationId(resolved.node.parent)),
     listRelatedCollections(relationIds(resolved.node.related), memo),
   ]);
-  if (resolved.page > 1 && resolved.page > cardsPage.pageCount) {
+  if (collectionPage > 1 && collectionPage > cardsPage.pageCount) {
     return new Response(null, { status: 404 });
   }
 
@@ -76,7 +77,7 @@ if (resolved.kind === 'card') {
     children,
     env: serverEnv(),
     node: resolved.node,
-    page: resolved.page,
+    page: collectionPage,
     pageCount: cardsPage.pageCount,
     parent,
     related,
@@ -85,12 +86,18 @@ if (resolved.kind === 'card') {
   if (content === null) {
     return new Response(null, { status: 404 });
   }
+  if (resolved.kind === 'redirect') {
+    return new Response(null, {
+      headers: { Location: resolved.location },
+      status: 301,
+    });
+  }
   const settings = await readSiteSettings();
   page = {
     ads: adRows(settings.adSlots),
     content,
     kind: 'collection' as const,
-    trail: await collectionBreadcrumbTrail(resolved.node, resolved.page),
+    trail: await collectionBreadcrumbTrail(resolved.node, collectionPage),
   };
 }
 ---

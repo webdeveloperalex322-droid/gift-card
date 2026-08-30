@@ -1211,8 +1211,10 @@ async function main(): Promise<void> {
 
     const pageOne = await request(`${collectionPath}/page/1`);
     record(
-      '/page/1 подборки — одиночный 301 на базовый URL (решение Э3-07)',
-      pageOne.status === 301 && pageOne.headers.location === collectionPath,
+      '/page/1 подборки — пустой одиночный 301 на базовый URL (решение Э3-07)',
+      pageOne.status === 301 &&
+        pageOne.headers.location === collectionPath &&
+        pageOne.body.length === 0,
       `${String(pageOne.status)} → ${String(pageOne.headers.location)}`,
     );
     const afterHop = await request(String(pageOne.headers.location));

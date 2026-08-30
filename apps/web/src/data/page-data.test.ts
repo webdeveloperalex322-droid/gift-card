@@ -91,10 +91,10 @@ function pathRead(input: {
   readonly cards?: readonly Card[];
   readonly collections?: readonly Collection[];
 }): OtkrytkiPathRead {
-  return (query) =>
-    Promise.resolve({
-      docs: query.collection === 'cards' ? (input.cards ?? []) : (input.collections ?? []),
-    });
+  return (query) => {
+    const docs = query.collection === 'cards' ? (input.cards ?? []) : (input.collections ?? []);
+    return Promise.resolve({ docs: docs.filter((doc) => doc.status === 'published') });
+  };
 }
 
 describe('единый диспетчер /otkrytki', () => {
@@ -164,7 +164,7 @@ describe('единый диспетчер /otkrytki', () => {
     ).rejects.toThrow(/одновременно.*карточк.*подборк/iu);
   });
 
-  it('делегирует каноническую пагинацию подборке и отклоняет /page/1', async () => {
+  it('делегирует каноническую пагинацию подборке', async () => {
     const read = pathRead({
       collections: [collection({ path: '/otkrytki/prazdniki/8-marta' })],
     });
@@ -176,10 +176,36 @@ describe('единый диспетчер /otkrytki', () => {
       node: { path: '/otkrytki/prazdniki/8-marta' },
       page: 2,
     });
+  });
+
+  it('/page/1 публичной вложенной подборки возвращает решение о 301 на базу', async () => {
+    const read = pathRead({
+      collections: [collection({ path: '/otkrytki/prazdniki/8-marta' })],
+    });
+
     await expect(
       loadOtkrytkiPathPage({ path: '/otkrytki/prazdniki/8-marta/page/1', read }),
-    ).resolves.toBeNull();
+    ).resolves.toMatchObject({
+      kind: 'redirect',
+      location: '/otkrytki/prazdniki/8-marta',
+      node: { path: '/otkrytki/prazdniki/8-marta' },
+    });
   });
+
+  it.each([
+    ['отсутствующей', []],
+    ['неопубликованной', [collection({ status: 'review' })]],
+  ] as const)(
+    '/page/1 %s вложенной подборки отвечает 404, а не 301 на 404',
+    async (_case, collections) => {
+      await expect(
+        loadOtkrytkiPathPage({
+          path: '/otkrytki/prazdniki/8-marta/page/1',
+          read: pathRead({ collections }),
+        }),
+      ).resolves.toBeNull();
+    },
+  );
 });
 
 const EMPTY_SETTINGS = { id: 1, createdAt: '', updatedAt: '' } as SiteSetting;

@@ -114,12 +114,26 @@ export interface CollectionPageData {
   readonly page: number;
 }
 
-export type OtkrytkiPathPageData = CardPageData | CollectionPageData;
+export interface OtkrytkiPathRedirect {
+  readonly kind: 'redirect';
+  readonly location: string;
+  /**
+   * Публичная запись базового URL. Route обязан проверить её
+   * содержимое тем же способом, что и базовую страницу: пустая
+   * подборка сама отвечает 404, и 301 на неё запрещён.
+   */
+  readonly node: Collection;
+}
+
+export type OtkrytkiPathResolution =
+  | CardPageData
+  | CollectionPageData
+  | OtkrytkiPathRedirect;
 
 export async function loadOtkrytkiPathPage(input: {
   readonly path: string;
   readonly read: OtkrytkiPathRead;
-}): Promise<OtkrytkiPathPageData | null> {
+}): Promise<OtkrytkiPathResolution | null> {
   if (!input.path.startsWith('/') || looksLikeAbsoluteUrl(input.path)) {
     return null;
   }
@@ -141,12 +155,17 @@ export async function loadOtkrytkiPathPage(input: {
 
   const split = splitPaginatedPath(canonical);
   let page = 1;
+  let redirectToBase = false;
   if (split.pageParam !== null) {
     const decision = decidePageParam(split.pageParam);
-    if (decision.action !== 'page') {
+    if (decision.action === 'not-found') {
       return null;
     }
-    page = decision.page;
+    if (decision.action === 'redirect-to-base') {
+      redirectToBase = true;
+    } else {
+      page = decision.page;
+    }
   }
 
   const relativeSegments = pathSegments(split.basePath).slice(
@@ -164,7 +183,12 @@ export async function loadOtkrytkiPathPage(input: {
 
   if (split.pageParam !== null || relativeSegments.length > 1) {
     const node = await collectionResult();
-    return node === null ? null : { kind: 'collection', node, page };
+    if (node === null) {
+      return null;
+    }
+    return redirectToBase
+      ? { kind: 'redirect', location: split.basePath, node }
+      : { kind: 'collection', node, page };
   }
 
   const [cardResult, node] = await Promise.all([
