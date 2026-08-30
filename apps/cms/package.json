@@ -30,7 +30,8 @@
     "payload": "3.88.0",
     "pg": "8.20.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "sharp": "catalog:"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",

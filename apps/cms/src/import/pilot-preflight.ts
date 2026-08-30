@@ -1,0 +1,405 @@
+import { createHash } from 'node:crypto';
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+
+import sharp from 'sharp';
+
+import { validateSiteContent } from '../../../../scripts/content-import/schema.js';
+import type { CardSeed, CollectionSeed } from '../../../../scripts/content-import/schema.js';
+import { buildCardPath, CARD_PATH_PREFIX } from '../seo/paths';
+import {
+  pilotIntroDocument,
+  type ExistingCard,
+  type ExistingCollection,
+  type ExistingContentPathClaim,
+  type PilotImportStore,
+  type PilotPreflightInput,
+  type PilotPreflightRecord,
+  type PilotPreflightReport,
+} from './pilot-types';
+
+export type {
+  ExistingCard,
+  ExistingCollection,
+  ExistingContentPathClaim,
+  PilotImportStore,
+  PilotPreflightInput,
+  PilotPreflightRecord,
+  PilotPreflightReport,
+} from './pilot-types';
+
+interface CheckedRecord {
+  readonly record: PilotPreflightRecord;
+  readonly errors: readonly string[];
+}
+
+interface AssetCheck {
+  readonly valid: boolean;
+  readonly errors: readonly string[];
+}
+
+function valueLabel(value: unknown): string {
+  return value === null ? 'null' : JSON.stringify(value);
+}
+
+function differingFields(
+  expected: Readonly<Record<string, unknown>>,
+  actual: Readonly<Record<string, unknown>>,
+): string[] {
+  return Object.keys(expected).filter((field) => !isDeepStrictEqual(actual[field], expected[field]));
+}
+
+function cardPath(slug: string): string {
+  return buildCardPath(slug);
+}
+
+function cardSlugForPath(path: string): string | null {
+  const prefix = `${CARD_PATH_PREFIX}/`;
+  if (!path.startsWith(prefix)) return null;
+  const suffix = path.slice(prefix.length);
+  return suffix !== '' && !suffix.includes('/') ? suffix : null;
+}
+
+function expectedParentPath(
+  seed: CollectionSeed,
+  collectionsByKey: ReadonlyMap<string, CollectionSeed>,
+): string | null {
+  if (seed.parentKey === null) return null;
+  return collectionsByKey.get(seed.parentKey)?.path ?? null;
+}
+
+function expectedCollectionFields(
+  seed: CollectionSeed,
+  collectionsByKey: ReadonlyMap<string, CollectionSeed>,
+): Readonly<Record<string, unknown>> {
+  return {
+    slug: seed.slug,
+    path: seed.path,
+    nodeKind: seed.nodeKind,
+    parentPath: expectedParentPath(seed, collectionsByKey),
+    title: seed.title,
+    h1: seed.h1,
+    metaDescription: seed.metaDescription,
+    intro: pilotIntroDocument(seed.intro),
+    description: seed.description,
+    robots: seed.robots,
+  };
+}
+
+function actualCollectionFields(existing: ExistingCollection): Readonly<Record<string, unknown>> {
+  return {
+    slug: existing.slug,
+    path: existing.path,
+    nodeKind: existing.nodeKind,
+    parentPath: existing.parentPath,
+    title: existing.title,
+    h1: existing.h1,
+    metaDescription: existing.metaDescription,
+    intro: existing.intro,
+    description: existing.description,
+    robots: existing.robots,
+  };
+}
+
+function expectedCardFields(
+  seed: CardSeed,
+  collectionsByKey: ReadonlyMap<string, CollectionSeed>,
+): Readonly<Record<string, unknown>> {
+  const collectionPath = collectionsByKey.get(seed.collectionKey)?.path;
+  return {
+    slug: seed.slug,
+    title: seed.title,
+    h1: seed.h1,
+    metaDescription: seed.metaDescription,
+    alt: seed.alt,
+    caption: seed.caption,
+    description: seed.description,
+    usageTerms: seed.usageTerms,
+    robots: seed.robots,
+    collectionPaths: collectionPath === undefined ? [] : [collectionPath],
+    imageSourceFile: seed.sourceFile,
+  };
+}
+
+function actualCardFields(existing: ExistingCard): Readonly<Record<string, unknown>> {
+  return {
+    slug: existing.slug,
+    title: existing.title,
+    h1: existing.h1,
+    metaDescription: existing.metaDescription,
+    alt: existing.alt,
+    caption: existing.caption,
+    description: existing.description,
+    usageTerms: existing.usageTerms,
+    robots: existing.robots,
+    collectionPaths: [...existing.collectionPaths],
+    imageSourceFile: existing.imageSourceFile,
+  };
+}
+
+function statusError(kind: 'Card' | 'Collection', key: string, existing: { status: string }): string | null {
+  return existing.status === 'draft' || existing.status === 'review'
+    ? null
+    : `${kind} ${key} existing record is ${existing.status}; only draft or review can resume.`;
+}
+
+function claimError(
+  label: string,
+  path: string,
+  kind: 'cards' | 'collections',
+  existing: { pathClaimKey: string | null } | null,
+  claim: ExistingContentPathClaim | null,
+): string | null {
+  if (claim === null) {
+    return existing === null
+      ? null
+      : `${label} final path ${path} has no permanent content-path claim.`;
+  }
+  if (existing === null || existing.pathClaimKey === null || existing.pathClaimKey.trim() === '') {
+    return `${label} final path ${path} is permanently claimed by ${claim.ownerKey}.`;
+  }
+  const expectedOwnerKey = `${kind}:${existing.pathClaimKey}`;
+  return claim.ownerCollection === kind && claim.ownerKey === expectedOwnerKey
+    ? null
+    : `${label} final path ${path} is permanently claimed by ${claim.ownerKey}.`;
+}
+
+async function readClaim(store: PilotImportStore, path: string): Promise<ExistingContentPathClaim | null | undefined> {
+  return store.findContentPathClaimByPath === undefined
+    ? undefined
+    : store.findContentPathClaimByPath(path);
+}
+
+async function checkCollection(
+  seed: CollectionSeed,
+  store: PilotImportStore,
+  collectionsByKey: ReadonlyMap<string, CollectionSeed>,
+): Promise<CheckedRecord> {
+  const errors: string[] = [];
+  const [existing, cardCollision, claim] = await Promise.all([
+    store.findCollectionByPath(seed.path),
+    (() => {
+      const slug = cardSlugForPath(seed.path);
+      return slug === null ? Promise.resolve(null) : store.findCardBySlug(slug);
+    })(),
+    readClaim(store, seed.path),
+  ]);
+  if (cardCollision !== null) {
+    errors.push(
+      `Collection ${seed.key} final path ${seed.path} is occupied by card ${String(cardCollision.id)}.`,
+    );
+  }
+  if (existing !== null) {
+    const fields = differingFields(
+      expectedCollectionFields(seed, collectionsByKey),
+      actualCollectionFields(existing),
+    );
+    errors.push(...fields.map((field) =>
+      `Collection ${seed.key} existing record ${String(existing.id)} differs in managed field ${field}.`,
+    ));
+    const state = statusError('Collection', seed.key, existing);
+    if (state !== null) errors.push(state);
+  }
+  if (claim !== undefined) {
+    const problem = claimError(`Collection ${seed.key}`, seed.path, 'collections', existing, claim);
+    if (problem !== null) errors.push(problem);
+  }
+  return {
+    errors,
+    record: {
+      key: `collection:${seed.key}`,
+      kind: 'collection',
+      path: seed.path,
+      state: errors.length > 0 ? 'blocked' : existing === null ? 'create' : 'resume',
+      detail: errors.length > 0
+        ? errors.join(' ')
+        : existing === null ? 'validated creation candidate' : `resume existing ${String(existing.id)}`,
+    },
+  };
+}
+
+async function checkCard(
+  seed: CardSeed,
+  store: PilotImportStore,
+  collectionsByKey: ReadonlyMap<string, CollectionSeed>,
+): Promise<CheckedRecord> {
+  const path = cardPath(seed.slug);
+  const errors: string[] = [];
+  const [existing, collectionCollision, claim] = await Promise.all([
+    store.findCardBySlug(seed.slug),
+    store.findCollectionByPath(path),
+    readClaim(store, path),
+  ]);
+  if (collectionCollision !== null) {
+    errors.push(
+      `Card ${seed.pilotId} final path ${path} is occupied by collection ${String(collectionCollision.id)}.`,
+    );
+  }
+  if (existing !== null) {
+    const fields = differingFields(
+      expectedCardFields(seed, collectionsByKey),
+      actualCardFields(existing),
+    );
+    errors.push(...fields.map((field) =>
+      `Card ${seed.pilotId} existing record ${String(existing.id)} differs in managed field ${field}.`,
+    ));
+    const state = statusError('Card', seed.pilotId, existing);
+    if (state !== null) errors.push(state);
+  }
+  if (claim !== undefined) {
+    const problem = claimError(`Card ${seed.pilotId}`, path, 'cards', existing, claim);
+    if (problem !== null) errors.push(problem);
+  }
+  return {
+    errors,
+    record: {
+      key: `card:${seed.pilotId}`,
+      kind: 'card',
+      path,
+      state: errors.length > 0 ? 'blocked' : existing === null ? 'create' : 'resume',
+      detail: errors.length > 0
+        ? errors.join(' ')
+        : existing === null ? 'validated creation candidate' : `resume existing ${String(existing.id)}`,
+    },
+  };
+}
+
+async function checkAsset(assetRoot: string, seed: CardSeed): Promise<AssetCheck> {
+  const path = join(assetRoot, seed.sourceFile);
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(path);
+  } catch (error) {
+    const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : null;
+    return {
+      valid: false,
+      errors: [code === 'ENOENT'
+        ? `Asset ${seed.sourceFile} is missing.`
+        : `Asset ${seed.sourceFile} cannot be read: ${error instanceof Error ? error.message : String(error)}.`],
+    };
+  }
+
+  const errors: string[] = [];
+  try {
+    const metadata = await sharp(bytes).metadata();
+    const width = metadata.width;
+    const height = metadata.height;
+    if (metadata.format !== 'jpeg') {
+      errors.push(`Asset ${seed.sourceFile} must be JPEG; received ${metadata.format ?? 'unknown'}.`);
+    }
+    if (!Number.isInteger(width) || !Number.isInteger(height)) {
+      errors.push(`Asset ${seed.sourceFile} has no readable integer dimensions.`);
+    } else {
+      if (width < 1024 || height < 1280) {
+        errors.push(
+          `Asset ${seed.sourceFile} must be at least 1024x1280; received ${String(width)}x${String(height)}.`,
+        );
+      }
+      if (width * 5 !== height * 4) {
+        errors.push(
+          `Asset ${seed.sourceFile} must have exact 4:5 ratio; received ${String(width)}x${String(height)}.`,
+        );
+      }
+    }
+    createHash('sha256').update(bytes).digest('hex');
+  } catch (error) {
+    errors.push(
+      `Asset ${seed.sourceFile} cannot be decoded by Sharp: ${error instanceof Error ? error.message : valueLabel(error)}.`,
+    );
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+async function directoryErrors(assetRoot: string, expectedFiles: ReadonlySet<string>): Promise<string[]> {
+  try {
+    const entries = await readdir(assetRoot, { withFileTypes: true });
+    const actualFiles = entries.filter((entry) => entry.isFile()).map((entry) => entry.name).sort();
+    const missing = [...expectedFiles].filter((name) => !actualFiles.includes(name)).sort();
+    const unexpected = actualFiles.filter((name) => !expectedFiles.has(name));
+    if (missing.length === 0 && unexpected.length === 0 && actualFiles.length === expectedFiles.size) {
+      return [];
+    }
+    const details = [
+      missing.length > 0 ? `missing: ${missing.join(', ')}` : '',
+      unexpected.length > 0 ? `unexpected: ${unexpected.join(', ')}` : '',
+    ].filter(Boolean).join('; ');
+    return [`Asset root must contain exactly the 50 matrix JPEGs; ${details}.`];
+  } catch (error) {
+    return [
+      `Asset root ${assetRoot} cannot be read: ${error instanceof Error ? error.message : String(error)}.`,
+    ];
+  }
+}
+
+function internalPathErrors(input: PilotPreflightInput): string[] {
+  const owners = new Map<string, string>();
+  const errors: string[] = [];
+  for (const candidate of [
+    ...input.matrix.collections.map((seed) => ({ owner: `collection:${seed.key}`, path: seed.path })),
+    ...input.matrix.cards.map((seed) => ({ owner: `card:${seed.pilotId}`, path: cardPath(seed.slug) })),
+  ]) {
+    const previous = owners.get(candidate.path);
+    if (previous !== undefined) {
+      errors.push(`Pilot final path ${candidate.path} is assigned to both ${previous} and ${candidate.owner}.`);
+    } else {
+      owners.set(candidate.path, candidate.owner);
+    }
+  }
+  return errors;
+}
+
+/**
+ * Reads assets and database state only. The adapter has no write method, so a
+ * preflight cannot mutate CMS even accidentally.
+ */
+export async function runPilotPreflight(input: PilotPreflightInput): Promise<PilotPreflightReport> {
+  const blockingErrors = [
+    ...validateSiteContent(input.matrix, input.manifest),
+    ...internalPathErrors(input),
+  ];
+
+  const actorEmail = input.actorEmail.trim();
+  if (actorEmail === '') {
+    blockingErrors.push('Import actor email must be explicit.');
+  } else {
+    const actor = await input.store.findActor(actorEmail);
+    if (actor === null) {
+      blockingErrors.push(`Import actor ${actorEmail} does not exist.`);
+    } else if (actor.role !== 'ai-editor') {
+      blockingErrors.push(
+        `Import actor ${actorEmail} must have role ai-editor; received ${actor.role}.`,
+      );
+    }
+  }
+
+  const expectedFiles = new Set(input.matrix.cards.map((card) => card.sourceFile));
+  blockingErrors.push(...await directoryErrors(input.assetRoot, expectedFiles));
+  const assetChecks = await Promise.all(
+    input.matrix.cards.map((seed) => checkAsset(input.assetRoot, seed)),
+  );
+  blockingErrors.push(...assetChecks.flatMap((result) => result.errors));
+
+  const collectionsByKey = new Map(input.matrix.collections.map((seed) => [seed.key, seed]));
+  const [collectionChecks, cardChecks] = await Promise.all([
+    Promise.all(input.matrix.collections.map((seed) =>
+      checkCollection(seed, input.store, collectionsByKey),
+    )),
+    Promise.all(input.matrix.cards.map((seed) => checkCard(seed, input.store, collectionsByKey))),
+  ]);
+  const checks = [...collectionChecks, ...cardChecks];
+  blockingErrors.push(...checks.flatMap((result) => result.errors));
+  const records = checks.map((result) => result.record);
+
+  return {
+    mode: 'dry-run',
+    collectionNodes: input.matrix.collections.length,
+    leafTopics: input.matrix.collections.filter((seed) => seed.leafTopic).length,
+    cards: input.matrix.cards.length,
+    validFiles: assetChecks.filter((result) => result.valid).length,
+    resumed: records.filter((record) => record.state === 'resume').length,
+    mutationCount: 0,
+    blockingErrors: [...new Set(blockingErrors)],
+    records,
+  };
+}
