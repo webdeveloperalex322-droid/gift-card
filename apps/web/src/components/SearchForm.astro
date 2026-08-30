@@ -1,0 +1,87 @@
+---
+/**
+ * Форма внутреннего поиска (задача Э3-10).
+ *
+ * Обычная HTML-форма с `method="get"`: браузер сам собирает `?q=`, сервер сам
+ * ищет и печатает результат ссылками. Клиентского JS здесь нет ни строки — это
+ * условие «страница полноценна при отключённом JS» (`CLAUDE.md`, «Рендеринг»), а
+ * поисковый каркас на JS означал бы содержание за JavaScript, то есть прямой
+ * запрет п. 23.
+ *
+ * Форма не создаёт адресов: она ведёт на ЕДИНСТВЕННЫЙ маршрут `/search`, у
+ * которого canonical всегда чистый (`../seo/search-page.ts`). Метода `post`
+ * здесь быть не может — тогда результат нельзя было бы открыть по ссылке и
+ * показать назад кнопкой браузера.
+ */
+import {
+  SEARCH_MAX_QUERY_LENGTH,
+  SEARCH_PAGE,
+  SEARCH_PATH,
+  SEARCH_QUERY_PARAM,
+} from '../seo/search-page';
+
+interface Props {
+  /**
+   * Текущий запрос — подставляется в поле, чтобы его можно было уточнить, а не
+   * набирать заново. `null` — поле пустое.
+   */
+  query?: string | null;
+  /**
+   * Идентификатор поля. Разный на разных страницах не нужен, но форма может
+   * появиться дважды на одной странице — тогда `id` обязан различаться, иначе
+   * подпись `<label>` укажет не на то поле.
+   */
+  fieldId?: string;
+}
+
+const { fieldId = 'site-search-query', query = null } = Astro.props;
+---
+
+<form class="search-form" action={SEARCH_PATH} method="get" role="search">
+  <label class="search-form__label" for={fieldId}>{SEARCH_PAGE.fieldLabel}</label>
+  <input
+    class="search-form__input"
+    id={fieldId}
+    type="search"
+    name={SEARCH_QUERY_PARAM}
+    value={query ?? ''}
+    placeholder={SEARCH_PAGE.placeholder}
+    maxlength={SEARCH_MAX_QUERY_LENGTH}
+    autocomplete="off"
+  />
+  <button class="search-form__submit" type="submit">{SEARCH_PAGE.submitLabel}</button>
+</form>
+
+<style>
+  .search-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-block: 1rem 0;
+  }
+
+  .search-form__label {
+    flex: 0 0 100%;
+    font-size: 0.875rem;
+  }
+
+  .search-form__input {
+    flex: 1 1 16rem;
+    min-width: 0;
+    padding: 0.5rem 0.625rem;
+    border: 1px solid currentColor;
+    border-radius: 0.25rem;
+    font: inherit;
+  }
+
+  .search-form__submit {
+    padding: 0.5rem 1rem;
+    border: 1px solid currentColor;
+    border-radius: 0.25rem;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+</style>

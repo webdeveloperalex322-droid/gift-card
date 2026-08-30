@@ -7,10 +7,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "node scripts/not-scaffolded.mjs dev \"apps/web (Astro) и apps/cms (Payload) ещё не установлены\"",
-    "build": "node scripts/not-scaffolded.mjs build \"apps/web (Astro) и apps/cms (Payload) ещё не установлены\"",
-    "generate:types": "node scripts/not-scaffolded.mjs generate:types \"payload generate:types появится вместе с apps/cms\"",
-    "check": "tsc -b tsconfig.json && eslint .",
+    "build:libs": "tsc -b tsconfig.json",
+    "dev": "pnpm run build:libs && pnpm --parallel --filter @otkritka/web --filter @otkritka/cms run dev",
+    "build": "pnpm run build:libs && pnpm --filter @otkritka/web run build && pnpm --filter @otkritka/cms run build",
+    "generate:types": "pnpm run build:libs && pnpm --filter @otkritka/cms run generate:types",
+    "check": "pnpm run build:libs && pnpm --filter @otkritka/web run check && pnpm --filter @otkritka/cms run check && eslint .",
     "test": "vitest run",
     "test:seo": "node scripts/seo-gate.mjs",
     "verify": "pnpm run check && pnpm run test && pnpm run test:seo"
@@ -19,10 +20,12 @@
     "@eslint/js": "^9.39.0",
     "@otkritka/images": "workspace:*",
     "@otkritka/shared": "workspace:*",
-    "@types/node": "^24.10.1",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "catalog:",
     "eslint": "^9.39.0",
+    "eslint-plugin-astro": "^1.7.0",
     "sharp": "catalog:",
-    "typescript": "^5.9.3",
+    "typescript": "catalog:",
     "typescript-eslint": "^8.46.0",
     "vitest": "^3.2.4"
   },

@@ -1,11 +1,22 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": ".",
+    "rootDir": "..",
     "outDir": "dist",
     "types": ["vitest/globals", "node"],
     "emitDeclarationOnly": true
   },
   "include": ["unit/**/*.ts", "seo/**/*.ts"],
-  "references": [{ "path": "../packages/shared" }, { "path": "../packages/images" }]
+  // Модули маршрутизации apps/web в `include` НЕ входят, хотя юнит-тесты их
+  // импортируют. Раньше входили — и тогда владельцем проверки типов кода
+  // apps/web оказывался проект тестов, причём под `NodeNext`, тогда как
+  // `astro check` смотрел на те же файлы под `Bundler`. Теперь их проверяет и
+  // компилирует сам apps/web (`apps/web/tsconfig.node.json`), а здесь только
+  // ссылка на его проект: типы приходят из объявлений, границы владения совпадают
+  // с границами папок.
+  "references": [
+    { "path": "../packages/shared" },
+    { "path": "../packages/images" },
+    { "path": "../apps/web/tsconfig.node.json" }
+  ]
 }

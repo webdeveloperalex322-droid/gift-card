@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  // Базой взят пресет Astro, а не корневой tsconfig.base.json: Astro требует
+  // moduleResolution "Bundler", jsx "preserve" и noEmit, а корневой базовый
+  // конфиг описывает composite-проекты с NodeNext-разрешением. По той же
+  // причине из решения корневого tsconfig.json этот проект не ссылается —
+  // composite требует emit объявлений, а Astro его не делает. Проверка типов
+  // выполняется командой `pnpm --filter @otkritka/web run check` (`astro check`),
+  // и она входит в корневой `pnpm check`.
+  //
+  // Взят `strictest`, а не `strict`: набор его флагов совпадает с
+  // tsconfig.base.json (noUncheckedIndexedAccess, exactOptionalPropertyTypes,
+  // noImplicitOverride, noFallthroughCasesInSwitch), поэтому строгость по
+  // монорепозиторию остаётся одинаковой.
+  "extends": "astro/tsconfigs/strictest",
+  "include": [".astro/types.d.ts", "**/*"],
+  "exclude": ["dist"]
+}

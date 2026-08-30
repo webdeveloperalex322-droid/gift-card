@@ -1,0 +1,116 @@
+---
+/**
+ * Каталог подборок — `/podborki` (задача Э3-08).
+ *
+ * До этой задачи адрес отвечал 404: рест-параметр маршрута ветви
+ * (`./[...path].astro`) совпадает и с пустым значением, а страницы каталога не
+ * существовало. Теперь каталог есть, и приоритет маршрутов Astro отдаёт этот
+ * адрес индексному файлу, а не рест-параметру — проверено смоуком на собранном
+ * сервере.
+ *
+ * `/podborki` — контейнер реестра зарезервированных маршрутов
+ * (`packages/shared/src/reserved-routes.ts`): запись CMS с таким итоговым путём
+ * создать нельзя, а пути под ним — норма. Второй копии этого правила в
+ * `apps/web` нет.
+ *
+ * ## Что показывает страница
+ *
+ * Карту разделов в ДВА уровня: узлы верхнего уровня (группирующие узлы
+ * `prazdniki` и `adresaty`, адресаты без праздника) и их прямые дети. Глубже
+ * лежат пары «праздник × адресат» — они достижимы со страницы своего
+ * праздничного узла. Отсюда и глубина от главной: главная → `/podborki` → узел
+ * верхнего уровня → пара → карточка, то есть ровно четыре перехода (следствие
+ * Ч-04-5).
+ *
+ * Пагинации у каталога нет намеренно: узлов верхнего уровня единицы, и
+ * `/podborki/page/N` не существует ни в каком виде — такой адрес отдаёт 404
+ * маршрутом ветви.
+ *
+ * Списком выводятся только ОПУБЛИКОВАННЫЕ узлы: других слой данных не отдаёт,
+ * поэтому ссылки на черновик здесь не бывает. Ссылки на 200 это не гарантирует:
+ * опубликованный узел без открыток и без детей сам отдаёт 404, и закрыто это
+ * отказом CMS в публикации пустого узла (`assertNotEmptyForPublish` в
+ * `apps/cms/src/collections/collection-volume.ts`), а не свойством выборки.
+ */
+import Breadcrumbs from '../../components/Breadcrumbs.astro';
+import { collectionCatalogPage } from '../../data';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { CATALOGS } from '../../seo/catalog-pages';
+import { jsonLdScriptText } from '../../seo/json-ld';
+import { serverEnv } from '../../server-env';
+
+export const prerender = false;
+
+const result = await collectionCatalogPage(serverEnv());
+if (result.kind !== 'page') {
+  // Каталог без опубликованных подборок — 404, а не 200 с пустым списком:
+  // пустая страница не отдаёт 200 как посадочная (ТЗ §5.3). Тело пустое, иначе
+  // Astro не отдаст страницу 404 приложения.
+  return new Response(null, { status: 404 });
+}
+
+const facts = CATALOGS.collections;
+const jsonLd = jsonLdScriptText(result.jsonLd);
+---
+
+<BaseLayout
+  title={result.view.title}
+  description={result.view.metaDescription}
+  canonicalPath={result.view.canonicalPath}
+  robots={result.view.robots}
+>
+  <Breadcrumbs trail={result.trail} />
+
+  <h1>{result.view.heading}</h1>
+
+  <p class="catalog__lead">{facts.lead}</p>
+
+  <ul class="catalog__sections" aria-label={facts.listLabel}>
+    {
+      result.sections.map((section) => (
+        <li class="catalog__section">
+          <h2 class="catalog__section-title">
+            <a href={section.node.path}>{section.node.name}</a>
+          </h2>
+          {
+            section.children.length === 0 ? null : (
+              <ul class="link-row">
+                {
+                  section.children.map((child) => (
+                    <li>
+                      <a href={child.path}>{child.name}</a>
+                    </li>
+                  ))
+                }
+              </ul>
+            )
+          }
+        </li>
+      ))
+    }
+  </ul>
+
+  <script type="application/ld+json" is:inline set:html={jsonLd} />
+</BaseLayout>
+
+<style>
+  .catalog__lead {
+    max-width: 45rem;
+    margin-block: 0 1.5rem;
+  }
+
+  .catalog__sections {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .catalog__section + .catalog__section {
+    margin-block-start: 1.5rem;
+  }
+
+  .catalog__section-title {
+    font-size: 1.25rem;
+    margin-block: 0 0.5rem;
+  }
+</style>

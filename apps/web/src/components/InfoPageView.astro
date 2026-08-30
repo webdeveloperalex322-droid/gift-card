@@ -1,0 +1,71 @@
+---
+/**
+ * Разметка служебной информационной страницы (задача Э3-11).
+ *
+ * ОДИН компонент на три маршрута (`/o-proekte`, `/usloviya`, `/kontakty`): они
+ * различаются только содержимым, и три копии этой разметки однажды разошлись бы в
+ * составе головы документа или в директиве робота. Решение (что показать и какую
+ * директиву поставить) принимает `../data/info-pages.ts` через чистый
+ * `../seo/info-pages.ts`; здесь только печать.
+ *
+ * Инварианты, закодированные здесь (`CLAUDE.md`, раздел «Рендеринг»):
+ *   - ровно один `<h1>` — заголовок страницы; заголовки внутри текста понижает
+ *     разбор (`../seo/rich-text.ts`);
+ *   - основной текст присутствует в HTML-ответе сервера: ни `client:*`, ни
+ *     `<script>`, ни `set:html` для текста человека;
+ *   - навигация — только `<a href>`: крошки, меню и подвал печатает сервер;
+ *   - изображений на странице нет, поэтому вопроса «первое крупное без lazy» тут
+ *     не возникает вовсе;
+ *   - директива робота приходит из предиката Ч-23 (решение человека И реальный
+ *     текст) — литерала `index,follow` в этом пути нет.
+ *
+ * Про заглушку: страница отвечает 200 и с незаполненным телом, но говорит об этом
+ * видимым текстом и остаётся `noindex`. Полное обоснование — шапка
+ * `../seo/info-pages.ts` («Почему незаполненная страница отдаёт 200, а не 404»).
+ */
+import Breadcrumbs from './Breadcrumbs.astro';
+import RichText from './RichText.astro';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { type InfoPageView, INFO_PAGE_STUB_NOTICE, infoPageBreadcrumbTrail } from '../seo/info-pages';
+import { richTextBlocks } from '../seo/rich-text';
+
+interface Props {
+  view: InfoPageView;
+}
+
+const { view } = Astro.props;
+
+const trail = infoPageBreadcrumbTrail(view);
+// Разбор тела — тот же, что у вводного текста подборки. Узел, содержимое которого
+// разбор не напечатает, валит рендер с указанием типа: тихая потеря текста на
+// странице «Условия использования» дороже 500 (см. шапку ../seo/rich-text.ts).
+const body = richTextBlocks(view.body);
+---
+
+<BaseLayout
+  title={view.title}
+  description={view.metaDescription}
+  canonicalPath={view.path}
+  robots={view.robots}
+>
+  <Breadcrumbs trail={trail} />
+
+  <h1>{view.heading}</h1>
+
+  {body.length === 0 ? null : <RichText blocks={body} />}
+
+  {
+    view.stub ? (
+      <p class="info-page__stub">{INFO_PAGE_STUB_NOTICE}</p>
+    ) : null
+  }
+</BaseLayout>
+
+<style>
+  .info-page__stub {
+    margin-block-start: 1rem;
+    padding: 0.75rem 1rem;
+    border-inline-start: 3px solid currentColor;
+    opacity: 0.8;
+  }
+</style>

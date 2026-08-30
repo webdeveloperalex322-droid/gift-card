@@ -1,0 +1,85 @@
+---
+/**
+ * Ряд ссылок фильтра представления (задача Э3-10).
+ *
+ * Норма: ТЗ §5.5 («фильтры на страницах подборок … не создают индексируемых URL:
+ * любые URL с параметрами фильтрации отдают canonical на чистую страницу
+ * подборки»), решение Ч-04-3 (стили и настроения — неиндексируемый фильтр без
+ * собственных URL), `CLAUDE.md` — «Рендеринг» (клиентский JS только точечными
+ * островами; фильтры меняют представление, но не создают индексируемых URL).
+ *
+ * ## Почему ссылки, а не остров на JS
+ *
+ * ТЗ разрешает оба варианта. Выбран серверный, потому что он единственный не
+ * прячет содержание за JavaScript: при отключённом JS фильтр продолжает
+ * работать, а состояние («показаны вертикальные») видно в адресе и в разметке
+ * ответа. Остров пришлось бы либо дублировать серверной веткой, либо признать,
+ * что часть выдачи существует только в браузере.
+ *
+ * ## Почему у ссылок `rel="nofollow"`
+ *
+ * Адреса с параметрами не участвуют в перелинковке (ТЗ §6.5): ссылка нужна
+ * посетителю, а краулеру ходить по ней незачем — представление всё равно закрыто
+ * `noindex` и указывает canonical на чистый путь. Пункт «Все форматы» —
+ * исключение: он ведёт на КАНОНИЧЕСКИЙ адрес страницы, то есть на обычную
+ * внутреннюю ссылку, и ограничивать её обход нечем.
+ *
+ * Модель ряда считает `../routing/view-params.ts` (чистая функция, тест —
+ * `tests/unit/web-view-params.test.ts`); компонент только печатает.
+ */
+import type { FilterOption } from '../routing/view-params';
+
+interface Props {
+  /** Готовый ряд: первый пункт — сброс на чистый адрес страницы. */
+  options: readonly FilterOption[];
+  /** Подпись ряда для вспомогательных технологий. */
+  ariaLabel?: string;
+}
+
+const { ariaLabel = 'Фильтр по формату открытки', options } = Astro.props;
+---
+
+<nav class="filter-row" aria-label={ariaLabel}>
+  <ul class="link-row">
+    {
+      options.map((option, index) => (
+        <li>
+          {
+            option.active ? (
+              <span class="filter-row__current" aria-current="true">{option.label}</span>
+            ) : (
+              <a
+                class="filter-row__link"
+                href={option.href}
+                rel={index === 0 ? undefined : 'nofollow'}
+              >
+                {option.label}
+              </a>
+            )
+          }
+        </li>
+      ))
+    }
+  </ul>
+</nav>
+
+<style>
+  .filter-row {
+    margin-block: 1rem 0;
+  }
+
+  .filter-row__link,
+  .filter-row__current {
+    display: inline-block;
+    padding: 0.25rem 0.625rem;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    font-size: 0.875rem;
+    text-decoration: none;
+  }
+
+  .filter-row__current {
+    font-weight: 700;
+    opacity: 0.6;
+  }
+</style>

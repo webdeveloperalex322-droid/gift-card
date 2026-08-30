@@ -4,11 +4,35 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node ../../scripts/not-scaffolded.mjs dev \"Astro в apps/web ещё не установлен\"",
-    "build": "node ../../scripts/not-scaffolded.mjs build \"Astro в apps/web ещё не установлен\""
+    "astro": "astro",
+    "build": "astro build && tsc -b tsconfig.node.json",
+    "check": "astro check",
+    "dev": "astro dev",
+    "measure:vitals": "node ./scripts/measure-web-vitals.mjs",
+    "preview": "astro preview",
+    "smoke:home": "pnpm --filter @otkritka/cms exec payload run ../web/scripts/smoke-home-search.ts",
+    "smoke:data": "pnpm --filter @otkritka/cms exec payload run ../web/scripts/smoke-data.ts",
+    "smoke:info": "pnpm --filter @otkritka/cms exec payload run ../web/scripts/smoke-info-pages.ts",
+    "smoke:media": "node ./scripts/smoke-media.mjs",
+    "smoke:pages": "pnpm --filter @otkritka/cms exec payload run ../web/scripts/smoke-pages.ts",
+    "smoke:redirects": "pnpm --filter @otkritka/cms exec payload run ../web/scripts/smoke-redirects.ts",
+    "smoke:sitemap": "pnpm --filter @otkritka/cms exec payload run ../web/scripts/smoke-sitemap.ts",
+    "smoke:slash": "node ./scripts/smoke-trailing-slash.mjs",
+    "start": "node ./scripts/start-server.mjs",
+    "sync": "astro sync"
   },
   "dependencies": {
+    "@astrojs/node": "^11.1.4",
+    "@otkritka/cms": "workspace:*",
+    "@otkritka/images": "workspace:*",
     "@otkritka/shared": "workspace:*",
-    "@otkritka/images": "workspace:*"
+    "astro": "^7.2.4",
+    "drizzle-kit": "0.31.7",
+    "graphql": "^16.14.2",
+    "payload": "3.88.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "typescript": "catalog:"
   }
 }

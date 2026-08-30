@@ -1,0 +1,76 @@
+---
+/**
+ * Вводный текст подборки: абзацы, заголовки, списки и цитаты (задача Э3-06).
+ *
+ * Компонент — ТОЛЬКО представление. Разбор lexical-документа живёт в чистом
+ * модуле `../seo/rich-text.ts` и там же проверяется тестом; здесь печатаются
+ * элементы. Разделение существенно: текст, введённый человеком, печатает
+ * шаблонизатор (то есть экранирует его сам Astro), и `set:html` в этом пути не
+ * участвует вовсе.
+ *
+ * Инварианты, закодированные здесь (`CLAUDE.md`, раздел «Рендеринг»):
+ *   - текст присутствует в HTML-ответе сервера: ни `client:*`, ни `<script>`;
+ *   - заголовки внутри текста начинаются с `<h2>` — единственный H1 страницы
+ *     задаёт запись (понижение уровня делает разбор);
+ *   - ссылка — обычная `<a href>`. Ссылка на другой хост получает
+ *     `rel="nofollow noopener"`: вводный текст пишет редактор, и вес страницы
+ *     наружу передаётся осознанно, а не по умолчанию.
+ */
+import type { RichTextBlock } from '../seo/rich-text';
+import TextRun from './TextRun.astro';
+
+interface Props {
+  /** Блоки из `richTextBlocks`. Пустой массив — компонент не печатает ничего. */
+  blocks: readonly RichTextBlock[];
+}
+
+const { blocks } = Astro.props;
+
+/**
+ * `rel` для внешней ссылки. Для внутренней атрибута нет вовсе: `rel=""` — это
+ * атрибут без значения, а не «ничего».
+ */
+const EXTERNAL_REL = 'nofollow noopener';
+---
+
+{
+  blocks.map((block) => {
+    if (block.kind === 'list') {
+      const List = block.ordered ? 'ol' : 'ul';
+      return (
+        <List>
+          {block.items.map((runs) => (
+            <li>
+              {runs.map((run) =>
+                run.href === null ? (
+                  <TextRun tags={run.tags} text={run.text} />
+                ) : (
+                  <a href={run.href} rel={run.external ? EXTERNAL_REL : undefined}>
+                    <TextRun tags={run.tags} text={run.text} />
+                  </a>
+                ),
+              )}
+            </li>
+          ))}
+        </List>
+      );
+    }
+
+    const Block =
+      block.kind === 'heading' ? (`h${String(block.level)}` as 'h2' | 'h3' | 'h4') : block.kind === 'quote' ? 'blockquote' : 'p';
+
+    return (
+      <Block>
+        {block.runs.map((run) =>
+          run.href === null ? (
+            <TextRun tags={run.tags} text={run.text} />
+          ) : (
+            <a href={run.href} rel={run.external ? EXTERNAL_REL : undefined}>
+              <TextRun tags={run.tags} text={run.text} />
+            </a>
+          ),
+        )}
+      </Block>
+    );
+  })
+}

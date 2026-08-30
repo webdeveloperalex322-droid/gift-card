@@ -5,31 +5,167 @@
  * которому утилита нужна, но контракт (экспорты и типы) правит только после
  * согласования, потому что от него зависят и web, и cms.
  *
- * Реализовано (задача Э1-01a):
- *   - транслитерация заголовка в slug и валидатор slug — `./slug.ts`. Это
- *     единственный источник правил slug: `apps/cms`, `apps/web` и
- *     `packages/images` зовут его, а не повторяют таблицу транслитерации.
+ * Состав (задача Э1-01 закрыта полностью):
+ *   - `./slug.ts` — транслитерация заголовка в slug и валидатор slug.
+ *     Единственный источник правил slug: `apps/cms`, `apps/web` и
+ *     `packages/images` зовут его, а не повторяют таблицу транслитерации;
+ *   - `./routes.ts` — единое правило завершающего слеша (решение Ч-21: БЕЗ
+ *     слеша), предикат `isPageRoute()` и приведение пути к канонической форме;
+ *     там же распознавание абсолютного адреса, отданного вместо пути:
+ *     `looksLikeAbsoluteUrl()` (схема ИЛИ протокольно-относительная форма) и
+ *     `isProtocolRelativeUrl()`. Локальных копий этой проверки в `apps/*` быть
+ *     не должно: правило одно, и второй потребитель про локальную копию не
+ *     узнаёт;
+ *   - `./site-url.ts` — ЕДИНСТВЕННЫЙ хелпер сборки абсолютного URL из
+ *     env-параметра `SITE_URL`. Хост не хардкодится: пустое значение валит
+ *     сборку, значений по умолчанию в коде нет;
+ *   - `./reserved-routes.ts` — реестр зарезервированных маршрутов (контейнеры и
+ *     занятые целиком), запрет сегмента `page` на любой позиции; путь админки
+ *     вычисляется из `PAYLOAD_ADMIN_PATH`, а не записан строкой. Там же
+ *     семейства префиксов (`reservedFamilies`, задача Э4-06): файловый маршрут,
+ *     который отдаётся частями, занимает и весь префикс имени — иначе
+ *     `/sitemap-cards-1` остаётся свободным и путается с `/sitemap-cards-1.xml`;
+ *   - `./env.ts` — тип среза окружения; окружение всегда аргумент с дефолтом,
+ *     чтобы тесты не мутировали `process.env`;
+ *   - `./robots.ts` (задача Э4-05) — закрытый набор значений robots-директивы,
+ *     дефолт для новой записи и предикаты значения. Живёт здесь, потому что
+ *     набор нужен обоим слоям: `apps/cms` строит из него поле записи и проверяет
+ *     вход API, `apps/web` проверяет объявленную директиву и отбирает страницы в
+ *     sitemap. Двух копий быть не должно — они расходятся молча, а расхождение
+ *     даёт страницу, закрытую в разметке и открытую в карте сайта. Правило
+ *     «какая директива у ЭТОЙ страницы» сюда НЕ входит: это правило рендера, оно
+ *     остаётся в `apps/web/src/seo/robots-directive.ts`;
+ *   - `./rich-text-href.ts` — какие адреса публичный рендер вводного текста
+ *     печатает ССЫЛКОЙ. Правило общее потому, что по нему живут два разных
+ *     слоя: `apps/web` решает, что печатать, а `apps/cms` — что вообще можно
+ *     сохранить в поле. Разойдясь, они дают ссылку, которая на странице
+ *     превращается в текст, и редактор об этом не узнаёт;
+ *   - `./site-settings-rules.ts` (задача Э3-00) — предикаты «выводить или
+ *     промолчать» для настроек сайта: `Organization` (Ч-17), лицензия
+ *     изображений (Ч-10), право служебной страницы на `index,follow`
+ *     (Ч-19/Ч-23), рекламные места (Ч-11), а также имя сайта
+ *     (`resolveSiteName`) — одно значение и для видимой подписи, и для
+ *     `WebSite.name`, иначе заполненное человеком имя расходится с разметкой.
+ *     Живёт здесь, а не в `apps/cms`,
+ *     потому что тех же функций требует `apps/web`, а импорт из `payload`
+ *     сломал бы его сборку: в зависимостях этого пакета `payload` нет, поэтому
+ *     инвариант держится структурой, а не комментарием.
  *
- * Запланировано ТЗ и CLAUDE.md, пока не реализовано (остаток задачи Э1-01):
- *   - сборка абсолютного canonical из env `SITE_URL` (пустое значение обязано
- *     валить сборку; значений по умолчанию в коде нет);
- *   - реестр зарезервированных маршрутов (контейнеры и занятые целиком) и
- *     запрет сегмента `page` на любой позиции;
- *   - предикат `isPageRoute()` для правила завершающего слеша.
- *
- * Реализовывать через TDD: тест в `tests/unit/`, затем код.
+ * Реализовано через TDD: тесты в `tests/unit/` (`slug`, `routes`, `site-url`,
+ * `reserved-routes`), затем код.
  */
+
+export { currentEnv, type SharedEnv } from './env.js';
+
+export {
+  assertPathNotReserved,
+  checkReservedPath,
+  isReservedPath,
+  PAGINATION_SEGMENT,
+  parseAdminPath,
+  PAYLOAD_ADMIN_PATH_ENV_KEY,
+  type PathAvailability,
+  type ReservedFamily,
+  reservedFamilies,
+  type ReservedRoute,
+  type ReservedRouteCrawl,
+  type ReservedRouteKind,
+  type ReservedRouteSource,
+  reservedRoutes,
+  type ReservedRule,
+} from './reserved-routes.js';
+
+export {
+  isPublicRichTextHref,
+  type PublicRichTextHref,
+  publicRichTextHref,
+  validatePublicRichTextHref,
+} from './rich-text-href.js';
+
+export {
+  DEFAULT_ROBOTS,
+  isIndexableRobots,
+  isRobotsDirective,
+  ROBOTS_DIRECTIVES,
+  type RobotsDirective,
+} from './robots.js';
+
+export {
+  canonicalizePath,
+  isPageRoute,
+  isProtocolRelativeUrl,
+  looksLikeAbsoluteUrl,
+  pathSegments,
+  TRAILING_SLASH,
+} from './routes.js';
+
+export {
+  AD_SLOT_POSITION_LABELS,
+  AD_SLOT_POSITIONS,
+  type AdSlotFacts,
+  type AdSlotPosition,
+  aiDisclosureText,
+  IMAGE_CREATOR_KIND_LABELS,
+  IMAGE_CREATOR_KINDS,
+  IMAGE_LICENSE_REQUIRED,
+  type ImageCreatorJsonLd,
+  type ImageCreatorKind,
+  imageCreatorJsonLd,
+  type ImageLicenseFacts,
+  type ImageLicenseField,
+  imageLicenseGaps,
+  type ImageLicenseJsonLd,
+  imageLicenseJsonLd,
+  INFO_PAGE_INDEXING_FIELD,
+  INFO_PAGE_KEYS,
+  INFO_PAGE_LABELS,
+  INFO_PAGE_MIN_TEXT_LENGTH,
+  INFO_PAGE_PATHS,
+  INFO_PAGE_REQUIRED,
+  type InfoPageFacts,
+  type InfoPageIndexation,
+  infoPageIndexation,
+  type InfoPageKey,
+  type InfoPageRequirement,
+  isAdSlotPosition,
+  isAdSlotRenderable,
+  isImageCreatorKind,
+  isImageLicenseComplete,
+  isInfoPageIndexable,
+  isOrganizationJsonLdRendered,
+  MAX_AD_SLOTS_PER_POSITION,
+  ORGANIZATION_JSON_LD_REQUIRED,
+  type OrganizationFacts,
+  type OrganizationJsonLd,
+  organizationJsonLd,
+  organizationJsonLdGaps,
+  type OrganizationRequiredField,
+  type RenderableAdSlot,
+  renderableAdSlots,
+  resolveSiteName,
+  richTextPlainText,
+  type SiteName,
+  type SiteNameSource,
+  SITE_SETTINGS_SLUG,
+  validateAdSlotRows,
+  validateImageCreatorKind,
+  validateProfileUrl,
+  validateSiteRootPath,
+} from './site-settings-rules.js';
+
+export { buildAbsoluteUrl, resolveSiteOrigin, SITE_URL_ENV_KEY } from './site-url.js';
 
 export {
   DEFAULT_SLUG_MAX_LENGTH,
+  findYearInSlug,
+  hasYearInSlug,
   isValidSlug,
   SLUG_PATTERN,
   slugify,
   type SlugOptions,
+  YEAR_IN_SLUG_MAX,
+  YEAR_IN_SLUG_MIN,
 } from './slug.js';
-
-/** Единое правило завершающего слеша по всему сайту (выбрано: со слешем). */
-export const TRAILING_SLASH = true;
 
 /** Статусная модель контента. Переход в `published` делает только человек. */
 export const CONTENT_STATUSES = ['draft', 'review', 'published'] as const;

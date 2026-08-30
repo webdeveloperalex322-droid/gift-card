@@ -1,0 +1,34 @@
+---
+/**
+ * Каталог открыток — `/otkrytki`, первая страница списка (задача Э3-08).
+ *
+ * Первая страница любого списка живёт по БАЗОВОМУ URL (решение Ч-05), поэтому
+ * этот маршрут и есть страница 1: `/otkrytki/page/1` не существует, а обращение
+ * к нему отдаёт одиночный 301 сюда (`./page/[page].astro`).
+ *
+ * `/otkrytki` — контейнер реестра зарезервированных маршрутов
+ * (`packages/shared/src/reserved-routes.ts`): запись CMS с таким итоговым путём
+ * создать нельзя, а пути под ним — норма, там живут карточки. Второй копии этого
+ * правила в `apps/web` нет и быть не должно.
+ *
+ * Решение (что показать и что ответить) принимает `../../data/catalog.ts`,
+ * разметку печатает `../../components/CardCatalogPage.astro` — тот же компонент,
+ * что и на страницах пагинации. Здесь только превращение решения в ответ.
+ */
+import CardCatalogPage from '../../components/CardCatalogPage.astro';
+import { cardCatalogPage } from '../../data';
+import { serverEnv } from '../../server-env';
+
+export const prerender = false;
+
+const result = await cardCatalogPage(null, serverEnv());
+if (result.kind !== 'page') {
+  // `redirect` по базовому URL не бывает: он возникает только на `/page/1`.
+  // Пустой каталог — 404, а не 200 с пустой сеткой (обоснование — шапка
+  // `../../data/catalog.ts`). Тело обязано быть пустым: только тогда Astro
+  // отдаёт страницу 404 приложения.
+  return new Response(null, { status: 404 });
+}
+---
+
+<CardCatalogPage body={result} />

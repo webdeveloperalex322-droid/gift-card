@@ -1,0 +1,222 @@
+---
+/**
+ * Страница карточки открытки — `/otkrytki/<slug>` (задача Э3-05).
+ *
+ * Норма: ТЗ §5.4 (состав страницы), `CLAUDE.md` — разделы «Рендеринг»,
+ * «Изображения», «Структурированные данные», «Правила URL» (единственный URL
+ * записи, абсолютный self-canonical), решения Ч-04-8 (блок «Похожие» как
+ * средство достижимости — с границей, названной в шапке `../../data/queries.ts`)
+ * и Ч-10 (видимое указание на генерацию ИИ).
+ *
+ * ## Что этот файл делает и чего НЕ делает
+ *
+ * Делает три вещи: читает запись слоем данных, спрашивает у него содержимое
+ * страницы и печатает разметку. Ни одного правила здесь нет — ни сборки путей,
+ * ни выбора файла изображения, ни решения об индексации, ни составления JSON-LD.
+ * Всё это живёт в проверяемых модулях (`../../data/page-data.ts`,
+ * `../../seo/card-page.ts`, `../../images/card-image.ts`), потому что правило,
+ * живущее в шаблоне, проверяется только поднятым сервером.
+ *
+ * ## Инварианты, закодированные здесь
+ *
+ *   - **ровно один `<h1>`.** Заголовок печатается один раз; заголовки блоков —
+ *     `<h2>`, а заголовки внутри текста понижает разбор (`../../seo/rich-text.ts`);
+ *   - **первое крупное изображение одно.** `priority` передаётся ТОЛЬКО главному
+ *     изображению карточки; сетка «Похожих» получает ленивые плитки
+ *     (`prioritizeFirst` не передан);
+ *   - **ноль клиентского JS.** Ни `client:*`, ни исполняемого `<script>`:
+ *     скачивание — прямая ссылка на файл, «поделиться» — ссылки на share-URL
+ *     сервисов, крошки и разметка печатаются сервером;
+ *   - **навигация только `<a href>`** с путём от корня. Слой данных отдаёт
+ *     только ОПУБЛИКОВАННЫЕ записи, поэтому ссылки на черновик здесь не
+ *     появится. «Опубликовано» при этом НЕ равно «отвечает 200»: опубликованная
+ *     подборка без открыток и без детей отдаёт 404 (см. `collectionPageContent`).
+ *     Это состояние закрыто со стороны CMS отказом на публикации пустого узла
+ *     (`assertNotEmptyForPublish` в `apps/cms/src/collections/collection-volume.ts`),
+ *     а не свойством выборки — прежняя формулировка «ссылок на страницы без 200 не
+ *     бывает по построению» была неверна (находка `seo-auditor`, ревизия
+ *     Э3-05/Э3-06);
+ *   - **директива робота из записи.** Значение `robots` не выводится из статуса и
+ *     не подставляется по умолчанию: открыть страницу в `index,follow` может
+ *     только человек (п. 7.1 и п. 23 ТЗ).
+ *
+ * ## Почему у страницы без изображения 404, а не 200
+ *
+ * Содержание страницы карточки — это открытка. Без производных изображения
+ * остаются заголовок и подпись, то есть ровно «слабая страница», которой
+ * запрещено отдавать 200 как полноценной (ТЗ §5.3). Решение принимает слой
+ * данных (`cardPageContent` возвращает `null`), маршрут превращает его в ответ.
+ * Состояние достижимо только при повреждённом зеркале производных: CMS не
+ * пускает карточку без изображения даже в `review`.
+ *
+ * ## Чего на странице ещё нет и кто это делает
+ *
+ * Рекламные места (два ряда по три блока, Ч-11) — задача Э3-12; разметка страницы
+ * плоская, поэтому ряд встаёт под H1 и после блока «Похожих» без переделки.
+ * Своя страница 404 — Э3-11: сейчас 404 отдаёт стандартную страницу Astro.
+ */
+import CardGrid from '../../components/CardGrid.astro';
+import CardImage from '../../components/CardImage.astro';
+import Breadcrumbs from '../../components/Breadcrumbs.astro';
+import {
+  cardBreadcrumbTrail,
+  cardPageContent,
+  findCardBySlug,
+  listCollectionsByIds,
+  listSimilarCards,
+  readSiteSettings,
+  relationIds,
+} from '../../data';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { canonicalUrlFor } from '../../routing/canonical';
+import { jsonLdScriptText } from '../../seo/json-ld';
+import { shareTargets } from '../../seo/share';
+import { serverEnv } from '../../server-env';
+
+// Страница отдаётся по запросу: и содержимое, и canonical, и директива робота
+// приходят из БД и окружения ТОГО сервера, который отвечает, а не того, который
+// однажды собрал артефакт.
+export const prerender = false;
+
+const { slug } = Astro.params;
+const card = slug === undefined || slug === '' ? null : await findCardBySlug(slug);
+if (card === null) {
+  // Тело обязано быть пустым: только тогда Astro отдаёт страницу 404
+  // приложения, а не считает, что маршрут сам обработал статус (проверено по
+  // `astro/dist/core/routing/handler.js`).
+  return new Response(null, { status: 404 });
+}
+
+const env = serverEnv();
+// Порядок связи задаёт редактор: первая подборка — основная, из неё строятся
+// крошки, и в том же порядке выводятся атрибуты.
+const collectionIds = relationIds(card.collections);
+const [settings, collections, similar] = await Promise.all([
+  readSiteSettings(),
+  listCollectionsByIds(collectionIds),
+  // `publishedAt` — центр окна соседей: блок «Похожие» зависит от ЭТОЙ карточки,
+  // а не отдаёт всем карточкам темы одну и ту же выборку свежих. Блок ВСЕГДА
+  // даёт ссылки на непосредственных соседей карточки в её пуле подборок; на
+  // взаимности «быть соседом» держится и достижимость карточек за первой
+  // страницей списка (решение Ч-04-8), но взаимность верна внутри ОДНОГО пула —
+  // граница гарантии и случай, где она не держится, разобраны в шапке
+  // `../../data/queries.ts` и воспроизведены тестом.
+  listSimilarCards({
+    collectionIds,
+    excludeCardId: card.id,
+    publishedAt: card.publishedAt ?? null,
+  }),
+]);
+
+const content = cardPageContent({ card, collections, env, settings, similar });
+if (content === null) {
+  return new Response(null, { status: 404 });
+}
+
+const trail = await cardBreadcrumbTrail(card);
+const shares = shareTargets({
+  title: content.heading,
+  url: canonicalUrlFor(content.canonicalPath, env),
+});
+const jsonLd = jsonLdScriptText(content.jsonLd);
+---
+
+<BaseLayout
+  title={content.title}
+  description={content.metaDescription}
+  canonicalPath={content.canonicalPath}
+  robots={content.robots}
+>
+  <Breadcrumbs trail={trail} />
+
+  <h1>{content.heading}</h1>
+
+  <figure class="card__figure">
+    <CardImage card={card} layout="content-width" priority />
+    {content.caption === null ? null : <figcaption>{content.caption}</figcaption>}
+  </figure>
+
+  {content.description === null ? null : <p>{content.description}</p>}
+
+  <p class="card__download">
+    <a href={content.downloadPath} download>Скачать открытку</a>
+    <span class="card__download-note">
+      JPEG, {content.downloadWidth}×{content.downloadHeight} пикселей
+    </span>
+  </p>
+
+  {
+    content.attributes.length === 0 ? null : (
+      <section class="page-section">
+        <h2>Открытка входит в подборки</h2>
+        <ul class="link-row">
+          {
+            content.attributes.map((attribute) => (
+              <li>
+                <span class="card__attribute-kind">{attribute.kindLabel}:</span>{' '}
+                <a href={attribute.path}>{attribute.name}</a>
+              </li>
+            ))
+          }
+        </ul>
+      </section>
+    )
+  }
+
+  <section class="page-section">
+    <h2>Поделиться</h2>
+    <ul class="link-row">
+      {
+        shares.map((share) => (
+          <li>
+            <a href={share.href} rel="nofollow noopener" target="_blank">
+              {share.label}
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+
+  {
+    content.aiDisclosure === null && content.usageTerms === null ? null : (
+      <section class="page-section">
+        <h2>Об изображении</h2>
+        {content.aiDisclosure === null ? null : <p>{content.aiDisclosure}</p>}
+        {content.usageTerms === null ? null : <p>{content.usageTerms}</p>}
+      </section>
+    )
+  }
+
+  {
+    content.similar.length === 0 ? null : (
+      <section class="page-section">
+        <h2>Похожие открытки</h2>
+        <CardGrid tiles={content.similar} ariaLabel="Похожие открытки" />
+      </section>
+    )
+  }
+
+  <script type="application/ld+json" is:inline set:html={jsonLd} />
+</BaseLayout>
+
+<style>
+  .card__figure {
+    margin: 0;
+  }
+
+  .card__figure figcaption {
+    margin-block-start: 0.5rem;
+    font-size: 0.9375rem;
+  }
+
+  .card__download {
+    margin-block: 1rem 0;
+  }
+
+  .card__download-note,
+  .card__attribute-kind {
+    opacity: 0.75;
+    font-size: 0.875rem;
+  }
+</style>

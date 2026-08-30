@@ -1,0 +1,378 @@
+---
+/**
+ * Страница подборки — `/podborki/<taxonomy-path>` (задача Э3-06).
+ *
+ * Норма: ТЗ §5.3 (состав страницы), `CLAUDE.md` — разделы «Рендеринг»,
+ * «Правила URL» (таксономия с группирующими узлами, порядок сегментов только
+ * «повод → уточнение»), «Структурированные данные», решения Ч-04-5 и Ч-04-7.
+ *
+ * ## Один маршрут на всю ветвь — и почему это не упрощение
+ *
+ * Адрес подборки — её СОХРАНЁННОЕ поле `path` (уникальный индекс БД, считает
+ * CMS). Поэтому маршрут не разбирает таксономию на сегменты и не знает про виды
+ * узлов: он берёт путь из адреса и спрашивает запись с таким путём. Отсюда
+ * следствия, которых иначе пришлось бы добиваться проверками:
+ *
+ *   - `/podborki/prazdniki`, `/podborki/prazdniki/8-marta`,
+ *     `/podborki/prazdniki/8-marta/mame` и `/podborki/adresaty/mame` работают
+ *     одним кодом, потому что различаются только данными;
+ *   - обратный порядок сегментов («адресат → повод») не создаётся никогда: такой
+ *     записи просто нет, а маршрут ничего не собирает сам. Правило Ч-04-7 живёт в
+ *     данных и в хуках CMS, шаблон его не дублирует;
+ *   - второго адреса у страницы не появляется: путь берётся у записи, а не
+ *     складывается из параметров.
+ *
+ * ## Инварианты, закодированные здесь
+ *
+ *   - **ровно один `<h1>`** — заголовок записи; заголовки блоков `<h2>`,
+ *     заголовки внутри вводного текста понижает разбор;
+ *   - **первое крупное изображение одно:** первая плитка сетки
+ *     (`prioritizeFirst`), остальные ленивые. Ничего крупнее выше сетки на
+ *     странице нет;
+ *   - **ноль клиентского JS**, навигация только `<a href>`, ссылки — только на
+ *     опубликованные записи: черновиков слой данных не отдаёт. Про блок «Разделы
+ *     подборки» это надо читать точно: «опубликовано» НЕ равно «отвечает 200» —
+ *     опубликованный, но пустой дочерний узел сам отдаёт 404 (то же правило,
+ *     что ниже). Ссылки на такой узел не бывает не по свойству выборки, а
+ *     потому, что CMS отказывает в публикации пустого узла
+ *     (`assertNotEmptyForPublish` в
+ *     `apps/cms/src/collections/collection-volume.ts`), и условие там ТОЧНО
+ *     повторяет условие этого шаблона. Прежняя формулировка «ссылки — только на
+ *     опубликованные страницы» подразумевала 200 и была неверна (находка
+ *     `seo-auditor`, ревизия Э3-05/Э3-06);
+ *   - **директива робота из записи**: `index,follow` ставит человек.
+ *
+ * ## Почему у подборки без содержимого 404, а не 200
+ *
+ * Пустая сетка под заголовком — это soft 404, ровно то, чем список чаще всего и
+ * попадает в индекс мусором (ТЗ §5.3: «пустая и слабая страница не отдаёт 200 как
+ * полноценная посадочная»). Решение принимает слой данных
+ * (`collectionPageContent` → `null`), маршрут превращает его в ответ. Содержимым
+ * считаются либо открытки, либо дочерние узлы: у группирующего узла таксономии
+ * своих открыток нет, и содержание у него — именно список детей.
+ *
+ * ЖЁСТКИЙ МИНИМУМ 20 ОТКРЫТОК (условие 5.1.3, решение Ч-06) здесь НЕ проверяется,
+ * и это осознанно: это условие ПУБЛИКАЦИИ и открытия в индекс, а решение о
+ * публикации принимает человек. Шаблон, отдающий 404 на странице, которую человек
+ * опубликовал, спорил бы с ним молча. Место этой проверки — переход в `published`
+ * в CMS; вынесено в отчёт задачи как предложение человеку.
+ *
+ * ## Пагинация (задача Э3-07)
+ *
+ * Список карточек разбит на страницы сегментом пути: `/podborki/<путь>/page/N`
+ * (решение Ч-05). Первая страница живёт по БАЗОВОМУ URL, `/page/1` не существует
+ * и в ссылках не появляется — адрес звена считает `paginationPathFor`, а он на
+ * номере 1 отдаёт базовый путь.
+ *
+ * Хвост `page/N` отделяется от пути записи ДО запроса: неоднозначности не
+ * возникает, потому что сегмент `page` запрещён в slug на любой позиции (реестр
+ * зарезервированных маршрутов). Порядок шагов значим и объяснён в шапке
+ * `../../data/catalog.ts`:
+ *
+ *   - форма номера проверяется первой, без запроса к базе: `/page/0`,
+ *     `/page/01`, `/page/-1`, `/page/dva` — 404;
+ *   - `/page/1` — одиночный 301 на базовый URL, но только если базовый URL
+ *     отвечает 200: иначе получился бы переход на 404;
+ *   - номер больше числа страниц — 404, а не 200 с пустой сеткой.
+ *
+ * ## Фильтр представления (задача Э3-10)
+ *
+ * `?format=…` меняет ТО, ЧТО ВИДНО, и не создаёт адресов:
+ *
+ *   - canonical остаётся чистым путём страницы — параметр в него не попадает
+ *     (ТЗ §6.5), поэтому набор параметров на канонический адрес не влияет вовсе;
+ *   - отфильтрованное представление получает `noindex` (ТЗ §5.2: фильтры — всегда
+ *     `noindex`), и только в сторону закрытия;
+ *   - статус ответа от параметров НЕ зависит: решение «страница существует»
+ *     принимается по записи до применения фильтра. Иначе один адрес отдавал бы
+ *     200 без хвоста ссылки и 404 с ним;
+ *   - пагинация не пересобирается: фильтр прячет плитки на страницах
+ *     канонического списка, а не заводит свой список. Ссылки пагинации несут
+ *     строку запроса, и `/page/1` среди них по-прежнему не появляется.
+ *
+ * Измерение фильтра — формат открытки (вертикальная / горизонтальная /
+ * квадратная): он считается по фактическим размерам файла. Стиля и настроения
+ * среди фильтров нет — значений человек не утверждал, а придумывать данные за
+ * него нельзя (Ч-04-3 запрещает лишь отдельные URL под них, но не отменяет
+ * отсутствия самих значений).
+ *
+ * ## Рекламные места (задача Э3-12, решение Ч-11)
+ *
+ * Два ряда: под H1 над сеткой и после пагинации. Ряд под H1 стоит ПОСЛЕ вводного
+ * текста и фильтра — «под H1, над сеткой» по Ч-11 и «первый экран не занят
+ * рекламой полностью» по ТЗ §5.7 выполняются оба только в этом порядке. Блок с
+ * незаполненными размерами не печатается вовсе, иначе резерв был бы нулевым и
+ * появление баннера сдвинуло бы макет (`../../seo/ad-slots.ts`).
+ *
+ * ## Чего на странице ещё нет и кто это делает
+ *
+ * Каталог `/podborki` живёт в соседнем маршруте (`./index.astro`, задача Э3-08),
+ * поэтому пустой рест-параметр сюда больше не приходит.
+ */
+import AdRow from '../../components/AdRow.astro';
+import CardGrid from '../../components/CardGrid.astro';
+import Breadcrumbs from '../../components/Breadcrumbs.astro';
+import FilterRow from '../../components/FilterRow.astro';
+import Pagination from '../../components/Pagination.astro';
+import RichText from '../../components/RichText.astro';
+import {
+  collectionBreadcrumbTrail,
+  collectionPageContent,
+  findCollectionById,
+  findCollectionByPath,
+  listChildCollections,
+  listCollectionCards,
+  listRelatedCollections,
+  newNodeContentMemo,
+  readSiteSettings,
+  relationId,
+  relationIds,
+} from '../../data';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { decidePageParam, splitPaginatedPath } from '../../routing/pagination';
+import { parseViewParams, viewParamsQuery } from '../../routing/view-params';
+import { adRows } from '../../seo/ad-slots';
+import { jsonLdScriptText } from '../../seo/json-ld';
+import { richTextBlocks } from '../../seo/rich-text';
+import { serverEnv } from '../../server-env';
+import { COLLECTION_PATH_PREFIX } from '@otkritka/cms/seo/paths';
+
+export const prerender = false;
+
+const rest = Astro.params.path ?? '';
+// Хвост `page/N` отделяется от пути записи ДО запроса. Пустой рест-параметр сюда
+// не приходит — `/podborki` обслуживает `./index.astro` (каталог, задача Э3-08),
+// но проверка остаётся: без неё пустое значение дало бы запрос по пути
+// контейнера, у которого записи быть не может.
+const split = rest === '' ? null : splitPaginatedPath(`${COLLECTION_PATH_PREFIX}/${rest}`);
+if (split === null || split.basePath === COLLECTION_PATH_PREFIX) {
+  return new Response(null, { status: 404 });
+}
+
+// Форма номера проверяется ПЕРВОЙ, до обращения к базе: `/page/0`, `/page/01` и
+// `/page/dva` адресами не являются, и знать про них данные не нужно.
+const paging =
+  split.pageParam === null
+    ? ({ action: 'page', page: 1 } as const)
+    : decidePageParam(split.pageParam);
+if (paging.action === 'not-found') {
+  return new Response(null, { status: 404 });
+}
+
+const node = await findCollectionByPath(split.basePath);
+if (node === null) {
+  return new Response(null, { status: 404 });
+}
+
+// `/page/1` обслуживается запросом ПЕРВОЙ страницы: 301 отдаётся только тогда,
+// когда базовый URL действительно отвечает 200, — иначе переход вёл бы на 404.
+const page = paging.action === 'redirect-to-base' ? 1 : paging.page;
+
+const env = serverEnv();
+// Один мемоизатор предиката «непуст» на рендер: дети и смежные узлы могут
+// пересекаться наборами (редактор вправе указать ребёнка в `related`), и без
+// общей памяти один узел считался бы дважды. Обоснование самого предиката — шапка
+// `nodesWithContent` в `../../data/content.ts`.
+const contentMemo = newNodeContentMemo();
+const [cardsPage, children, parent, related] = await Promise.all([
+  listCollectionCards({ collectionId: node.id, page }),
+  listChildCollections(node.id, contentMemo),
+  findCollectionById(relationId(node.parent)),
+  listRelatedCollections(relationIds(node.related), contentMemo),
+]);
+
+// Номер вне диапазона — 404, а не 200 с пустой сеткой. Проверка стоит до сборки
+// содержимого: страницы 3 у списка из двух страниц не существует.
+if (page > 1 && page > cardsPage.pageCount) {
+  return new Response(null, { status: 404 });
+}
+
+if (paging.action === 'redirect-to-base') {
+  // Условие ДОСЛОВНО повторяет условие содержимого страницы
+  // (`collectionPageContent`: ни плиток, ни детей → `null` → 404), и это
+  // обязательно: 301 отдаётся только когда базовый URL отвечает 200.
+  //
+  // Проверять `pageCount === 0` было НЕДОСТАТОЧНО, и не «на всякий случай», а по
+  // замеру: у пустой выборки Payload ставит `totalPages: 1` при `totalDocs: 0`
+  // (`@payloadcms/drizzle/dist/find/findMany.js`), поэтому условие было
+  // недостижимо, и опубликованный узел без открыток и без детей отдавал по
+  // `/page/1` одиночный 301 на адрес, который сам отвечает 404 — прямо против
+  // инварианта из шапки этого файла. Тот же замер уже был учтён в каталоге
+  // (`../../data/catalog.ts`), а здесь нет: две копии одного правила разошлись.
+  // Находка вердикта `reviewer` (MAJOR 1); смоук на `/page/1` пустого узла — в
+  // `apps/web/scripts/smoke-pages.ts`.
+  if (cardsPage.cards.length === 0 && children.length === 0) {
+    // Базовый URL сам отвечает 404 (ни открыток, ни детей) — редиректа нет.
+    return new Response(null, { status: 404 });
+  }
+  // Ровно 301 и пустое тело: шаблон 3xx самого Astro кладёт в
+  // `<meta http-equiv="refresh">` адрес-ИСТОЧНИК, то есть отправляет клиента
+  // назад (разбор — в шапке `../../routing/path-policy.ts`).
+  return new Response(null, {
+    status: 301,
+    headers: { 'Content-Length': '0', Location: split.basePath },
+  });
+}
+
+// Параметры представления разбираются ПОСЛЕ всех решений о статусе: фильтр
+// меняет то, что видно, и ни на 200, ни на 301, ни на 404 не влияет.
+const view = parseViewParams(Astro.url.searchParams);
+
+const content = collectionPageContent({
+  cards: cardsPage.cards,
+  children,
+  env,
+  node,
+  page,
+  pageCount: cardsPage.pageCount,
+  parent,
+  related,
+  view,
+});
+if (content === null) {
+  return new Response(null, { status: 404 });
+}
+
+// Настройки читаются ПОСЛЕ всех решений о статусе: рекламные места ни на 200, ни
+// на 301, ни на 404 не влияют.
+const [trail, settings] = await Promise.all([
+  collectionBreadcrumbTrail(node, page),
+  readSiteSettings(),
+]);
+const ads = adRows(settings.adSlots);
+const intro = richTextBlocks(content.intro);
+// Разметки нет ровно тогда, когда нет видимого списка: фильтр не оставил плиток,
+// а дочерних узлов у подборки нет. `ItemList` без элементов описывал бы то, чего
+// на экране не видно.
+const jsonLd = content.jsonLd === null ? null : jsonLdScriptText(content.jsonLd);
+const filterQuery = viewParamsQuery(view);
+// Дата содержательного обновления показывается ровно тогда, когда она есть в
+// записи, и в разметку `dateModified` попадает то же значение (ТЗ §5.3).
+// Формат — ISO в атрибуте `datetime` и день по-русски в тексте.
+const updatedAt = content.updatedContentAt === null ? null : new Date(content.updatedContentAt);
+const updatedLabel =
+  updatedAt === null || Number.isNaN(updatedAt.getTime())
+    ? null
+    : updatedAt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+---
+
+<BaseLayout
+  title={content.title}
+  description={content.metaDescription}
+  canonicalPath={content.canonicalPath}
+  robots={content.robots}
+>
+  <Breadcrumbs trail={trail} />
+
+  <h1>{content.heading}</h1>
+
+  {intro.length === 0 ? null : <RichText blocks={intro} />}
+
+  {content.tilesOnPage === 0 ? null : <FilterRow options={content.filterOptions} />}
+
+  <AdRow slots={ads.underH1} position="under-h1" />
+
+  {
+    /* Видимая подпись фильтра: сколько плиток этой страницы он оставил. Без неё
+       посетитель считал бы, что список кончился, тогда как остальные открытки
+       просто скрыты выбранным форматом. */
+    content.filter.format === null || content.tilesOnPage === 0 ? null : (
+      <p class="collection__filtered">
+        Показано открыток: {content.tiles.length} из {content.tilesOnPage} на этой странице.
+      </p>
+    )
+  }
+
+  {
+    content.tiles.length === 0 ? null : (
+      <CardGrid tiles={content.tiles} prioritizeFirst ariaLabel="Открытки подборки" />
+    )
+  }
+
+  {
+    content.tilesOnPage > 0 && content.tiles.length === 0 ? (
+      <p class="collection__filtered">
+        На этой странице нет открыток выбранного формата. Снимите фильтр или загляните на
+        соседнюю страницу списка.
+      </p>
+    ) : null
+  }
+
+  {
+    content.pagination === null ? null : (
+      <Pagination
+        model={content.pagination}
+        ariaLabel="Страницы подборки"
+        query={filterQuery}
+      />
+    )
+  }
+
+  <AdRow slots={ads.afterPagination} position="after-pagination" />
+
+  {
+    content.children.length === 0 ? null : (
+      <section class="page-section">
+        <h2>Разделы подборки</h2>
+        <ul class="link-row">
+          {
+            content.children.map((child) => (
+              <li>
+                <a href={child.path}>{child.name}</a>
+              </li>
+            ))
+          }
+        </ul>
+      </section>
+    )
+  }
+
+  {
+    content.parent === null && content.related.length === 0 ? null : (
+      <nav class="page-section" aria-label="Смежные подборки">
+        <h2>Смотрите также</h2>
+        <ul class="link-row">
+          {
+            content.parent === null ? null : (
+              <li>
+                <a href={content.parent.path}>{content.parent.name}</a>
+              </li>
+            )
+          }
+          {
+            content.related.map((link) => (
+              <li>
+                <a href={link.path}>{link.name}</a>
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
+    )
+  }
+
+  {
+    content.updatedContentAt === null || updatedLabel === null ? null : (
+      <p class="collection__updated">
+        Подборка обновлена{' '}
+        <time datetime={content.updatedContentAt}>{updatedLabel}</time>
+      </p>
+    )
+  }
+
+  {jsonLd === null ? null : <script type="application/ld+json" is:inline set:html={jsonLd} />}
+</BaseLayout>
+
+<style>
+  .collection__filtered {
+    margin-block: 1rem 0;
+    font-size: 0.9375rem;
+    opacity: 0.85;
+  }
+
+  .collection__updated {
+    margin-block-start: 2rem;
+    font-size: 0.875rem;
+    opacity: 0.75;
+  }
+</style>
