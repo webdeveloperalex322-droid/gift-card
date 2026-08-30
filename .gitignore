@@ -12,3 +12,4 @@ playwright-report/
 media/
 uploads/
 .worktrees/
+.local/
