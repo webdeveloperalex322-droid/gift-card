@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { computeImageRevision } from '@otkritka/images';
+
 import { loadManifest, type CardRecord } from '../../../../scripts/content-pilot/manifest.mjs';
 import {
   loadSiteContent,
@@ -24,6 +26,7 @@ import {
   initializePilotDryRun,
   parsePilotImportMode,
   requirePilotImportEnvironment,
+  resolvePilotWorkspaceRoot,
 } from '../../scripts/import-pilot-content';
 
 const manifestPath = 'content/pilot-2026-08/manifest.json';
@@ -33,6 +36,7 @@ const temporaryPaths: string[] = [];
 let manifest: CardRecord[];
 let matrix: SiteContentMatrix;
 let validJpeg: Buffer;
+let validRevision: string;
 
 beforeAll(async () => {
   manifest = await loadManifest(manifestPath);
@@ -45,6 +49,7 @@ beforeAll(async () => {
       background: '#ddd4c8',
     },
   }).jpeg().toBuffer();
+  validRevision = await computeImageRevision(validJpeg);
 });
 
 afterEach(async () => {
@@ -54,6 +59,7 @@ afterEach(async () => {
 });
 
 interface FakeStore extends PilotImportStore {
+  readonly claimLookups: string[];
   readonly mutations: string[];
 }
 
@@ -62,7 +68,6 @@ function fakeStore(input: {
   cards?: readonly ExistingCard[];
   claims?: readonly ExistingContentPathClaim[];
   collections?: readonly ExistingCollection[];
-  exposeClaims?: boolean;
 } = {}): FakeStore {
   const cards = new Map((input.cards ?? []).map((card) => [card.slug, card]));
   const collections = new Map(
@@ -70,6 +75,7 @@ function fakeStore(input: {
   );
   const claims = new Map((input.claims ?? []).map((claim) => [claim.path, claim]));
   const store: FakeStore = {
+    claimLookups: [],
     mutations: [],
     findActor() {
       return Promise.resolve(
@@ -82,10 +88,11 @@ function fakeStore(input: {
     findCollectionByPath(path) {
       return Promise.resolve(collections.get(path) ?? null);
     },
+    findContentPathClaimByPath(path) {
+      store.claimLookups.push(path);
+      return Promise.resolve(claims.get(path) ?? null);
+    },
   };
-  if (input.exposeClaims === true) {
-    store.findContentPathClaimByPath = (path) => Promise.resolve(claims.get(path) ?? null);
-  }
   return store;
 }
 
@@ -123,6 +130,11 @@ describe('pilot import preflight', () => {
       mutationCount: 0,
     });
     expect(store.mutations).toEqual([]);
+    expect(store.claimLookups).toHaveLength(63);
+    expect(new Set(store.claimLookups)).toEqual(new Set([
+      ...matrix.collections.map((seed) => seed.path),
+      ...matrix.cards.map((seed) => `/otkrytki/${seed.slug}`),
+    ]));
   });
 
   it('blocks a missing accepted JPEG', async () => {
@@ -242,7 +254,10 @@ describe('pilot import preflight', () => {
     const drifted = existingCardFor(second);
     drifted.title = 'Ручная редакторская правка';
 
-    const report = await runPilotPreflight(input(root, fakeStore({ cards: [exact, drifted] })));
+    const report = await runPilotPreflight(input(root, fakeStore({
+      cards: [exact, drifted],
+      claims: [matchingCardClaim(exact), matchingCardClaim(drifted)],
+    })));
 
     expect(report.records).toContainEqual(expect.objectContaining({
       key: `card:${first.pilotId}`,
@@ -260,7 +275,10 @@ describe('pilot import preflight', () => {
     const existing = existingCollectionFor(first);
     existing.description = 'Ручная редакторская правка';
 
-    const report = await runPilotPreflight(input(root, fakeStore({ collections: [existing] })));
+    const report = await runPilotPreflight(input(root, fakeStore({
+      claims: [matchingCollectionClaim(existing)],
+      collections: [existing],
+    })));
 
     expect(report.blockingErrors).toContain(
       `Collection ${first.key} existing record ${String(existing.id)} differs in managed field description.`,
@@ -294,7 +312,6 @@ describe('pilot import preflight', () => {
         ownerKey: 'collections:permanent-foreign-owner',
         path,
       }],
-      exposeClaims: true,
     })));
 
     expect(report.blockingErrors).toContain(
@@ -316,7 +333,6 @@ describe('pilot import preflight', () => {
         ownerKey: `cards:${String(existing.pathClaimKey)}`,
         path,
       }],
-      exposeClaims: true,
     })));
 
     expect(report.blockingErrors).toEqual([]);
@@ -324,6 +340,89 @@ describe('pilot import preflight', () => {
       key: `card:${first.pilotId}`,
       state: 'resume',
     }));
+  });
+
+  it('resumes by original bytes and dimensions while preserving a suffixed assigned filename', async () => {
+    const root = await assetRoot();
+    const [first] = matrix.cards;
+    if (!first) throw new Error('Expected a pilot card.');
+    const existing = existingCardFor(first);
+    existing.imageAssignedFilename = 'assigned-name-2.jpg';
+
+    const report = await runPilotPreflight(input(root, fakeStore({
+      cards: [existing],
+      claims: [matchingCardClaim(existing)],
+    })));
+
+    expect(report.blockingErrors).toEqual([]);
+    expect(report.records).toContainEqual(expect.objectContaining({
+      key: `card:${first.pilotId}`,
+      state: 'resume',
+    }));
+    expect(existing.imageAssignedFilename).toBe('assigned-name-2.jpg');
+  });
+
+  it('blocks resume when accepted master bytes differ from the stored original revision', async () => {
+    const root = await assetRoot();
+    const [first] = matrix.cards;
+    if (!first) throw new Error('Expected a pilot card.');
+    const existing = existingCardFor(first);
+    const changedBytes = await sharp({
+      create: { width: 1024, height: 1280, channels: 3, background: '#17324d' },
+    }).jpeg().toBuffer();
+    await writeFile(join(root, first.sourceFile), changedBytes);
+
+    const report = await runPilotPreflight(input(root, fakeStore({
+      cards: [existing],
+      claims: [matchingCardClaim(existing)],
+    })));
+
+    expect(report.blockingErrors).toContain(
+      `Card ${first.pilotId} existing record ${String(existing.id)} differs in managed field imageRevision.`,
+    );
+  });
+
+  it('normalizes Lexical service defaults but preserves text, format, and link semantics', async () => {
+    const root = await assetRoot();
+    const [first, second, third, fourth] = matrix.collections;
+    if (!first || !second || !third || !fourth) throw new Error('Expected four collections.');
+    const equivalent = existingCollectionFor(first);
+    const equivalentRoot = (equivalent.intro as { root: Record<string, unknown> }).root;
+    equivalentRoot.direction = 'ltr';
+    delete equivalentRoot.version;
+    const textChanged = existingCollectionFor(second);
+    const textNode = lexicalTextNode(textChanged);
+    textNode.text = `${String(textNode.text)}!`;
+    const formatChanged = existingCollectionFor(third);
+    lexicalTextNode(formatChanged).format = 1;
+    const linkChanged = existingCollectionFor(fourth);
+    const originalText = lexicalTextNode(linkChanged);
+    const paragraph = lexicalParagraph(linkChanged);
+    paragraph.children = [{
+      type: 'link',
+      fields: { linkType: 'custom', newTab: false, url: '/kontakty' },
+      children: [originalText],
+      direction: null,
+      format: '',
+      indent: 0,
+      version: 1,
+    }];
+    const existing = [equivalent, textChanged, formatChanged, linkChanged];
+
+    const report = await runPilotPreflight(input(root, fakeStore({
+      claims: existing.map(matchingCollectionClaim),
+      collections: existing,
+    })));
+
+    expect(report.records).toContainEqual(expect.objectContaining({
+      key: `collection:${first.key}`,
+      state: 'resume',
+    }));
+    for (const changed of [second, third, fourth]) {
+      expect(report.blockingErrors).toContain(
+        `Collection ${changed.key} existing record collection-${changed.key} differs in managed field intro.`,
+      );
+    }
   });
 
   it('does not treat extra directory entries as accepted masters', async () => {
@@ -376,6 +475,30 @@ describe('pilot import CLI contract', () => {
     }, 'D:/workspace', initializePayload)).rejects.toThrow(/not implemented/i);
     expect(initializePayload).not.toHaveBeenCalled();
   });
+
+  it('rejects destructive database environment before Payload/config initialization', async () => {
+    const initializePayload = vi.fn();
+
+    await expect(initializePilotDryRun([], {
+      CONTENT_IMPORT_AI_EDITOR_EMAIL: 'pilot-ai@example.test',
+      CONTENT_IMPORT_ASSET_ROOT: 'content/pilot/final',
+      PAYLOAD_DROP_DATABASE: 'true',
+    }, 'D:/workspace', initializePayload)).rejects.toThrow(/PAYLOAD_DROP_DATABASE/);
+    expect(initializePayload).not.toHaveBeenCalled();
+  });
+
+  it('resolves the same workspace from repository and apps/cms working directories', () => {
+    const original = process.cwd();
+    const expected = resolvePilotWorkspaceRoot();
+    try {
+      process.chdir(expected);
+      expect(resolvePilotWorkspaceRoot()).toBe(expected);
+      process.chdir(join(expected, 'apps/cms'));
+      expect(resolvePilotWorkspaceRoot()).toBe(expected);
+    } finally {
+      process.chdir(original);
+    }
+  });
 });
 
 function existingCardFor(seed: SiteContentMatrix['cards'][number]): ExistingCard {
@@ -388,7 +511,11 @@ function existingCardFor(seed: SiteContentMatrix['cards'][number]): ExistingCard
     collectionPaths: [collection.path],
     description: seed.description,
     h1: seed.h1,
-    imageSourceFile: seed.sourceFile,
+    imageAssignedFilename: seed.sourceFile.replace(/\.jpg$/u, '-2.jpg'),
+    imageHeight: 1280,
+    imageMimeType: 'image/jpeg',
+    imageRevision: validRevision,
+    imageWidth: 1024,
     metaDescription: seed.metaDescription,
     pathClaimKey: `pilot-card-${seed.pilotId}`,
     robots: seed.robots,
@@ -397,6 +524,35 @@ function existingCardFor(seed: SiteContentMatrix['cards'][number]): ExistingCard
     title: seed.title,
     usageTerms: seed.usageTerms,
   };
+}
+
+function matchingCardClaim(existing: ExistingCard): ExistingContentPathClaim {
+  return {
+    ownerCollection: 'cards',
+    ownerKey: `cards:${String(existing.pathClaimKey)}`,
+    path: `/otkrytki/${existing.slug}`,
+  };
+}
+
+function matchingCollectionClaim(existing: ExistingCollection): ExistingContentPathClaim {
+  return {
+    ownerCollection: 'collections',
+    ownerKey: `collections:${String(existing.pathClaimKey)}`,
+    path: existing.path,
+  };
+}
+
+function lexicalParagraph(existing: ExistingCollection): { children: unknown[] } {
+  const root = (existing.intro as { root: { children: Array<{ children: unknown[] }> } }).root;
+  const paragraph = root.children[0];
+  if (!paragraph) throw new Error('Expected Lexical paragraph.');
+  return paragraph;
+}
+
+function lexicalTextNode(existing: ExistingCollection): Record<string, unknown> {
+  const node = lexicalParagraph(existing).children[0];
+  if (typeof node !== 'object' || node === null) throw new Error('Expected Lexical text node.');
+  return node as Record<string, unknown>;
 }
 
 function existingCollectionFor(

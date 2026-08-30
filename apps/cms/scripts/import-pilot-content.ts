@@ -19,13 +19,27 @@ import {
   type PilotImportStore,
   type PilotPreflightReport,
 } from '../src/import/pilot-preflight';
-import type { Card, Collection } from '../src/payload-types';
+import { loadEnvFiles, workspaceRoot } from '../src/env.mjs';
+import type { Card, CardImage, Collection } from '../src/payload-types';
 
 export type PilotImportMode = 'apply' | 'dry-run';
 
 export interface PilotImportEnvironment {
   readonly actorEmail: string;
   readonly assetRoot: string;
+}
+
+export function resolvePilotWorkspaceRoot(): string {
+  return workspaceRoot();
+}
+
+function rejectDestructiveDatabaseEnvironment(
+  env: Readonly<Record<string, string | undefined>>,
+): void {
+  const raw = env.PAYLOAD_DROP_DATABASE?.trim().toLowerCase();
+  if (raw === 'true' || raw === '1' || raw === 'on' || raw === 'yes') {
+    throw new Error('PAYLOAD_DROP_DATABASE must not be enabled for pilot dry-run.');
+  }
 }
 
 export function parsePilotImportMode(args: readonly string[]): PilotImportMode {
@@ -70,19 +84,61 @@ export async function initializePilotDryRun<T>(
     throw new Error('--apply is not implemented in Task 6; run --dry-run only.');
   }
   const environment = requirePilotImportEnvironment(env, workspaceRoot);
+  rejectDestructiveDatabaseEnvironment(env);
   return { environment, payload: await initializePayload() };
+}
+
+export async function initializePilotPayloadDryRun(options: {
+  readonly disableDBConnect?: boolean;
+  readonly key?: string;
+} = {}): Promise<Payload> {
+  // Load the root .env before the destructive-variable gate. Otherwise a
+  // PAYLOAD_DROP_DATABASE value discovered by payload.config.ts would bypass
+  // the earlier process.env check and reach the adapter at connect time.
+  loadEnvFiles();
+  rejectDestructiveDatabaseEnvironment(process.env);
+  process.env.PAYLOAD_DB_PUSH = 'false';
+  process.env.PAYLOAD_DB_DISABLE_CREATE = 'true';
+  const [{ getPayload }, { default: configPromise }] = await Promise.all([
+    import('payload'),
+    import('../src/payload.config'),
+  ]);
+  const config = await configPromise;
+  const dryRunConfig = Promise.resolve({
+    ...config,
+    admin: {
+      ...config.admin,
+      importMap: {
+        ...config.admin.importMap,
+        autoGenerate: false,
+      },
+    },
+    typescript: {
+      ...config.typescript,
+      autoGenerate: false,
+    },
+  });
+  return getPayload({
+    config: dryRunConfig,
+    ...(options.disableDBConnect === undefined
+      ? {}
+      : { disableDBConnect: options.disableDBConnect }),
+    disableOnInit: true,
+    key: options.key ?? 'pilot-import-preflight',
+  });
 }
 
 function relationshipPath(value: Collection['parent']): string | null {
   return typeof value === 'object' && value !== null ? value.path ?? null : null;
 }
 
-function imageFilename(value: Card['image']): string | null {
-  return typeof value === 'object' && value !== null ? value.filename ?? null : null;
+function imageRecord(value: Card['image']): CardImage | null {
+  return typeof value === 'object' && value !== null ? value : null;
 }
 
 function toExistingCard(doc: Card): ExistingCard {
   const collections = doc.collections ?? [];
+  const image = imageRecord(doc.image);
   return {
     id: doc.id,
     alt: doc.alt ?? null,
@@ -93,7 +149,11 @@ function toExistingCard(doc: Card): ExistingCard {
     }),
     description: doc.description ?? null,
     h1: doc.h1 ?? null,
-    imageSourceFile: imageFilename(doc.image),
+    imageAssignedFilename: image?.filename ?? null,
+    imageHeight: image?.source?.height ?? null,
+    imageMimeType: image?.mimeType ?? null,
+    imageRevision: image?.revision ?? null,
+    imageWidth: image?.source?.width ?? null,
     metaDescription: doc.metaDescription ?? null,
     pathClaimKey: doc.pathClaimKey ?? null,
     robots: doc.robots,
@@ -194,24 +254,13 @@ function compactReport(report: PilotPreflightReport): string {
 }
 
 async function main(): Promise<void> {
-  const workspaceRoot = resolve(process.cwd(), '../..');
+  loadEnvFiles();
+  const workspaceRoot = resolvePilotWorkspaceRoot();
   const initialized = await initializePilotDryRun(
     process.argv.slice(2),
     process.env,
     workspaceRoot,
-    async () => {
-      // A dry-run must not push the schema or seed the first administrator.
-      process.env.PAYLOAD_DB_PUSH = 'false';
-      const [{ getPayload }, { default: config }] = await Promise.all([
-        import('payload'),
-        import('../src/payload.config'),
-      ]);
-      return getPayload({
-        config,
-        disableOnInit: true,
-        key: 'pilot-import-preflight',
-      });
-    },
+    initializePilotPayloadDryRun,
   );
   const [matrix, manifest] = await Promise.all([
     loadSiteContent(resolve(workspaceRoot, 'content/pilot-2026-08/site-content.json')),

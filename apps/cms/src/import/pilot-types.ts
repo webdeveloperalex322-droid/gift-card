@@ -20,7 +20,12 @@ export interface ExistingCard {
   status: string;
   robots: string;
   collectionPaths: readonly string[];
-  imageSourceFile: string | null;
+  /** Assigned upload filename is informational and never re-derived on resume. */
+  imageAssignedFilename: string | null;
+  imageRevision: string | null;
+  imageMimeType: string | null;
+  imageWidth: number | null;
+  imageHeight: number | null;
 }
 
 export interface ExistingCollection {
@@ -50,9 +55,7 @@ export interface PilotImportStore {
   findActor(email: string): Promise<PilotImportActor | null>;
   findCardBySlug(slug: string): Promise<ExistingCard | null>;
   findCollectionByPath(path: string): Promise<ExistingCollection | null>;
-  findContentPathClaimByPath?: (
-    path: string,
-  ) => Promise<ExistingContentPathClaim | null>;
+  findContentPathClaimByPath(path: string): Promise<ExistingContentPathClaim | null>;
 }
 
 export interface PilotPreflightInput {

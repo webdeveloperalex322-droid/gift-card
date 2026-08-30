@@ -16,9 +16,11 @@ import { describe, expect, it } from 'vitest';
 import { parseAdminPath } from '@otkritka/shared';
 
 import {
+  DB_DISABLE_CREATE_ENV_KEY,
   DB_PUSH_ENV_KEY,
   ENV_EXAMPLE_ADMIN_PATH,
   adminPathRewrites,
+  databaseCreateDisabled,
   databasePush,
   requireEnv,
   resolveAdminPath,
@@ -184,5 +186,23 @@ describe('databasePush', () => {
 
   it('непонятное значение — ошибка, а не молчаливое «накатывать»', () => {
     expect(() => databasePush({ [DB_PUSH_ENV_KEY]: 'нет' })).toThrow(DB_PUSH_ENV_KEY);
+  });
+});
+
+describe('databaseCreateDisabled', () => {
+  it('keeps normal CMS startup behavior unless explicitly disabled', () => {
+    expect(databaseCreateDisabled({})).toBe(false);
+    expect(databaseCreateDisabled({ [DB_DISABLE_CREATE_ENV_KEY]: 'false' })).toBe(false);
+  });
+
+  it('disables automatic database creation for a read-only process', () => {
+    expect(databaseCreateDisabled({ [DB_DISABLE_CREATE_ENV_KEY]: 'true' })).toBe(true);
+    expect(databaseCreateDisabled({ [DB_DISABLE_CREATE_ENV_KEY]: '1' })).toBe(true);
+    expect(databaseCreateDisabled({ [DB_DISABLE_CREATE_ENV_KEY]: 'ON' })).toBe(true);
+  });
+
+  it('rejects ambiguous values instead of silently enabling database creation', () => {
+    expect(() => databaseCreateDisabled({ [DB_DISABLE_CREATE_ENV_KEY]: 'maybe' }))
+      .toThrow(DB_DISABLE_CREATE_ENV_KEY);
   });
 });

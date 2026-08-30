@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import sharp from 'sharp';
+
+import { computeImageRevision } from '@otkritka/images';
 
 import { validateSiteContent } from '../../../../scripts/content-import/schema.js';
 import type { CardSeed, CollectionSeed } from '../../../../scripts/content-import/schema.js';
@@ -37,6 +38,14 @@ interface CheckedRecord {
 interface AssetCheck {
   readonly valid: boolean;
   readonly errors: readonly string[];
+  readonly identity: AssetIdentity | null;
+}
+
+interface AssetIdentity {
+  readonly revision: string;
+  readonly mimeType: 'image/jpeg';
+  readonly width: number;
+  readonly height: number;
 }
 
 function valueLabel(value: unknown): string {
@@ -48,6 +57,34 @@ function differingFields(
   actual: Readonly<Record<string, unknown>>,
 ): string[] {
   return Object.keys(expected).filter((field) => !isDeepStrictEqual(actual[field], expected[field]));
+}
+
+const LEXICAL_EMPTY_DEFAULTS: Readonly<Record<string, readonly unknown[]>> = {
+  detail: [0],
+  direction: [null, 'ltr'],
+  format: ['', 0],
+  indent: [0],
+  mode: ['normal'],
+  style: [''],
+  textFormat: [0],
+  textStyle: [''],
+};
+
+/**
+ * Canonicalizes only Payload/Lexical service defaults. Node type, child order,
+ * text, non-default formatting and link fields remain comparison-significant.
+ */
+export function normalizePilotRichText(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizePilotRichText);
+  if (typeof value !== 'object' || value === null) return value;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value).sort(([left], [right]) => left.localeCompare(right))) {
+    if (key === 'version') continue;
+    const ignored = LEXICAL_EMPTY_DEFAULTS[key];
+    if (ignored?.some((candidate) => Object.is(candidate, child)) === true) continue;
+    normalized[key] = normalizePilotRichText(child);
+  }
+  return normalized;
 }
 
 function cardPath(slug: string): string {
@@ -81,7 +118,7 @@ function expectedCollectionFields(
     title: seed.title,
     h1: seed.h1,
     metaDescription: seed.metaDescription,
-    intro: pilotIntroDocument(seed.intro),
+    intro: normalizePilotRichText(pilotIntroDocument(seed.intro)),
     description: seed.description,
     robots: seed.robots,
   };
@@ -96,7 +133,7 @@ function actualCollectionFields(existing: ExistingCollection): Readonly<Record<s
     title: existing.title,
     h1: existing.h1,
     metaDescription: existing.metaDescription,
-    intro: existing.intro,
+    intro: normalizePilotRichText(existing.intro),
     description: existing.description,
     robots: existing.robots,
   };
@@ -105,6 +142,7 @@ function actualCollectionFields(existing: ExistingCollection): Readonly<Record<s
 function expectedCardFields(
   seed: CardSeed,
   collectionsByKey: ReadonlyMap<string, CollectionSeed>,
+  identity: AssetIdentity | null,
 ): Readonly<Record<string, unknown>> {
   const collectionPath = collectionsByKey.get(seed.collectionKey)?.path;
   return {
@@ -118,7 +156,10 @@ function expectedCardFields(
     usageTerms: seed.usageTerms,
     robots: seed.robots,
     collectionPaths: collectionPath === undefined ? [] : [collectionPath],
-    imageSourceFile: seed.sourceFile,
+    imageRevision: identity?.revision ?? null,
+    imageMimeType: identity?.mimeType ?? null,
+    imageWidth: identity?.width ?? null,
+    imageHeight: identity?.height ?? null,
   };
 }
 
@@ -134,7 +175,10 @@ function actualCardFields(existing: ExistingCard): Readonly<Record<string, unkno
     usageTerms: existing.usageTerms,
     robots: existing.robots,
     collectionPaths: [...existing.collectionPaths],
-    imageSourceFile: existing.imageSourceFile,
+    imageRevision: existing.imageRevision,
+    imageMimeType: existing.imageMimeType,
+    imageWidth: existing.imageWidth,
+    imageHeight: existing.imageHeight,
   };
 }
 
@@ -165,12 +209,6 @@ function claimError(
     : `${label} final path ${path} is permanently claimed by ${claim.ownerKey}.`;
 }
 
-async function readClaim(store: PilotImportStore, path: string): Promise<ExistingContentPathClaim | null | undefined> {
-  return store.findContentPathClaimByPath === undefined
-    ? undefined
-    : store.findContentPathClaimByPath(path);
-}
-
 async function checkCollection(
   seed: CollectionSeed,
   store: PilotImportStore,
@@ -183,7 +221,7 @@ async function checkCollection(
       const slug = cardSlugForPath(seed.path);
       return slug === null ? Promise.resolve(null) : store.findCardBySlug(slug);
     })(),
-    readClaim(store, seed.path),
+    store.findContentPathClaimByPath(seed.path),
   ]);
   if (cardCollision !== null) {
     errors.push(
@@ -201,10 +239,8 @@ async function checkCollection(
     const state = statusError('Collection', seed.key, existing);
     if (state !== null) errors.push(state);
   }
-  if (claim !== undefined) {
-    const problem = claimError(`Collection ${seed.key}`, seed.path, 'collections', existing, claim);
-    if (problem !== null) errors.push(problem);
-  }
+  const problem = claimError(`Collection ${seed.key}`, seed.path, 'collections', existing, claim);
+  if (problem !== null) errors.push(problem);
   return {
     errors,
     record: {
@@ -223,13 +259,14 @@ async function checkCard(
   seed: CardSeed,
   store: PilotImportStore,
   collectionsByKey: ReadonlyMap<string, CollectionSeed>,
+  identity: AssetIdentity | null,
 ): Promise<CheckedRecord> {
   const path = cardPath(seed.slug);
   const errors: string[] = [];
   const [existing, collectionCollision, claim] = await Promise.all([
     store.findCardBySlug(seed.slug),
     store.findCollectionByPath(path),
-    readClaim(store, path),
+    store.findContentPathClaimByPath(path),
   ]);
   if (collectionCollision !== null) {
     errors.push(
@@ -238,7 +275,7 @@ async function checkCard(
   }
   if (existing !== null) {
     const fields = differingFields(
-      expectedCardFields(seed, collectionsByKey),
+      expectedCardFields(seed, collectionsByKey, identity),
       actualCardFields(existing),
     );
     errors.push(...fields.map((field) =>
@@ -247,10 +284,8 @@ async function checkCard(
     const state = statusError('Card', seed.pilotId, existing);
     if (state !== null) errors.push(state);
   }
-  if (claim !== undefined) {
-    const problem = claimError(`Card ${seed.pilotId}`, path, 'cards', existing, claim);
-    if (problem !== null) errors.push(problem);
-  }
+  const problem = claimError(`Card ${seed.pilotId}`, path, 'cards', existing, claim);
+  if (problem !== null) errors.push(problem);
   return {
     errors,
     record: {
@@ -274,6 +309,7 @@ async function checkAsset(assetRoot: string, seed: CardSeed): Promise<AssetCheck
     const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : null;
     return {
       valid: false,
+      identity: null,
       errors: [code === 'ENOENT'
         ? `Asset ${seed.sourceFile} is missing.`
         : `Asset ${seed.sourceFile} cannot be read: ${error instanceof Error ? error.message : String(error)}.`],
@@ -281,6 +317,7 @@ async function checkAsset(assetRoot: string, seed: CardSeed): Promise<AssetCheck
   }
 
   const errors: string[] = [];
+  let identity: AssetIdentity | null = null;
   try {
     const metadata = await sharp(bytes).metadata();
     const width = metadata.width;
@@ -302,13 +339,20 @@ async function checkAsset(assetRoot: string, seed: CardSeed): Promise<AssetCheck
         );
       }
     }
-    createHash('sha256').update(bytes).digest('hex');
+    if (metadata.format === 'jpeg' && Number.isInteger(width) && Number.isInteger(height)) {
+      identity = {
+        revision: await computeImageRevision(bytes),
+        mimeType: 'image/jpeg',
+        width,
+        height,
+      };
+    }
   } catch (error) {
     errors.push(
       `Asset ${seed.sourceFile} cannot be decoded by Sharp: ${error instanceof Error ? error.message : valueLabel(error)}.`,
     );
   }
-  return { valid: errors.length === 0, errors };
+  return { valid: errors.length === 0, errors, identity };
 }
 
 async function directoryErrors(assetRoot: string, expectedFiles: ReadonlySet<string>): Promise<string[]> {
@@ -385,7 +429,9 @@ export async function runPilotPreflight(input: PilotPreflightInput): Promise<Pil
     Promise.all(input.matrix.collections.map((seed) =>
       checkCollection(seed, input.store, collectionsByKey),
     )),
-    Promise.all(input.matrix.cards.map((seed) => checkCard(seed, input.store, collectionsByKey))),
+    Promise.all(input.matrix.cards.map((seed, index) =>
+      checkCard(seed, input.store, collectionsByKey, assetChecks[index]?.identity ?? null),
+    )),
   ]);
   const checks = [...collectionChecks, ...cardChecks];
   blockingErrors.push(...checks.flatMap((result) => result.errors));

@@ -22,7 +22,13 @@ import { ImageNameClaims } from './collections/image-name-claims';
 import { Redirects } from './collections/redirects';
 import { SeoHistory } from './collections/seo-history';
 import { Users } from './collections/users';
-import { adminPath, databasePush, loadEnvFiles, requireEnv } from './env.mjs';
+import {
+  adminPath,
+  databaseCreateDisabled,
+  databasePush,
+  loadEnvFiles,
+  requireEnv,
+} from './env.mjs';
 import { seoInventoryEndpoint } from './export/endpoint';
 import { SiteSettings } from './globals/site-settings';
 import { MAX_UPLOAD_BYTES } from './images/upload-validation';
@@ -104,6 +110,7 @@ const config = buildConfig({
   ],
 
   db: postgresAdapter({
+    disableCreateDatabase: databaseCreateDisabled(),
     pool: {
       connectionString: requireEnv('DATABASE_URL'),
     },
