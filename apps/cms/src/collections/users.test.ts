@@ -15,20 +15,38 @@
  * пользователь в пустой базе, где выбора всё равно нет: не-admin заблокировал
  * бы админку целиком.
  */
+import type { FieldAccess } from 'payload';
 import { describe, expect, it } from 'vitest';
 
 import { ROLES } from '../access/roles';
-import { Users, resolveCreateRole } from './users';
+import {
+  ACCOUNT_CONTROL_FIELDS,
+  API_KEY_FIELDS,
+  Users,
+  forbiddenAccountFields,
+  resolveApiKeyIndex,
+  resolveCreateRole,
+} from './users';
 
-function roleField(): Record<string, unknown> {
+function namedField(name: string): Record<string, unknown> {
   const field = Users.fields.find(
     (candidate): candidate is Extract<(typeof Users.fields)[number], { name: string }> =>
-      'name' in candidate && candidate.name === 'role',
+      'name' in candidate && candidate.name === name,
   );
   if (field === undefined) {
-    throw new Error('поле role в коллекции users не найдено');
+    throw new Error(`поле ${name} в коллекции users не найдено`);
   }
   return { ...field };
+}
+
+function roleField(): Record<string, unknown> {
+  return namedField('role');
+}
+
+/** Вызов предиката доступа к полю с минимальным контрактом Payload. */
+function askField(access: unknown, user: { role: string } | null): boolean {
+  const predicate = access as FieldAccess;
+  return Boolean(predicate({ req: { user } } as unknown as Parameters<FieldAccess>[0]));
 }
 
 describe('поле role', () => {
@@ -98,5 +116,121 @@ describe('resolveCreateRole: единственное исключение — �
     await expect(
       resolveCreateRole({ countUsers: () => Promise.resolve(0), incomingRole: ROLES.aiEditor }),
     ).resolves.toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Э6-01: API-ключ — собственность администратора, а не аккаунта       */
+/* ------------------------------------------------------------------ */
+
+describe('поля API-ключа объявлены и закрыты (Э6-01)', () => {
+  const admin = { role: ROLES.admin };
+  const aiEditor = { role: ROLES.aiEditor };
+
+  it.each(API_KEY_FIELDS)('%s: пишет только admin', (name) => {
+    const access = namedField(name).access as Record<string, unknown> | undefined;
+    expect(askField(access?.create, admin)).toBe(true);
+    expect(askField(access?.update, admin)).toBe(true);
+    expect(askField(access?.create, aiEditor)).toBe(false);
+    expect(askField(access?.update, aiEditor)).toBe(false);
+    expect(askField(access?.create, null)).toBe(false);
+    expect(askField(access?.update, null)).toBe(false);
+  });
+
+  it.each(['apiKey', 'apiKeyIndex'])('%s: читает только admin', (name) => {
+    // Поле `apiKey` расшифровывается хуком afterRead самого Payload, а список
+    // пользователей читает любой аутентифицированный (это нужно seo-history).
+    // Без правила чтения сервисный аккаунт получал бы ключи ВСЕХ, включая admin.
+    const access = namedField(name).access as Record<string, unknown> | undefined;
+    expect(askField(access?.read, admin)).toBe(true);
+    expect(askField(access?.read, aiEditor)).toBe(false);
+    expect(askField(access?.read, null)).toBe(false);
+  });
+
+  it('enableAPIKey остаётся читаемым: это флаг, а не секрет', () => {
+    const access = namedField('enableAPIKey').access as Record<string, unknown> | undefined;
+    expect(access?.read).toBeUndefined();
+  });
+});
+
+describe('forbiddenAccountFields: громкий отказ на сырых данных', () => {
+  const admin = { role: ROLES.admin };
+  const aiEditor = { role: ROLES.aiEditor };
+
+  it('admin вправе задать любое из защищённых полей', () => {
+    const incoming: Record<string, unknown> = {};
+    for (const field of ACCOUNT_CONTROL_FIELDS) {
+      incoming[field] = 'что-нибудь';
+    }
+    expect(forbiddenAccountFields(incoming, admin)).toEqual([]);
+  });
+
+  it.each(ACCOUNT_CONTROL_FIELDS)('ai-editor не задаёт %s', (field) => {
+    expect(forbiddenAccountFields({ [field]: 'X' }, aiEditor)).toEqual([field]);
+    expect(forbiddenAccountFields({ [field]: 'X' }, null)).toEqual([field]);
+  });
+
+  it('поле, которого в запросе нет, отказом не считается: PATCH пароля проходит', () => {
+    expect(forbiddenAccountFields({ password: 'novyy-parol' }, aiEditor)).toEqual([]);
+  });
+
+  it('значение false у enableAPIKey — тоже попытка: отключение ключа это тоже право', () => {
+    // `false` в JS ложно, поэтому проверка «поле присутствует» обязана идти по
+    // ключу, а не по значению: иначе отключение чужого ключа прошло бы молча.
+    expect(forbiddenAccountFields({ enableAPIKey: false }, aiEditor)).toEqual(['enableAPIKey']);
+  });
+});
+
+describe('resolveApiKeyIndex: состояния «ключ выключен, а индекс жив» не бывает', () => {
+  it('enableAPIKey не true — индекс обнуляется, каким бы он ни пришёл', () => {
+    for (const enableAPIKey of [false, null, undefined]) {
+      expect(
+        resolveApiKeyIndex({
+          incoming: { apiKey: 'X', apiKeyIndex: 'hmac-X', enableAPIKey },
+          stored: { apiKeyIndex: 'staryy', enableAPIKey: true },
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it('ключ не приходил в запросе — индекс остаётся прежним, а не пересчитанным', () => {
+    // Главный случай, ради которого функция существует. Хук Payload, считающий
+    // индекс, выполняется РАНЬШЕ проверки доступа к полю `apiKey` и работает с
+    // общим объектом данных: сервисный аккаунт мог послать себе apiKey, поле
+    // срезалось бы правами, а индекс уже был бы посчитан от срезанного значения.
+    expect(
+      resolveApiKeyIndex({
+        incoming: { apiKeyIndex: 'hmac-podstavlennyy' },
+        stored: { apiKeyIndex: 'hmac-nastoyashchiy', enableAPIKey: true },
+      }),
+    ).toBe('hmac-nastoyashchiy');
+  });
+
+  it('ключ пришёл вместе с включённым флагом — индекс берётся из запроса', () => {
+    expect(
+      resolveApiKeyIndex({
+        incoming: { apiKey: 'novyy', apiKeyIndex: 'hmac-novyy', enableAPIKey: true },
+        stored: { apiKeyIndex: 'hmac-staryy', enableAPIKey: true },
+      }),
+    ).toBe('hmac-novyy');
+  });
+
+  it('флаг унаследован от записи: частичное обновление ключ не гасит', () => {
+    expect(
+      resolveApiKeyIndex({
+        incoming: { apiKey: 'novyy', apiKeyIndex: 'hmac-novyy' },
+        stored: { apiKeyIndex: 'hmac-staryy', enableAPIKey: true },
+      }),
+    ).toBe('hmac-novyy');
+  });
+
+  it('создание записи: прежнего состояния нет', () => {
+    expect(
+      resolveApiKeyIndex({
+        incoming: { apiKey: 'novyy', apiKeyIndex: 'hmac-novyy', enableAPIKey: true },
+        stored: null,
+      }),
+    ).toBe('hmac-novyy');
+    expect(resolveApiKeyIndex({ incoming: {}, stored: null })).toBeNull();
   });
 });

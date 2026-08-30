@@ -677,7 +677,13 @@ export interface User {
   role: 'admin' | 'ai-editor';
   updatedAt: string;
   createdAt: string;
+  /**
+   * Выдан ли аккаунту API-ключ. Включает и выключает только admin: ключ наследует роль владельца, поэтому распоряжаться им — то же право, что назначать роли.
+   */
   enableAPIKey?: boolean | null;
+  /**
+   * Сам ключ. Читает и меняет только admin — в том числе у своей записи: ключ выдаётся аккаунту, а не принадлежит ему.
+   */
   apiKey?: string | null;
   apiKeyIndex?: string | null;
   email: string;

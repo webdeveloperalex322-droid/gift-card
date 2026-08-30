@@ -54,6 +54,37 @@ export default tseslint.config(
       '@typescript-eslint/consistent-type-imports': 'error',
     },
   },
+  {
+    // Гарнизон живых API-тестов (`apps/cms/src/testing/**`) лежит в `src`
+    // приложения — иначе его не проверял бы `pnpm --filter @otkritka/cms check`.
+    // Плата за это: он разрешается из продуктового кода, а внутри него есть
+    // `readStored` и `removeContent`, ходящие с `overrideAccess: true`, то есть
+    // В ОБХОД всего access control. Один такой импорт в хуке коллекции — и
+    // защита обойдена изнутри, причём сборкой это не заметится.
+    //
+    // Правило базовое (`no-restricted-imports`), а не новый плагин зон: цель —
+    // ровно один запрет, и заводить ради него инфраструктуру дороже, чем он
+    // стоит. Каталог `tests/api` из блока исключён: это его единственный
+    // законный потребитель.
+    files: ['**/*.ts', '**/*.tsx', '**/*.mts'],
+    ignores: ['tests/api/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/testing/api-harness', '**/testing/api-fixtures', '**/src/testing/*'],
+              message:
+                'apps/cms/src/testing/** — гарнизон тестов: он ходит с overrideAccess: true, ' +
+                'в обход access control. Импортировать его вправе только tests/api/**. ' +
+                'Продуктовому коду нужен обычный Local API с проверкой прав.',
+            },
+          ],
+        },
+      ],
+    },
+  },
   // Шаблоны Astro (apps/web). Файлы .astro разбирает astro-eslint-parser:
   // без него eslint видит в них синтаксическую ошибку на первой же строке
   // frontmatter, и шаблоны просто не линтуются — то есть требование «eslint

@@ -24,6 +24,7 @@ import { Users } from './collections/users';
 import { adminPath, databasePush, loadEnvFiles, requireEnv } from './env.mjs';
 import { seoInventoryEndpoint } from './export/endpoint';
 import { SiteSettings } from './globals/site-settings';
+import { resolveApiRateLimit } from './http/api-rate-limit';
 import { MAX_UPLOAD_BYTES } from './images/upload-validation';
 import { seedFirstAdmin } from './seed-first-admin';
 
@@ -66,6 +67,24 @@ loadEnvFiles();
  * с тем же самым текстом ошибки.
  */
 reservedRoutes();
+
+/**
+ * Параметры ограничения частоты (Ч-14) разбираются ТОЖЕ ПРИ СТАРТЕ, и по той же
+ * причине.
+ *
+ * `resolveApiRateLimit` бросает на мусорном значении `API_RATE_LIMIT_*`, на нуле
+ * и на всплеске меньше квоты. Без этого вызова разбор случался бы лениво — при
+ * первом запросе С КЛЮЧОМ, то есть у внешнего клиента и в форме `500` на
+ * посторонней операции; а если ключом за смену никто не ходил, опечатка в `.env`
+ * не проявлялась бы вовсе, и предел молча оставался бы не тем, который настроили.
+ * Проект держит другое правило: мусор или пустое значение — отказ на СТАРТЕ, с
+ * тем же самым текстом ошибки.
+ *
+ * Результат не используется намеренно: счётчики живут в памяти процесса и
+ * создаются при первом запросе (`src/http/api-rate-limit.ts`), здесь проверяется
+ * только пригодность конфигурации.
+ */
+resolveApiRateLimit();
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
