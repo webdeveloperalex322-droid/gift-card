@@ -24,6 +24,7 @@ describe('content pilot manifest', () => {
     expect(records).toHaveLength(50);
     expect(new Set(records.map((item) => item.id)).size).toBe(50);
     expect(new Set(records.map((item) => item.fileName)).size).toBe(50);
+    expect(records.every((item) => item.status === 'accepted')).toBe(true);
     expect(validateManifest(records)).toEqual([]);
   });
 
