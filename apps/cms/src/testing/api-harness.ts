@@ -11,11 +11,12 @@
  *
  * ВЫБРАННЫЙ ТРАНСПОРТ: вариант A — обработчики маршрутов Next вызываются В
  * ПРОЦЕССЕ. Импортируются не `@payloadcms/next/routes`, а ФАЙЛЫ МАРШРУТОВ
- * приложения (`src/app/(payload)/api/[...slug]/route.ts` и
- * `.../api/graphql/route.ts`) — то есть ровно те модули, которые обслуживают
- * продакшн-запросы. Проверено: они разрешаются и выполняются вне Next, потому
- * что оба состоят из вызовов `payload` (`handleEndpoints`, `createPayloadRequest`)
- * и `next/headers` не трогают. Поднимать `next start` (вариант B) не
+ * приложения — все три, сколько их есть под `src/app/(payload)/api`:
+ * `[...slug]/route.ts` (REST), `graphql/route.ts` и `graphql-playground/route.ts`.
+ * То есть ровно те модули, которые обслуживают продакшн-запросы. Проверено: они
+ * разрешаются и выполняются вне Next, потому что все три состоят из вызовов
+ * `payload` (`handleEndpoints`, `createPayloadRequest`) и `next/headers` не
+ * трогают. Поднимать `next start` (вариант B) не
  * потребовалось: сборка Next заняла бы минуты на каждом `pnpm verify`, а
  * фидбек-петля TDD этого не переживает. Цена выбора названа честно: маршрутизация
  * Next (rewrites `PAYLOAD_ADMIN_PATH`, заголовки `X-Robots-Tag`) этими тестами не
@@ -43,6 +44,7 @@ import {
   PATCH as REST_PATCH,
   POST as REST_POST,
 } from '../app/(payload)/api/[...slug]/route';
+import { GET as GRAPHQL_PLAYGROUND_GET } from '../app/(payload)/api/graphql-playground/route';
 import { POST as GRAPHQL_POST } from '../app/(payload)/api/graphql/route';
 import config from '../payload.config';
 
@@ -162,6 +164,16 @@ export interface RestCall {
   readonly actor: ApiActor | null;
   /** Тело: объект (уйдёт JSON) либо готовый `FormData` для загрузки файла. */
   readonly body?: FormData | Record<string, unknown>;
+  /**
+   * Дополнительные заголовки запроса.
+   *
+   * Существует ради ровно одного сценария: запрос СЕССИЕЙ-COOKIE вместо
+   * API-ключа (Э6-03 — доказательство, что ограничение частоты считает ключи, а
+   * не человека в админке). Аутентификация по ключу остаётся основной формой
+   * ({@link ApiActor}), и подменить её этим полем нельзя: заголовок ключа
+   * добавляется после и выигрывает.
+   */
+  readonly headers?: Record<string, string>;
   readonly method: RestMethod;
   /** Сегменты пути ПОСЛЕ `/api`: `['cards', '12']`. */
   readonly segments: readonly string[];
@@ -173,7 +185,7 @@ export async function restRaw(call: RestCall): Promise<Response> {
   const search = new URLSearchParams(call.query ?? {}).toString();
   const url = `${REQUEST_ORIGIN}/api/${call.segments.join('/')}${search === '' ? '' : `?${search}`}`;
 
-  const headers: Record<string, string> = { ...authHeaders(call.actor) };
+  const headers: Record<string, string> = { ...call.headers, ...authHeaders(call.actor) };
   const init: RequestInit = { headers, method: call.method };
 
   if (call.body instanceof FormData) {
@@ -286,15 +298,15 @@ function assertGraphqlReachedPayload(
 }
 
 /**
- * Сырой ответ GraphQL: конверт `{ data, errors }` целиком.
+ * Ответ маршрута GraphQL БЕЗ разбора конверта.
  *
- * Падает громко, если запрос не дошёл до резолвера — см.
- * {@link assertGraphqlReachedPayload}.
+ * Нужен там, где ответ вообще не является ответом GraphQL: отказ по частоте
+ * (Э6-03) отдаётся транспортным слоем — 429 с заголовком `Retry-After`, — и
+ * {@link graphqlRaw} на нём справедливо падает, потому что до Payload запрос не
+ * дошёл. Тест про ограничение частоты смотрит на код и заголовки, поэтому берёт
+ * ответ отсюда.
  */
-export async function graphqlRaw(call: GraphqlCall): Promise<{
-  readonly body: { data?: Record<string, unknown> | null; errors?: unknown[] };
-  readonly status: number;
-}> {
+export async function graphqlHttp(call: GraphqlCall): Promise<Response> {
   const request = new Request(`${REQUEST_ORIGIN}/api/graphql`, {
     body: JSON.stringify({ query: call.query, variables: call.variables ?? {} }),
     headers: {
@@ -305,7 +317,41 @@ export async function graphqlRaw(call: GraphqlCall): Promise<{
     method: 'POST',
   });
 
-  const response = await GRAPHQL_POST(request);
+  return GRAPHQL_POST(request);
+}
+
+/**
+ * Запрос к маршруту GraphQL Playground — ТРЕТЬЕМУ HTTP-входу в Payload.
+ *
+ * ЗАЧЕМ ОН НУЖЕН НАБОРУ. Песочница выглядит как страница с HTML, но её
+ * обработчик начинается с `createPayloadRequest`, а тот выполняет стратегии
+ * аутентификации: запрос с заголовком `users API-Key <ключ>` ищет владельца
+ * ключа в Postgres ещё до того, как маршрут решит, отдавать ли страницу. Значит,
+ * это такой же вход, как REST и GraphQL, и предел Ч-14 обязан считать и его —
+ * иначе перебор ключей ходил бы в базу через адрес, на который никто не смотрит.
+ *
+ * Ответ возвращается сырым: у песочницы тело — HTML, а не конверт GraphQL, и
+ * разбирать здесь нечего. Проверяются код ответа и заголовки.
+ */
+export async function playgroundHttp(actor: ApiActor | null): Promise<Response> {
+  const request = new Request(`${REQUEST_ORIGIN}/api/graphql-playground`, {
+    headers: { ...authHeaders(actor) },
+    method: 'GET',
+  });
+  return GRAPHQL_PLAYGROUND_GET(request);
+}
+
+/**
+ * Сырой ответ GraphQL: конверт `{ data, errors }` целиком.
+ *
+ * Падает громко, если запрос не дошёл до резолвера — см.
+ * {@link assertGraphqlReachedPayload}.
+ */
+export async function graphqlRaw(call: GraphqlCall): Promise<{
+  readonly body: { data?: Record<string, unknown> | null; errors?: unknown[] };
+  readonly status: number;
+}> {
+  const response = await graphqlHttp(call);
   const text = await response.text();
   let body: { data?: Record<string, unknown> | null; errors?: unknown[] } = {};
   try {
@@ -738,6 +784,12 @@ export interface TestUser extends ApiActor {
   readonly email: string;
   /** Тип идентификатора взят из сгенерированных типов: у Postgres это число. */
   readonly id: User['id'];
+  /**
+   * Пароль аккаунта. Нужен ровно для {@link openSession}: часть сценариев
+   * (Э6-03, Э6-04) обязана отличить запрос ПО КЛЮЧУ от запроса СЕССИЕЙ того же
+   * человека, а сессия добывается только настоящим входом по паролю.
+   */
+  readonly password: string;
   readonly role: User['role'];
 }
 
@@ -758,6 +810,7 @@ export async function createUserWithKey(args: {
   // `enableAPIKey: true`, и предсказуемое значение — это работающий доступ,
   // который можно угадать по времени прогона.
   const apiKey = `${args.role}-${randomUUID()}`;
+  const password = `${apiKey}-pass`;
 
   const created: User = await payload.create({
     collection: 'users',
@@ -765,7 +818,7 @@ export async function createUserWithKey(args: {
       apiKey,
       email: args.email,
       enableAPIKey: true,
-      password: `${apiKey}-pass`,
+      password,
       role: args.role,
     },
     overrideAccess: true,
@@ -776,8 +829,45 @@ export async function createUserWithKey(args: {
     email: created.email,
     id: created.id,
     label: args.label,
+    password,
     role: created.role,
   };
+}
+
+/**
+ * Открывает сессию-cookie: настоящий вход по паролю тем же маршрутом, которым
+ * её получает браузер админки. Возвращает готовое значение заголовка `Cookie`.
+ *
+ * ЗАЧЕМ ЭТО НУЖНО НАБОРУ. Две границы задачи Э6 различают не роль, а СПОСОБ
+ * обращения: ограничение частоты считает ключи и не считает сессии (Э6-03), а
+ * журнал `seo-history` отмечает признаком `viaApiKey` именно приход по ключу
+ * (Э6-04). Доказать и то и другое можно только двумя запросами ОДНОГО аккаунта —
+ * ключом и сессией; иначе разница объяснялась бы разными пользователями.
+ *
+ * Имя cookie не пишется строкой: оно берётся из ответа сервера, поэтому смена
+ * `cookiePrefix` в конфиге не превратит набор в молча зелёный.
+ */
+export async function openSession(user: TestUser): Promise<string> {
+  const response = await restRaw({
+    actor: ANONYMOUS,
+    body: { email: user.email, password: user.password },
+    method: 'POST',
+    segments: ['users', 'login'],
+  });
+
+  if (response.status !== 200) {
+    throw new Error(
+      `Вход по паролю для ${user.label} не удался (${String(response.status)}). Без живой ` +
+        'сессии-cookie сценарии, отличающие обращение по ключу от обращения человека, ' +
+        'проверять нечем.',
+    );
+  }
+
+  const setCookie = response.headers.get('set-cookie');
+  if (setCookie === null) {
+    throw new Error(`Ответ входа для ${user.label} не принёс cookie сессии — проверять нечего.`);
+  }
+  return setCookie.split(';')[0] ?? '';
 }
 
 /**
