@@ -13,6 +13,8 @@
     "audit:links:scheduled": "payload jobs:run --handle-schedules --queue seo-audit",
     "build": "next build",
     "check": "tsc --noEmit",
+    "content:import:apply": "payload run ./scripts/import-pilot-content.ts -- --apply",
+    "content:import:dry-run": "payload run ./scripts/import-pilot-content.ts -- --dry-run",
     "dev": "next dev --port 3010",
     "ensure-db": "node scripts/ensure-database.mjs",
     "generate:importmap": "payload generate:importmap",

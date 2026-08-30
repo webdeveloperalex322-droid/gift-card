@@ -26,6 +26,8 @@ export interface ExistingCard {
   imageMimeType: string | null;
   imageWidth: number | null;
   imageHeight: number | null;
+  /** Current pHash matches found by the server hook; informational, never auto-approved. */
+  visualDuplicateMatches?: readonly { readonly id: number | string; readonly distance: number }[];
 }
 
 export interface ExistingCollection {
@@ -86,6 +88,13 @@ export interface PilotPreflightReport {
   readonly mutationCount: 0;
   readonly blockingErrors: readonly string[];
   readonly records: readonly PilotPreflightRecord[];
+}
+
+export interface PilotAssetIdentity {
+  readonly revision: string;
+  readonly mimeType: 'image/jpeg';
+  readonly width: number;
+  readonly height: number;
 }
 
 /** Minimal Lexical value used by the importer and compared byte-for-byte on resume. */

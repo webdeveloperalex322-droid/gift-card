@@ -1,5 +1,6 @@
 /**
- * One-off pilot importer. Task 6 exposes dry-run only; Task 7 adds apply.
+ * One-off pilot importer. Dry-run is the default and is strictly read-only;
+ * apply runs only after that same process receives a clean preflight report.
  *
  * `payload run` imports this module directly. All argument and environment
  * checks happen before Payload/config import, and dry-run disables schema push
@@ -12,6 +13,12 @@ import type { Payload } from 'payload';
 import { loadManifest } from '../../../scripts/content-pilot/manifest.mjs';
 import { loadSiteContent } from '../../../scripts/content-import/schema.js';
 import {
+  applyPilotContent,
+  type PilotApplyStore,
+  type PilotImportReport,
+  type PilotImportedIds,
+} from '../src/import/pilot-apply';
+import {
   runPilotPreflight,
   type ExistingCard,
   type ExistingCollection,
@@ -19,8 +26,9 @@ import {
   type PilotImportStore,
   type PilotPreflightReport,
 } from '../src/import/pilot-preflight';
+import { pilotIntroDocument } from '../src/import/pilot-types';
 import { loadEnvFiles, workspaceRoot } from '../src/env.mjs';
-import type { Card, CardImage, Collection } from '../src/payload-types';
+import type { Card, CardImage, Collection, User } from '../src/payload-types';
 
 export type PilotImportMode = 'apply' | 'dry-run';
 
@@ -38,7 +46,7 @@ function rejectDestructiveDatabaseEnvironment(
 ): void {
   const raw = env.PAYLOAD_DROP_DATABASE?.trim().toLowerCase();
   if (raw === 'true' || raw === '1' || raw === 'on' || raw === 'yes') {
-    throw new Error('PAYLOAD_DROP_DATABASE must not be enabled for pilot dry-run.');
+    throw new Error('PAYLOAD_DROP_DATABASE must not be enabled for pilot import.');
   }
 }
 
@@ -88,6 +96,28 @@ export async function initializePilotDryRun<T>(
   return { environment, payload: await initializePayload() };
 }
 
+export async function initializePilotImport<T>(
+  args: readonly string[],
+  env: Readonly<Record<string, string | undefined>>,
+  workspaceRoot: string,
+  initializers: {
+    readonly initializeApply: () => Promise<T> | T;
+    readonly initializeDryRun: () => Promise<T> | T;
+  },
+): Promise<{
+  readonly environment: PilotImportEnvironment;
+  readonly mode: PilotImportMode;
+  readonly payload: T;
+}> {
+  const mode = parsePilotImportMode(args);
+  const environment = requirePilotImportEnvironment(env, workspaceRoot);
+  rejectDestructiveDatabaseEnvironment(env);
+  const payload = mode === 'apply'
+    ? await initializers.initializeApply()
+    : await initializers.initializeDryRun();
+  return { environment, mode, payload };
+}
+
 export async function initializePilotPayloadDryRun(options: {
   readonly disableDBConnect?: boolean;
   readonly key?: string;
@@ -128,6 +158,20 @@ export async function initializePilotPayloadDryRun(options: {
   });
 }
 
+export async function initializePilotPayloadApply(options: {
+  readonly disableDBConnect?: boolean;
+  readonly key?: string;
+} = {}): Promise<Payload> {
+  // Apply still starts with preflight. Reuse the hardened initialization so
+  // schema push, database creation, type/import-map generation and onInit are
+  // unable to mutate anything before preflight succeeds. The returned Local
+  // API remains fully capable of the explicit writes performed afterwards.
+  return initializePilotPayloadDryRun({
+    ...options,
+    key: options.key ?? 'pilot-import-apply',
+  });
+}
+
 function relationshipPath(value: Collection['parent']): string | null {
   return typeof value === 'object' && value !== null ? value.path ?? null : null;
 }
@@ -161,6 +205,12 @@ function toExistingCard(doc: Card): ExistingCard {
     status: doc.status,
     title: doc.title,
     usageTerms: doc.usageTerms ?? null,
+    visualDuplicateMatches: (doc.visualDuplicate?.similar ?? []).flatMap((match) => {
+      const id = typeof match.card === 'object' && match.card !== null ? match.card.id : match.card;
+      return id === null || id === undefined || match.distance === null || match.distance === undefined
+        ? []
+        : [{ id, distance: match.distance }];
+    }),
   };
 }
 
@@ -240,6 +290,193 @@ export function createPayloadPilotImportStore(payload: Payload): PilotImportStor
   };
 }
 
+function payloadRelationId(id: number | string): number {
+  if (typeof id !== 'number') {
+    throw new Error(`Configured Payload database requires numeric relation ids; received ${String(id)}.`);
+  }
+  return id;
+}
+
+export function createPayloadPilotApplyStore(payload: Payload, actor: User): PilotApplyStore {
+  const user = actor;
+  return {
+    findActor(email) {
+      return Promise.resolve(email === actor.email ? { id: actor.id, role: actor.role } : null);
+    },
+    async findCardBySlug(slug) {
+      const result = await payload.find({
+        collection: 'cards',
+        depth: 1,
+        limit: 1,
+        overrideAccess: false,
+        pagination: false,
+        user,
+        where: { slug: { equals: slug } },
+      });
+      const doc = result.docs[0];
+      return doc === undefined ? null : toExistingCard(doc);
+    },
+    async findCollectionByPath(path) {
+      const result = await payload.find({
+        collection: 'collections',
+        depth: 1,
+        limit: 1,
+        overrideAccess: false,
+        pagination: false,
+        user,
+        where: { path: { equals: path } },
+      });
+      const doc = result.docs[0];
+      return doc === undefined ? null : toExistingCollection(doc);
+    },
+    async findContentPathClaimByPath(path) {
+      const result = await payload.find({
+        collection: 'content-path-claims',
+        depth: 0,
+        limit: 1,
+        overrideAccess: false,
+        pagination: false,
+        user,
+        where: { path: { equals: path } },
+      });
+      const claim = result.docs[0];
+      return claim === undefined ? null : {
+        ownerCollection: claim.ownerCollection,
+        ownerKey: claim.ownerKey,
+        path: claim.path,
+      };
+    },
+    async createCollection(seed, parentId) {
+      const doc = await payload.create({
+        collection: 'collections',
+        data: {
+          description: seed.description,
+          h1: seed.h1,
+          intro: pilotIntroDocument(seed.intro) as NonNullable<Collection['intro']>,
+          metaDescription: seed.metaDescription,
+          nodeKind: seed.nodeKind,
+          parent: parentId === null ? null : payloadRelationId(parentId),
+          robots: 'noindex,follow',
+          slug: seed.slug,
+          status: 'draft',
+          title: seed.title,
+        },
+        overrideAccess: false,
+        user,
+      });
+      return toExistingCollection(doc);
+    },
+    async createImage(seed, bytes) {
+      const doc = await payload.create({
+        collection: 'card-images',
+        data: { title: seed.alt },
+        file: {
+          data: bytes,
+          mimetype: 'image/jpeg',
+          name: seed.sourceFile,
+          size: bytes.byteLength,
+        },
+        overrideAccess: false,
+        user,
+      });
+      return { id: doc.id };
+    },
+    async createCard(seed, imageId, collectionId) {
+      const doc = await payload.create({
+        collection: 'cards',
+        data: {
+          alt: seed.alt,
+          caption: seed.caption,
+          collections: [payloadRelationId(collectionId)],
+          description: seed.description,
+          h1: seed.h1,
+          image: payloadRelationId(imageId),
+          metaDescription: seed.metaDescription,
+          robots: 'noindex,follow',
+          slug: seed.slug,
+          status: 'draft',
+          title: seed.title,
+          usageTerms: seed.usageTerms,
+        },
+        overrideAccess: false,
+        user,
+      });
+      return toExistingCard(doc);
+    },
+    async moveCollectionToReview(id) {
+      const doc = await payload.update({
+        collection: 'collections',
+        id,
+        data: { status: 'review' },
+        overrideAccess: false,
+        user,
+      });
+      return toExistingCollection(doc);
+    },
+    async moveCardToReview(id) {
+      const doc = await payload.update({
+        collection: 'cards',
+        id,
+        data: { status: 'review' },
+        overrideAccess: false,
+        user,
+      });
+      return toExistingCard(doc);
+    },
+    async verifyImported(ids: PilotImportedIds) {
+      const [cards, collections] = await Promise.all([
+        ids.cardIds.length === 0
+          ? Promise.resolve([] as Card[])
+          : payload.find({
+              collection: 'cards',
+              depth: 0,
+              overrideAccess: false,
+              pagination: false,
+              user,
+              where: { id: { in: [...ids.cardIds] } },
+            }).then((result) => result.docs),
+        ids.collectionIds.length === 0
+          ? Promise.resolve([] as Collection[])
+          : payload.find({
+              collection: 'collections',
+              depth: 0,
+              overrideAccess: false,
+              pagination: false,
+              user,
+              where: { id: { in: [...ids.collectionIds] } },
+            }).then((result) => result.docs),
+      ]);
+      if (cards.length !== ids.cardIds.length || collections.length !== ids.collectionIds.length) {
+        throw new Error(
+          `Imported-id verification was incomplete: cards ${String(cards.length)}/${String(ids.cardIds.length)}, ` +
+            `collections ${String(collections.length)}/${String(ids.collectionIds.length)}.`,
+        );
+      }
+      const docs = [...cards, ...collections];
+      return {
+        published: docs.filter((doc) => doc.status === 'published').length,
+        indexed: docs.filter((doc) => doc.robots === 'index,follow').length,
+      };
+    },
+  };
+}
+
+async function findPilotActorDocument(payload: Payload, email: string): Promise<User> {
+  const result = await payload.find({
+    collection: 'users',
+    depth: 0,
+    limit: 1,
+    overrideAccess: true,
+    pagination: false,
+    where: { email: { equals: email } },
+  });
+  const actor = result.docs[0];
+  if (actor === undefined || actor.role !== 'ai-editor') {
+    throw new Error('CONTENT_IMPORT_AI_EDITOR_EMAIL must identify an existing ai-editor.');
+  }
+  return actor;
+}
+
 function compactReport(report: PilotPreflightReport): string {
   return JSON.stringify({
     mode: report.mode,
@@ -253,14 +490,21 @@ function compactReport(report: PilotPreflightReport): string {
   });
 }
 
+function compactApplyReport(report: PilotImportReport): string {
+  return JSON.stringify({ mode: report.mode, counts: report.counts });
+}
+
 async function main(): Promise<void> {
   loadEnvFiles();
   const workspaceRoot = resolvePilotWorkspaceRoot();
-  const initialized = await initializePilotDryRun(
+  const initialized = await initializePilotImport(
     process.argv.slice(2),
     process.env,
     workspaceRoot,
-    initializePilotPayloadDryRun,
+    {
+      initializeApply: initializePilotPayloadApply,
+      initializeDryRun: initializePilotPayloadDryRun,
+    },
   );
   const [matrix, manifest] = await Promise.all([
     loadSiteContent(resolve(workspaceRoot, 'content/pilot-2026-08/site-content.json')),
@@ -277,6 +521,21 @@ async function main(): Promise<void> {
   if (report.blockingErrors.length > 0) {
     throw new Error(`Pilot preflight blocked by ${String(report.blockingErrors.length)} error(s).`);
   }
+  if (initialized.mode === 'dry-run') return;
+
+  const actor = await findPilotActorDocument(
+    initialized.payload,
+    initialized.environment.actorEmail,
+  );
+  const applied = await applyPilotContent({
+    actor,
+    assetRoot: initialized.environment.assetRoot,
+    matrix,
+    preflight: report,
+    reportPath: resolve(workspaceRoot, 'content/pilot-2026-08/import-report.json'),
+    store: createPayloadPilotApplyStore(initialized.payload, actor),
+  });
+  console.log(compactApplyReport(applied));
 }
 
 if (process.env.VITEST !== 'true') {

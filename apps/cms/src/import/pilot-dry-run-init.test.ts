@@ -55,5 +55,8 @@ describe('real Payload dry-run initialization boundary', () => {
     expect(payload.db.push).toBe(false);
     expect(payload.db.disableCreateDatabase).toBe(true);
     expect(payload.db.pool).toBeUndefined();
-  }, 15_000);
+  // Importing the complete Payload config is CPU-heavy under the workspace's
+  // parallel Vitest run (90+ files). Focused runs take ~5 s, while the full
+  // suite can exceed 15 s from worker contention without changing behavior.
+  }, 30_000);
 });

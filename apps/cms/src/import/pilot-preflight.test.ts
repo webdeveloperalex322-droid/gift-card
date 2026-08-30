@@ -24,6 +24,7 @@ import type {
 import { pilotIntroDocument } from './pilot-types';
 import {
   initializePilotDryRun,
+  initializePilotImport,
   parsePilotImportMode,
   requirePilotImportEnvironment,
   resolvePilotWorkspaceRoot,
@@ -466,14 +467,19 @@ describe('pilot import CLI contract', () => {
     });
   });
 
-  it('rejects apply before Payload initialization until Task 7 implements it', async () => {
-    const initializePayload = vi.fn();
+  it('selects the apply initializer only for explicit apply mode', async () => {
+    const initializeDryRun = vi.fn();
+    const payload = { kind: 'apply-payload' };
+    const initializeApply = vi.fn(() => payload);
 
-    await expect(initializePilotDryRun(['--apply'], {
+    const initialized = await initializePilotImport(['--apply'], {
       CONTENT_IMPORT_AI_EDITOR_EMAIL: 'pilot-ai@example.test',
       CONTENT_IMPORT_ASSET_ROOT: 'content/pilot/final',
-    }, 'D:/workspace', initializePayload)).rejects.toThrow(/not implemented/i);
-    expect(initializePayload).not.toHaveBeenCalled();
+    }, 'D:/workspace', { initializeApply, initializeDryRun });
+    expect(initialized.mode).toBe('apply');
+    expect(initialized.payload).toBe(payload);
+    expect(initializeApply).toHaveBeenCalledOnce();
+    expect(initializeDryRun).not.toHaveBeenCalled();
   });
 
   it('rejects destructive database environment before Payload/config initialization', async () => {

@@ -15,6 +15,7 @@ import {
   type ExistingCollection,
   type ExistingContentPathClaim,
   type PilotImportStore,
+  type PilotAssetIdentity,
   type PilotPreflightInput,
   type PilotPreflightRecord,
   type PilotPreflightReport,
@@ -38,14 +39,7 @@ interface CheckedRecord {
 interface AssetCheck {
   readonly valid: boolean;
   readonly errors: readonly string[];
-  readonly identity: AssetIdentity | null;
-}
-
-interface AssetIdentity {
-  readonly revision: string;
-  readonly mimeType: 'image/jpeg';
-  readonly width: number;
-  readonly height: number;
+  readonly identity: PilotAssetIdentity | null;
 }
 
 function valueLabel(value: unknown): string {
@@ -124,6 +118,17 @@ function expectedCollectionFields(
   };
 }
 
+export function collectionManagedFieldDifferences(
+  seed: CollectionSeed,
+  existing: ExistingCollection,
+  collectionsByKey: ReadonlyMap<string, CollectionSeed>,
+): string[] {
+  return differingFields(
+    expectedCollectionFields(seed, collectionsByKey),
+    actualCollectionFields(existing),
+  );
+}
+
 function actualCollectionFields(existing: ExistingCollection): Readonly<Record<string, unknown>> {
   return {
     slug: existing.slug,
@@ -142,7 +147,7 @@ function actualCollectionFields(existing: ExistingCollection): Readonly<Record<s
 function expectedCardFields(
   seed: CardSeed,
   collectionsByKey: ReadonlyMap<string, CollectionSeed>,
-  identity: AssetIdentity | null,
+  identity: PilotAssetIdentity | null,
 ): Readonly<Record<string, unknown>> {
   const collectionPath = collectionsByKey.get(seed.collectionKey)?.path;
   return {
@@ -161,6 +166,18 @@ function expectedCardFields(
     imageWidth: identity?.width ?? null,
     imageHeight: identity?.height ?? null,
   };
+}
+
+export function cardManagedFieldDifferences(
+  seed: CardSeed,
+  existing: ExistingCard,
+  collectionsByKey: ReadonlyMap<string, CollectionSeed>,
+  identity: PilotAssetIdentity,
+): string[] {
+  return differingFields(
+    expectedCardFields(seed, collectionsByKey, identity),
+    actualCardFields(existing),
+  );
 }
 
 function actualCardFields(existing: ExistingCard): Readonly<Record<string, unknown>> {
@@ -259,7 +276,7 @@ async function checkCard(
   seed: CardSeed,
   store: PilotImportStore,
   collectionsByKey: ReadonlyMap<string, CollectionSeed>,
-  identity: AssetIdentity | null,
+  identity: PilotAssetIdentity | null,
 ): Promise<CheckedRecord> {
   const path = cardPath(seed.slug);
   const errors: string[] = [];
@@ -317,7 +334,7 @@ async function checkAsset(assetRoot: string, seed: CardSeed): Promise<AssetCheck
   }
 
   const errors: string[] = [];
-  let identity: AssetIdentity | null = null;
+  let identity: PilotAssetIdentity | null = null;
   try {
     const metadata = await sharp(bytes).metadata();
     const width = metadata.width;
