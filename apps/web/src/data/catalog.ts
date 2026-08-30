@@ -1,5 +1,5 @@
 /**
- * Сборка страниц каталогов `/otkrytki` и `/podborki` (задачи Э3-07, Э3-08).
+ * Сборка единого каталога `/otkrytki` (задачи Э3-07, Э3-08).
  *
  * Здесь живёт РЕШЕНИЕ, а маршруты его только исполняют: три исхода — «показать
  * страницу», «одиночный 301 на базовый URL» и «404». Модуль существует ровно
@@ -19,8 +19,8 @@
  *
  * Пустая страница не отдаёт 200 как полноценная посадочная (ТЗ §5.3) — тот же
  * довод, по которому 404 отвечает подборка без открыток и без детей. У каталога
- * это состояние означает, что публично на сайте нет ни одной открытки (или ни
- * одной подборки), то есть сайт ещё не наполнен. Отдавать по такому адресу 200 с
+ * это состояние означает, что публично на сайте нет ни одной открытки и ни одной
+ * непустой корневой подборки. Отдавать по такому адресу 200 с
  * заголовком и пустым списком — это ровно тот soft 404, которым списки и попадают
  * в индекс мусором.
  *
@@ -91,17 +91,14 @@ export interface CardCatalogBody extends CatalogPageHead {
   /** Плитки ЭТОЙ страницы. Из этого же массива собран `ItemList`. */
   readonly tiles: readonly CardTile[];
   readonly pagination: PaginationModel | null;
+  /** Корневые группы и их прямые дети; только на первой странице каталога. */
+  readonly sections: readonly CatalogSection[];
   /**
    * Рекламные ряды из настроек сайта (задача Э3-12, решение Ч-11): под H1 над
    * сеткой и после пагинации. Пустые ряды означают, что мест не настроено, — и
    * тогда шаблон не печатает ни контейнера, ни подписи.
    */
   readonly ads: AdRows;
-}
-
-export interface CollectionCatalogBody extends CatalogPageHead {
-  /** Разделы верхнего уровня со своими детьми. Из них же собран `ItemList`. */
-  readonly sections: readonly CatalogSection[];
 }
 
 /**
@@ -124,6 +121,20 @@ export async function cardCatalogPage(
   // базовый URL 200, — иначе 301 повёл бы на 404.
   const requested = decision.action === 'redirect-to-base' ? 1 : decision.page;
   const cardsPage = await listCatalogCards({ page: requested });
+  const memo = newNodeContentMemo();
+  const sections =
+    requested === 1
+      ? catalogSections(
+          await Promise.all(
+            (await listRootCollections(memo)).map(async (node) => ({
+              children: await listChildCollections(node.id, memo),
+              node,
+            })),
+          ),
+        )
+      : [];
+  const tiles = cardTiles(cardsPage.cards);
+  const items = [...catalogSectionItems(sections), ...tiles];
   // Пустая страница — 404 по ЧИСЛУ ВЫДАННЫХ СТРОК, а не только по числу страниц.
   // Замерено на живом сервере: у пустой коллекции Payload отдаёт `totalPages: 1`
   // при `totalDocs: 0`, поэтому проверка одного `pageCount` пропускала пустой
@@ -131,9 +142,8 @@ export async function cardCatalogPage(
   // отказывается описывать список без элементов). 500 вместо 404 — это ещё и
   // неверный сигнал поисковику: «зайдите позже» вместо «здесь ничего нет».
   if (
-    cardsPage.pageCount === 0 ||
-    requested > cardsPage.pageCount ||
-    cardsPage.cards.length === 0
+    (requested > 1 && requested > cardsPage.pageCount) ||
+    items.length === 0
   ) {
     return { kind: 'not-found' };
   }
@@ -142,7 +152,6 @@ export async function cardCatalogPage(
     return { kind: 'redirect', location: CATALOGS.cards.path };
   }
 
-  const tiles = cardTiles(cardsPage.cards);
   const view = catalogPageView('cards', requested);
   // Настройки читаются ПОСЛЕ решения о статусе: рекламные места на ответ 200,
   // 301 или 404 не влияют, а лишний запрос к глобалу на 404 не нужен.
@@ -154,7 +163,7 @@ export async function cardCatalogPage(
         canonicalPath: view.canonicalPath,
         description: view.metaDescription,
         heading: view.heading,
-        items: tiles,
+        items,
       },
       env,
     ),
@@ -165,52 +174,9 @@ export async function cardCatalogPage(
       page: requested,
       pageCount: cardsPage.pageCount,
     }),
+    sections,
     tiles,
     trail: catalogBreadcrumbTrail('cards', requested),
-    view,
-  };
-}
-
-/**
- * Страница каталога подборок `/podborki`.
- *
- * Пагинации у неё нет намеренно: содержание — узлы ВЕРХНЕГО уровня и их прямые
- * дети, а их единицы. Поэтому `/podborki/page/N` не существует ни в каком виде и
- * отвечает 404 маршрутом ветви (`pages/podborki/[...path].astro`): записи с таким
- * путём нет, а редирект на базовый URL означал бы, что пагинация у каталога когда-
- * то была.
- */
-export async function collectionCatalogPage(
-  env?: SharedEnv,
-): Promise<CatalogPageResult<CollectionCatalogBody>> {
-  // Общий мемоизатор предиката «непуст» на рендер: корни и их дети пересекаются
-  // наборами (обоснование предиката — шапка `nodesWithContent` в `./content.ts`).
-  const memo = newNodeContentMemo();
-  const roots = await listRootCollections(memo);
-  const sections = catalogSections(
-    await Promise.all(
-      roots.map(async (node) => ({ children: await listChildCollections(node.id, memo), node })),
-    ),
-  );
-  const items = catalogSectionItems(sections);
-  if (items.length === 0) {
-    return { kind: 'not-found' };
-  }
-
-  const view = catalogPageView('collections', 1);
-  return {
-    jsonLd: collectionPageJsonLd(
-      {
-        canonicalPath: view.canonicalPath,
-        description: view.metaDescription,
-        heading: view.heading,
-        items,
-      },
-      env,
-    ),
-    kind: 'page',
-    sections,
-    trail: catalogBreadcrumbTrail('collections', 1),
     view,
   };
 }

@@ -165,7 +165,7 @@ describe('инварианты всех шаблонов страниц', () => 
     expect(markupOf(readFileSync(file, 'utf8'))).not.toMatch(/\bclient:[a-z]+/);
   });
 
-  it('BaseLayout печатает меню, а меню ведёт на оба каталога', () => {
+  it('BaseLayout печатает меню, а меню ведёт на единый каталог', () => {
     const layout = readFileSync(join(WEB_SRC, 'layouts', 'BaseLayout.astro'), 'utf8');
     const nav = readFileSync(join(WEB_SRC, 'components', 'SiteNav.astro'), 'utf8');
     const paths = SITE_NAV.map((link) => link.path);
@@ -179,7 +179,7 @@ describe('инварианты всех шаблонов страниц', () => 
     expect(markupOf(nav)).not.toContain('href="#"');
     expect(markupOf(nav)).not.toMatch(/<button\b/);
     expect(paths).toContain('/otkrytki');
-    expect(paths).toContain('/podborki');
+    expect(paths).not.toContain('/podborki');
   });
 
   it('BaseLayout печатает подвал, а подвал ведёт на все три служебные страницы', () => {

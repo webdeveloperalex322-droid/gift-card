@@ -58,12 +58,33 @@ const jsonLd = jsonLdScriptText(body.jsonLd);
   {
     /* Вводный абзац — только на первой странице: тот же текст на каждой странице
        списка означал бы одно содержание по нескольким адресам. */
-    body.page === 1 ? <p class="catalog__lead">{facts.lead}</p> : null
+  body.page === 1 ? <p class="catalog__lead">{facts.lead}</p> : null
+  }
+
+  {
+    body.sections.length === 0 ? null : (
+      <nav class="catalog__sections" aria-label="Разделы открыток">
+        <ul>
+          {body.sections.map((section) => (
+            <li>
+              <a href={section.node.path}>{section.node.name}</a>
+              {section.children.length === 0 ? null : (
+                <ul>
+                  {section.children.map((child) => (
+                    <li><a href={child.path}>{child.name}</a></li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ul>
+      </nav>
+    )
   }
 
   <AdRow slots={body.ads.underH1} position="under-h1" />
 
-  <CardGrid tiles={body.tiles} prioritizeFirst ariaLabel={facts.listLabel} />
+  {body.tiles.length === 0 ? null : <CardGrid tiles={body.tiles} prioritizeFirst ariaLabel={facts.listLabel} />}
 
   {body.pagination === null ? null : <Pagination model={body.pagination} />}
 

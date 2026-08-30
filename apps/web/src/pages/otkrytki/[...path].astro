@@ -1,0 +1,100 @@
+---
+import { CARD_PATH_PREFIX } from '@otkritka/cms/seo/paths';
+
+import CardDetailPage from '../../components/CardDetailPage.astro';
+import CollectionDetailPage from '../../components/CollectionDetailPage.astro';
+import {
+  cardBreadcrumbTrail,
+  cardPageContent,
+  collectionBreadcrumbTrail,
+  collectionPageContent,
+  findCollectionById,
+  listChildCollections,
+  listCollectionCards,
+  listCollectionsByIds,
+  listRelatedCollections,
+  listSimilarCards,
+  loadOtkrytkiPathPage,
+  newNodeContentMemo,
+  readOtkrytkiPathQuery,
+  readSiteSettings,
+  relationId,
+  relationIds,
+} from '../../data';
+import { parseViewParams } from '../../routing/view-params';
+import { adRows } from '../../seo/ad-slots';
+import { serverEnv } from '../../server-env';
+
+export const prerender = false;
+
+const rest = Astro.params.path ?? '';
+const resolved = await loadOtkrytkiPathPage({
+  path: `${CARD_PATH_PREFIX}/${rest}`,
+  read: readOtkrytkiPathQuery,
+});
+if (resolved === null) {
+  return new Response(null, { status: 404 });
+}
+
+let page;
+if (resolved.kind === 'card') {
+  const env = serverEnv();
+  const collectionIds = relationIds(resolved.card.collections);
+  const [settings, collections, similar] = await Promise.all([
+    readSiteSettings(),
+    listCollectionsByIds(collectionIds),
+    listSimilarCards({
+      collectionIds,
+      excludeCardId: resolved.card.id,
+      publishedAt: resolved.card.publishedAt ?? null,
+    }),
+  ]);
+  const content = cardPageContent({ card: resolved.card, collections, env, settings, similar });
+  if (content === null) {
+    return new Response(null, { status: 404 });
+  }
+  page = {
+    card: resolved.card,
+    content,
+    kind: 'card' as const,
+    trail: await cardBreadcrumbTrail(resolved.card),
+  };
+} else {
+  const memo = newNodeContentMemo();
+  const [cardsPage, children, parent, related] = await Promise.all([
+    listCollectionCards({ collectionId: resolved.node.id, page: resolved.page }),
+    listChildCollections(resolved.node.id, memo),
+    findCollectionById(relationId(resolved.node.parent)),
+    listRelatedCollections(relationIds(resolved.node.related), memo),
+  ]);
+  if (resolved.page > 1 && resolved.page > cardsPage.pageCount) {
+    return new Response(null, { status: 404 });
+  }
+
+  const content = collectionPageContent({
+    cards: cardsPage.cards,
+    children,
+    env: serverEnv(),
+    node: resolved.node,
+    page: resolved.page,
+    pageCount: cardsPage.pageCount,
+    parent,
+    related,
+    view: parseViewParams(Astro.url.searchParams),
+  });
+  if (content === null) {
+    return new Response(null, { status: 404 });
+  }
+  const settings = await readSiteSettings();
+  page = {
+    ads: adRows(settings.adSlots),
+    content,
+    kind: 'collection' as const,
+    trail: await collectionBreadcrumbTrail(resolved.node, resolved.page),
+  };
+}
+---
+
+{page.kind === 'card'
+  ? <CardDetailPage card={page.card} content={page.content} trail={page.trail} />
+  : <CollectionDetailPage ads={page.ads} content={page.content} trail={page.trail} />}

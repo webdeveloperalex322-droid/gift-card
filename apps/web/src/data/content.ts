@@ -334,6 +334,19 @@ export async function findCollectionByPath(path: string): Promise<Collection | n
   return node === undefined ? null : assertPublicallyReadable(node, 'подборку');
 }
 
+/** Чтение единого пространства `/otkrytki` для чистого диспетчера маршрута. */
+export async function readOtkrytkiPathQuery(
+  query: PublicFindQuery<'cards' | 'collections'>,
+): Promise<{ readonly docs: readonly (Card | Collection)[] }> {
+  const { docs } = await findMany(query);
+  const label = query.collection === 'cards' ? 'карточку' : 'подборку';
+  return {
+    docs: docs.map((record) =>
+      assertPublicallyReadable(record as Card | Collection, label),
+    ),
+  };
+}
+
 /** Страница карточек подборки. Первая страница — по базовому URL (решение Ч-05). */
 export async function listCollectionCards(input: {
   readonly collectionId: RecordId;
