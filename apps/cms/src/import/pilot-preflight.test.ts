@@ -22,6 +22,7 @@ import type {
   ExistingContentPathClaim,
 } from './pilot-types';
 import { pilotIntroDocument } from './pilot-types';
+import { pilotCardImportKey } from './pilot-import-identity';
 import {
   initializePilotDryRun,
   initializePilotImport,
@@ -71,6 +72,8 @@ function fakeStore(input: {
   collections?: readonly ExistingCollection[];
 } = {}): FakeStore {
   const cards = new Map((input.cards ?? []).map((card) => [card.slug, card]));
+  const cardsByImportKey = new Map((input.cards ?? []).flatMap((card) =>
+    card.pilotImportKey ? [[card.pilotImportKey, card] as const] : []));
   const collections = new Map(
     (input.collections ?? []).map((collection) => [collection.path, collection]),
   );
@@ -80,11 +83,19 @@ function fakeStore(input: {
     mutations: [],
     findActor() {
       return Promise.resolve(
-        input.actor === undefined ? { id: 91, role: 'ai-editor' } : input.actor,
+        input.actor === undefined
+          ? { id: 91, email: 'pilot-ai@example.test', role: 'ai-editor' }
+          : input.actor,
       );
+    },
+    findCardByPilotImportKey(key) {
+      return Promise.resolve(cardsByImportKey.get(key) ?? null);
     },
     findCardBySlug(slug) {
       return Promise.resolve(cards.get(slug) ?? null);
+    },
+    findImageByPilotImportKey() {
+      return Promise.resolve(null);
     },
     findCollectionByPath(path) {
       return Promise.resolve(collections.get(path) ?? null);
@@ -136,6 +147,21 @@ describe('pilot import preflight', () => {
       ...matrix.collections.map((seed) => seed.path),
       ...matrix.cards.map((seed) => `/otkrytki/${seed.slug}`),
     ]));
+    expect(report.fingerprint).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it('binds the fingerprint to every accepted asset byte', async () => {
+    const root = await assetRoot();
+    const before = await runPilotPreflight(input(root, fakeStore()));
+    const changed = await sharp({
+      create: { width: 1024, height: 1280, channels: 3, background: '#111111' },
+    }).jpeg().toBuffer();
+    const first = matrix.cards[0];
+    if (!first) throw new Error('Expected pilot card.');
+    await writeFile(join(root, first.sourceFile), changed);
+    const after = await runPilotPreflight(input(root, fakeStore()));
+    expect(after.blockingErrors).toEqual([]);
+    expect(after.fingerprint).not.toBe(before.fingerprint);
   });
 
   it('blocks a missing accepted JPEG', async () => {
@@ -267,6 +293,18 @@ describe('pilot import preflight', () => {
     expect(report.blockingErrors).toContain(
       `Card ${second.pilotId} existing record ${String(drifted.id)} differs in managed field title.`,
     );
+  });
+
+  it('finds a pilot card by immutable import key and blocks a manually changed slug without creating a duplicate', async () => {
+    const root = await assetRoot();
+    const seed = matrix.cards[0];
+    if (!seed) throw new Error('Expected pilot card.');
+    const existing = existingCardFor(seed);
+    existing.slug = 'human-changed-slug';
+    const report = await runPilotPreflight(input(root, fakeStore({ cards: [existing] })));
+    const record = report.records.find((item) => item.key === `card:${seed.pilotId}`);
+    expect(record).toMatchObject({ state: 'blocked' });
+    expect(record?.detail).toMatch(/managed field slug/i);
   });
 
   it('blocks managed-field drift on an existing collection', async () => {
@@ -512,6 +550,8 @@ function existingCardFor(seed: SiteContentMatrix['cards'][number]): ExistingCard
   if (!collection) throw new Error(`Missing collection ${seed.collectionKey}.`);
   return {
     id: Number(seed.pilotId),
+    pilotImportKey: pilotCardImportKey(seed.pilotId),
+    updatedAt: '2026-08-30T00:00:00.000Z',
     alt: seed.alt,
     caption: seed.caption,
     collectionPaths: [collection.path],

@@ -3,11 +3,14 @@ import type { SiteContentMatrix } from '../../../../scripts/content-import/schem
 
 export interface PilotImportActor {
   readonly id: number | string;
+  readonly email?: string;
   readonly role: string;
 }
 
 export interface ExistingCard {
   id: number | string;
+  pilotImportKey?: string | null;
+  updatedAt?: string;
   slug: string;
   pathClaimKey: string | null;
   title: string;
@@ -22,6 +25,7 @@ export interface ExistingCard {
   collectionPaths: readonly string[];
   /** Assigned upload filename is informational and never re-derived on resume. */
   imageAssignedFilename: string | null;
+  imageId?: number | string | null;
   imageRevision: string | null;
   imageMimeType: string | null;
   imageWidth: number | null;
@@ -32,6 +36,7 @@ export interface ExistingCard {
 
 export interface ExistingCollection {
   id: number | string;
+  updatedAt?: string;
   path: string;
   pathClaimKey: string | null;
   slug: string;
@@ -46,6 +51,15 @@ export interface ExistingCollection {
   robots: string;
 }
 
+export interface ExistingImage {
+  readonly id: number | string;
+  readonly pilotImportKey: string | null;
+  readonly revision: string | null;
+  readonly mimeType: string | null;
+  readonly width: number | null;
+  readonly height: number | null;
+}
+
 export interface ExistingContentPathClaim {
   readonly path: string;
   readonly ownerCollection: 'cards' | 'collections';
@@ -55,7 +69,9 @@ export interface ExistingContentPathClaim {
 /** Read-only boundary. Task 7 extends it with writes; preflight never does. */
 export interface PilotImportStore {
   findActor(email: string): Promise<PilotImportActor | null>;
+  findCardByPilotImportKey(key: string): Promise<ExistingCard | null>;
   findCardBySlug(slug: string): Promise<ExistingCard | null>;
+  findImageByPilotImportKey(key: string): Promise<ExistingImage | null>;
   findCollectionByPath(path: string): Promise<ExistingCollection | null>;
   findContentPathClaimByPath(path: string): Promise<ExistingContentPathClaim | null>;
 }
@@ -88,13 +104,19 @@ export interface PilotPreflightReport {
   readonly mutationCount: 0;
   readonly blockingErrors: readonly string[];
   readonly records: readonly PilotPreflightRecord[];
+  /** SHA-256 of the closed matrix, accepted manifest, actor and all asset facts. */
+  readonly fingerprint: string | null;
 }
 
 export interface PilotAssetIdentity {
+  readonly sha256: string;
   readonly revision: string;
   readonly mimeType: 'image/jpeg';
+  readonly format: 'jpeg';
   readonly width: number;
   readonly height: number;
+  readonly ratio: '4:5';
+  readonly path: string;
 }
 
 /** Minimal Lexical value used by the importer and compared byte-for-byte on resume. */

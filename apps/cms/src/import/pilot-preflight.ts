@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -9,6 +10,7 @@ import { computeImageRevision } from '@otkritka/images';
 import { validateSiteContent } from '../../../../scripts/content-import/schema.js';
 import type { CardSeed, CollectionSeed } from '../../../../scripts/content-import/schema.js';
 import { buildCardPath, CARD_PATH_PREFIX } from '../seo/paths';
+import { pilotCardImportKey, pilotImageImportKey } from './pilot-import-identity';
 import {
   pilotIntroDocument,
   type ExistingCard,
@@ -151,6 +153,7 @@ function expectedCardFields(
 ): Readonly<Record<string, unknown>> {
   const collectionPath = collectionsByKey.get(seed.collectionKey)?.path;
   return {
+    pilotImportKey: pilotCardImportKey(seed.pilotId),
     slug: seed.slug,
     title: seed.title,
     h1: seed.h1,
@@ -182,6 +185,7 @@ export function cardManagedFieldDifferences(
 
 function actualCardFields(existing: ExistingCard): Readonly<Record<string, unknown>> {
   return {
+    pilotImportKey: existing.pilotImportKey ?? null,
     slug: existing.slug,
     title: existing.title,
     h1: existing.h1,
@@ -280,11 +284,18 @@ async function checkCard(
 ): Promise<CheckedRecord> {
   const path = cardPath(seed.slug);
   const errors: string[] = [];
-  const [existing, collectionCollision, claim] = await Promise.all([
+  const importKey = pilotCardImportKey(seed.pilotId);
+  const imageImportKey = pilotImageImportKey(seed.pilotId);
+  const [existing, slugMatch, image, collectionCollision, claim] = await Promise.all([
+    store.findCardByPilotImportKey(importKey),
     store.findCardBySlug(seed.slug),
+    store.findImageByPilotImportKey(imageImportKey),
     store.findCollectionByPath(path),
     store.findContentPathClaimByPath(path),
   ]);
+  if (slugMatch !== null && (existing === null || String(slugMatch.id) !== String(existing.id))) {
+    errors.push(`Card ${seed.pilotId} final path ${path} is occupied by card ${String(slugMatch.id)} with another import identity.`);
+  }
   if (collectionCollision !== null) {
     errors.push(
       `Card ${seed.pilotId} final path ${path} is occupied by collection ${String(collectionCollision.id)}.`,
@@ -300,6 +311,27 @@ async function checkCard(
     ));
     const state = statusError('Card', seed.pilotId, existing);
     if (state !== null) errors.push(state);
+  }
+  if (image !== null && identity !== null) {
+    const imageFields = differingFields(
+      {
+        pilotImportKey: imageImportKey,
+        revision: identity.revision,
+        mimeType: identity.mimeType,
+        width: identity.width,
+        height: identity.height,
+      },
+      {
+        pilotImportKey: image.pilotImportKey,
+        revision: image.revision,
+        mimeType: image.mimeType,
+        width: image.width,
+        height: image.height,
+      },
+    );
+    errors.push(...imageFields.map((field) =>
+      `Card ${seed.pilotId} existing pilot image ${String(image.id)} differs in managed field ${field}.`,
+    ));
   }
   const problem = claimError(`Card ${seed.pilotId}`, path, 'cards', existing, claim);
   if (problem !== null) errors.push(problem);
@@ -358,10 +390,14 @@ async function checkAsset(assetRoot: string, seed: CardSeed): Promise<AssetCheck
     }
     if (metadata.format === 'jpeg' && Number.isInteger(width) && Number.isInteger(height)) {
       identity = {
+        sha256: createHash('sha256').update(bytes).digest('hex'),
         revision: await computeImageRevision(bytes),
         mimeType: 'image/jpeg',
+        format: 'jpeg',
         width,
         height,
+        ratio: '4:5',
+        path,
       };
     }
   } catch (error) {
@@ -370,6 +406,20 @@ async function checkAsset(assetRoot: string, seed: CardSeed): Promise<AssetCheck
     );
   }
   return { valid: errors.length === 0, errors, identity };
+}
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (typeof value !== 'object' || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, stableValue(child)]),
+  );
+}
+
+function fingerprint(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(stableValue(value))).digest('hex');
 }
 
 async function directoryErrors(assetRoot: string, expectedFiles: ReadonlySet<string>): Promise<string[]> {
@@ -421,10 +471,11 @@ export async function runPilotPreflight(input: PilotPreflightInput): Promise<Pil
   ];
 
   const actorEmail = input.actorEmail.trim();
+  let actor: Awaited<ReturnType<PilotImportStore['findActor']>> = null;
   if (actorEmail === '') {
     blockingErrors.push('Import actor email must be explicit.');
   } else {
-    const actor = await input.store.findActor(actorEmail);
+    actor = await input.store.findActor(actorEmail);
     if (actor === null) {
       blockingErrors.push(`Import actor ${actorEmail} does not exist.`);
     } else if (actor.role !== 'ai-editor') {
@@ -454,6 +505,21 @@ export async function runPilotPreflight(input: PilotPreflightInput): Promise<Pil
   blockingErrors.push(...checks.flatMap((result) => result.errors));
   const records = checks.map((result) => result.record);
 
+  const uniqueBlockingErrors = [...new Set(blockingErrors)];
+  const preflightFingerprint = uniqueBlockingErrors.length === 0 && actor !== null &&
+      assetChecks.every((result) => result.identity !== null)
+    ? fingerprint({
+        actor: { email: actor.email ?? actorEmail, id: actor.id, role: actor.role },
+        assets: input.matrix.cards.map((seed, index) => ({
+          pilotId: seed.pilotId,
+          sourceFile: seed.sourceFile,
+          identity: assetChecks[index]?.identity,
+        })),
+        manifest: input.manifest,
+        matrix: input.matrix,
+      })
+    : null;
+
   return {
     mode: 'dry-run',
     collectionNodes: input.matrix.collections.length,
@@ -462,7 +528,8 @@ export async function runPilotPreflight(input: PilotPreflightInput): Promise<Pil
     validFiles: assetChecks.filter((result) => result.valid).length,
     resumed: records.filter((record) => record.state === 'resume').length,
     mutationCount: 0,
-    blockingErrors: [...new Set(blockingErrors)],
+    blockingErrors: uniqueBlockingErrors,
     records,
+    fingerprint: preflightFingerprint,
   };
 }

@@ -146,6 +146,17 @@ describe('card-images: права', () => {
     const nameStem = findField(CardImages.fields, 'nameStem');
     expect('unique' in nameStem ? nameStem.unique : undefined).toBe(true);
   });
+
+  it('ключ pilot-иморта уникален в базе, скрыт и не пишется через API', () => {
+    const field = findField(CardImages.fields, 'pilotImportKey');
+    expect('unique' in field ? field.unique : undefined).toBe(true);
+    expect('index' in field ? field.index : undefined).toBe(true);
+    expect(accessOf(field)?.create).toBe(systemFieldAccess);
+    expect(accessOf(field)?.update).toBe(systemFieldAccess);
+    expect('admin' in field && field.admin && 'hidden' in field.admin
+      ? field.admin.hidden
+      : undefined).toBe(true);
+  });
 });
 
 describe('image-name-claims: реестр занятых имён', () => {
@@ -220,7 +231,7 @@ describe('cards: поле image', () => {
     // метатегов (Э5-01, общая фабрика) и зеркало изображения с калиткой
     // визуальных дублей. Число проверяется не ради числа: пропавший хук — это
     // тихо отключённая калитка, а порядок задаёт, какой отказ услышит редактор.
-    expect(Cards.hooks?.beforeValidate).toHaveLength(5);
+    expect(Cards.hooks?.beforeValidate).toHaveLength(6);
     expect(Cards.hooks?.beforeChange).toHaveLength(3);
     // Два: правила статусной модели на сырых данных плюс громкий отказ на
     // попытку сменить изображение публиковавшейся карточки.

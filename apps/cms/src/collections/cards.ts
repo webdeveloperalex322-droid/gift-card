@@ -9,6 +9,7 @@ import {
   systemFieldAccess,
 } from '../access/policies';
 import { cardImageHooks } from '../images/card-image-hooks';
+import { assignTrustedPilotImportKey } from '../import/pilot-import-identity';
 import { imageVariantFields } from '../images/image-mirror';
 import { CARD_PATH_PREFIX, contentDocumentPath } from '../seo/paths';
 import { attachCollectionsInBulk } from './card-collections';
@@ -84,6 +85,14 @@ import { CARD_REVIEW_REQUIREMENTS } from './status-model';
  * ещё нет.
  */
 const cardFields: Field[] = [
+  {
+    name: 'pilotImportKey',
+    type: 'text',
+    unique: true,
+    index: true,
+    access: { create: systemFieldAccess, update: systemFieldAccess },
+    admin: { hidden: true },
+  },
   {
     name: 'title',
     type: 'text',
@@ -473,6 +482,7 @@ function cardHooks(): NonNullable<CollectionConfig['hooks']> {
     // обязаны видеть итоговый список, а не «одну подборку на всю выборку»,
     // которую прислал пакет (задача Э5-06).
     beforeValidate: [
+      assignTrustedPilotImportKey(),
       assignContentPathClaimKey,
       attachCollectionsInBulk(),
       ...base.beforeValidate,

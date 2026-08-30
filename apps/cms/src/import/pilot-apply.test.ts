@@ -7,6 +7,7 @@ import type { Payload } from 'payload';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { computeImageRevision } from '@otkritka/images';
+import { loadManifest, type CardRecord } from '../../../../scripts/content-pilot/manifest.mjs';
 
 import {
   loadSiteContent,
@@ -18,8 +19,10 @@ import {
   applyPilotContent,
   sortPilotCollections,
   type PilotApplyStore,
-  type PilotImportedIds,
+  writePilotImportReportAtomically,
 } from './pilot-apply';
+import { runPilotPreflight } from './pilot-preflight';
+import { pilotCardImportKey, pilotImageImportKey } from './pilot-import-identity';
 import type {
   ExistingCard,
   ExistingCollection,
@@ -27,16 +30,18 @@ import type {
   PilotPreflightReport,
 } from './pilot-types';
 import { pilotIntroDocument } from './pilot-types';
-import { createPayloadPilotApplyStore } from '../../scripts/import-pilot-content';
+import { createPayloadPilotApplyStore, createPayloadPilotImportStore } from '../../scripts/import-pilot-content';
 import type { Card, CardImage, Collection, User } from '../payload-types';
 
 const temporaryPaths: string[] = [];
 let matrix: SiteContentMatrix;
+let manifest: CardRecord[];
 let jpeg: Buffer;
 let revision: string;
 
 beforeAll(async () => {
   matrix = await loadSiteContent('content/pilot-2026-08/site-content.json');
+  manifest = await loadManifest('content/pilot-2026-08/manifest.json');
   jpeg = await sharp({
     create: { width: 1024, height: 1280, channels: 3, background: '#d7cab9' },
   }).jpeg().toBuffer();
@@ -56,7 +61,7 @@ async function paths(): Promise<{ assetRoot: string; reportPath: string }> {
   return { assetRoot, reportPath: join(root, 'import-report.json') };
 }
 
-const actor: PilotImportActor = { id: 91, role: 'ai-editor' };
+const actor: PilotImportActor = { id: 91, email: 'pilot-ai@example.test', role: 'ai-editor' };
 
 function successfulPreflight(): PilotPreflightReport {
   return {
@@ -84,6 +89,7 @@ function successfulPreflight(): PilotPreflightReport {
     ],
     resumed: 0,
     validFiles: 50,
+    fingerprint: 'not-used-directly',
   };
 }
 
@@ -95,12 +101,13 @@ interface StatefulStore extends PilotApplyStore {
   failUploadFor: string | null;
   failCardCreateFor: string | null;
   pHashSignalFor: string | null;
+  concurrentCardReviewFor: string | null;
 }
 
 function statefulStore(): StatefulStore {
   const cards = new Map<string, ExistingCard>();
   const collections = new Map<string, ExistingCollection>();
-  const images = new Map<string, { id: string; sourceFile: string }>();
+  const images = new Map<string, { id: string; sourceFile: string; pilotImportKey: string; revision: string }>();
   let nextImage = 1;
   const store: StatefulStore = {
     cards,
@@ -110,16 +117,35 @@ function statefulStore(): StatefulStore {
     failUploadFor: null,
     failCardCreateFor: null,
     pHashSignalFor: null,
+    concurrentCardReviewFor: null,
     findActor() {
       return Promise.resolve(actor);
+    },
+    findCardByPilotImportKey(key) {
+      return Promise.resolve([...cards.values()].find((card) => card.pilotImportKey === key) ?? null);
     },
     findCardBySlug(slug) {
       return Promise.resolve(cards.get(slug) ?? null);
     },
+    findImageByPilotImportKey(key) {
+      const image = [...images.values()].find((item) => item.pilotImportKey === key);
+      return Promise.resolve(image === undefined ? null : {
+        id: image.id,
+        pilotImportKey: image.pilotImportKey,
+        revision: image.revision,
+        mimeType: 'image/jpeg',
+        width: 1024,
+        height: 1280,
+      });
+    },
     findCollectionByPath(path) {
       return Promise.resolve(collections.get(path) ?? null);
     },
-    findContentPathClaimByPath() {
+    findContentPathClaimByPath(path) {
+      const card = [...cards.values()].find((item) => `/otkrytki/${item.slug}` === path);
+      if (card) return Promise.resolve({ path, ownerCollection: 'cards', ownerKey: `cards:${String(card.pathClaimKey)}` });
+      const collection = collections.get(path);
+      if (collection) return Promise.resolve({ path, ownerCollection: 'collections', ownerKey: `collections:${String(collection.pathClaimKey)}` });
       return Promise.resolve(null);
     },
     createCollection(seed, parentId) {
@@ -128,6 +154,7 @@ function statefulStore(): StatefulStore {
         : [...collections.values()].find((item) => String(item.id) === String(parentId))?.path ?? null;
       const result: ExistingCollection = {
         id: `collection-${seed.key}`,
+        updatedAt: '2026-08-30T00:00:00.000Z',
         description: seed.description,
         h1: seed.h1,
         intro: pilotIntroDocument(seed.intro),
@@ -148,10 +175,18 @@ function statefulStore(): StatefulStore {
       if (store.failUploadFor === seed.pilotId) {
         throw new Error(`upload refused for ${seed.pilotId}`);
       }
-      const image = { id: `image-${String(nextImage++)}`, sourceFile: seed.sourceFile };
+      const image = {
+        id: `image-${String(nextImage++)}`,
+        sourceFile: seed.sourceFile,
+        pilotImportKey: pilotImageImportKey(seed.pilotId),
+        revision,
+      };
       images.set(String(image.id), image);
       store.createdImages.push(image);
-      return Promise.resolve({ id: image.id });
+      return Promise.resolve({
+        id: image.id, pilotImportKey: image.pilotImportKey, revision,
+        mimeType: 'image/jpeg', width: 1024, height: 1280,
+      });
     },
     createCard(seed, imageId, collectionId) {
       if (store.failCardCreateFor === seed.pilotId) {
@@ -161,52 +196,57 @@ function statefulStore(): StatefulStore {
       const image = images.get(String(imageId));
       if (!collection || !image) throw new Error('Fake relation missing.');
       const result = existingCard(seed, collection.path);
+      result.imageId = image.id;
       if (store.pHashSignalFor === seed.pilotId) {
         result.visualDuplicateMatches = [{ id: 'published-card-7', distance: 4 }];
       }
       cards.set(seed.slug, result);
       return Promise.resolve(result);
     },
-    moveCollectionToReview(id) {
+    moveCollectionToReview(id, expectedUpdatedAt) {
       const existing = [...collections.values()].find((item) => String(item.id) === String(id));
       if (!existing) throw new Error(`Collection ${String(id)} missing.`);
+      if (existing.updatedAt !== expectedUpdatedAt) return Promise.resolve(null);
       existing.status = 'review';
+      existing.updatedAt = `${existing.updatedAt}-review`;
       return Promise.resolve(existing);
     },
-    moveCardToReview(id) {
+    moveCardToReview(id, expectedUpdatedAt) {
       const existing = [...cards.values()].find((item) => String(item.id) === String(id));
       if (!existing) throw new Error(`Card ${String(id)} missing.`);
       if ((existing.visualDuplicateMatches?.length ?? 0) > 0) {
         throw new Error('визуально похоже на опубликованную открытку #published-card-7');
       }
+      if (store.concurrentCardReviewFor !== null && String(id).endsWith(store.concurrentCardReviewFor)) {
+        existing.updatedAt = `${existing.updatedAt}-human-edit`;
+      }
+      if (existing.updatedAt !== expectedUpdatedAt) return Promise.resolve(null);
       existing.status = 'review';
+      existing.updatedAt = `${existing.updatedAt}-review`;
       return Promise.resolve(existing);
     },
-    verifyImported(ids) {
-      return Promise.resolve(verifyState(ids, cards, collections));
+    verifyImported(expected) {
+      return Promise.resolve({
+        cards: [...cards.values()].filter((doc) => expected.cards.some((item) => item.key === doc.pilotImportKey)).map((doc) => ({
+          id: doc.id, key: doc.pilotImportKey ?? null, status: doc.status, robots: doc.robots,
+        })),
+        collections: [...collections.values()].filter((doc) => expected.collections.some((item) => item.path === doc.path)).map((doc) => ({
+          id: doc.id, path: doc.path, status: doc.status, robots: doc.robots,
+        })),
+        images: [...images.values()].filter((doc) => expected.images.some((item) => item.key === doc.pilotImportKey)).map((doc) => ({
+          id: doc.id, key: doc.pilotImportKey,
+        })),
+      });
     },
   };
   return store;
 }
 
-function verifyState(
-  ids: PilotImportedIds,
-  cards: ReadonlyMap<string, ExistingCard>,
-  collections: ReadonlyMap<string, ExistingCollection>,
-): { published: number; indexed: number } {
-  const selected = [
-    ...[...cards.values()].filter((doc) => ids.cardIds.some((id) => String(id) === String(doc.id))),
-    ...[...collections.values()].filter((doc) => ids.collectionIds.some((id) => String(id) === String(doc.id))),
-  ];
-  return {
-    published: selected.filter((doc) => doc.status === 'published').length,
-    indexed: selected.filter((doc) => doc.robots === 'index,follow').length,
-  };
-}
-
 function existingCard(seed: CardSeed, collectionPath: string): ExistingCard {
   return {
     id: `card-${seed.pilotId}`,
+    pilotImportKey: pilotCardImportKey(seed.pilotId),
+    updatedAt: '2026-08-30T00:00:00.000Z',
     alt: seed.alt,
     caption: seed.caption,
     collectionPaths: [collectionPath],
@@ -228,12 +268,17 @@ function existingCard(seed: CardSeed, collectionPath: string): ExistingCard {
   };
 }
 
-function applyInput(store: PilotApplyStore, path: { assetRoot: string; reportPath: string }) {
+async function applyInput(store: PilotApplyStore, path: { assetRoot: string; reportPath: string }) {
+  const preflight = await runPilotPreflight({
+    actorEmail: actor.email ?? '', assetRoot: path.assetRoot, manifest, matrix, store,
+  });
   return {
     actor,
+    actorEmail: actor.email ?? '',
     assetRoot: path.assetRoot,
+    manifest,
     matrix,
-    preflight: successfulPreflight(),
+    preflight,
     reportPath: path.reportPath,
     store,
   };
@@ -244,7 +289,7 @@ describe('pilot apply', () => {
     const path = await paths();
     const store = statefulStore();
 
-    const first = await applyPilotContent(applyInput(store, path));
+    const first = await applyPilotContent(await applyInput(store, path));
     expect(first.counts).toMatchObject({
       cardsCreated: 50,
       collectionsCreated: 13,
@@ -254,7 +299,7 @@ describe('pilot apply', () => {
     });
     expect(store.createdImages).toHaveLength(50);
 
-    const second = await applyPilotContent(applyInput(store, path));
+    const second = await applyPilotContent(await applyInput(store, path));
     expect(second.counts).toMatchObject({
       cardsCreated: 0,
       collectionsCreated: 0,
@@ -274,23 +319,40 @@ describe('pilot apply', () => {
     const store = statefulStore();
     const blocked = { ...successfulPreflight(), blockingErrors: ['managed drift'] };
 
-    await expect(applyPilotContent({ ...applyInput(store, path), preflight: blocked })).rejects.toThrow(
+    await expect(applyPilotContent({ ...await applyInput(store, path), preflight: blocked })).rejects.toThrow(
       /successful preflight/i,
     );
     const inconsistent = successfulPreflight();
     const firstRecord = inconsistent.records[0];
     if (!firstRecord) throw new Error('Expected preflight records.');
     await expect(applyPilotContent({
-      ...applyInput(store, path),
+      ...await applyInput(store, path),
       preflight: {
         ...inconsistent,
         records: [{ ...firstRecord, state: 'blocked' }, ...inconsistent.records.slice(1)],
       },
     })).rejects.toThrow(/successful preflight/i);
     await expect(applyPilotContent({
-      ...applyInput(store, path),
+      ...await applyInput(store, path),
       actor: { id: 1, role: 'admin' },
     })).rejects.toThrow(/ai-editor/i);
+    expect(store.collections).toHaveLength(0);
+    expect(store.cards).toHaveLength(0);
+    expect(store.createdImages).toHaveLength(0);
+  });
+
+  it('rechecks all inputs immediately before apply and mutates nothing after an asset changes', async () => {
+    const path = await paths();
+    const store = statefulStore();
+    const approved = await applyInput(store, path);
+    const first = matrix.cards[0];
+    if (!first) throw new Error('Expected pilot card.');
+    const changed = await sharp({
+      create: { width: 1024, height: 1280, channels: 3, background: '#222222' },
+    }).jpeg().toBuffer();
+    await writeFile(join(path.assetRoot, first.sourceFile), changed);
+
+    await expect(applyPilotContent(approved)).rejects.toThrow(/changed after preflight/i);
     expect(store.collections).toHaveLength(0);
     expect(store.cards).toHaveLength(0);
     expect(store.createdImages).toHaveLength(0);
@@ -301,18 +363,14 @@ describe('pilot apply', () => {
     const store = statefulStore();
     store.failUploadFor = '07';
 
-    const report = await applyPilotContent(applyInput(store, path));
-
-    expect(report.counts).toMatchObject({ cardsCreated: 49, collectionsCreated: 13, review: 62 });
-    expect(report.records).toContainEqual({
-      key: 'card:07',
-      kind: 'card',
-      state: 'error',
-      detail: 'upload refused for 07',
-    });
+    await expect(applyPilotContent(await applyInput(store, path))).rejects.toThrow(/verification vetoed report/i);
     expect(store.cards).toHaveLength(49);
     expect(store.createdImages).toHaveLength(49);
     expect(store.deleted).toEqual([]);
+    store.failUploadFor = null;
+    const resumed = await applyPilotContent(await applyInput(store, path));
+    expect(resumed.counts).toMatchObject({ cardsCreated: 1, resumed: 62, review: 63 });
+    expect(store.createdImages).toHaveLength(50);
   });
 
   it('reports an orphan upload exactly when card creation fails and never deletes it or prior drafts', async () => {
@@ -320,17 +378,14 @@ describe('pilot apply', () => {
     const store = statefulStore();
     store.failCardCreateFor = '08';
 
-    const report = await applyPilotContent(applyInput(store, path));
-
-    expect(report.records.find((record) => record.key === 'card:08')).toEqual({
-      key: 'card:08',
-      kind: 'card',
-      state: 'error',
-      detail: 'card create refused for 08; uploaded image image-8 remains; post-failure lookup found no card with the pilot slug, so the image is unlinked; it was not deleted',
-    });
+    await expect(applyPilotContent(await applyInput(store, path))).rejects.toThrow(/verification vetoed report/i);
     expect(store.createdImages).toHaveLength(50);
     expect(store.cards).toHaveLength(49);
     expect(store.deleted).toEqual([]);
+    store.failCardCreateFor = null;
+    const resumed = await applyPilotContent(await applyInput(store, path));
+    expect(resumed.counts).toMatchObject({ cardsCreated: 1, resumed: 62, review: 63 });
+    expect(store.createdImages).toHaveLength(50);
   });
 
   it('records managed drift as a conflict and does not overwrite the existing card', async () => {
@@ -343,16 +398,9 @@ describe('pilot apply', () => {
     changed.title = 'Человек вручную изменил заголовок';
     store.cards.set(seed.slug, changed);
 
-    const report = await applyPilotContent(applyInput(store, path));
-
-    expect(report.records.find((record) => record.key === `card:${seed.pilotId}`)).toEqual({
-      key: `card:${seed.pilotId}`,
-      kind: 'card',
-      state: 'conflict',
-      detail: `existing record ${String(changed.id)} differs in managed field title`,
-    });
+    await expect(applyPilotContent(await applyInput(store, path))).rejects.toThrow(/successful preflight/i);
     expect(store.cards.get(seed.slug)?.title).toBe('Человек вручную изменил заголовок');
-    expect(store.createdImages).toHaveLength(49);
+    expect(store.createdImages).toHaveLength(0);
   });
 
   it('records the pHash signal and exact server refusal while leaving that card in draft', async () => {
@@ -360,9 +408,9 @@ describe('pilot apply', () => {
     const store = statefulStore();
     store.pHashSignalFor = '09';
 
-    const report = await applyPilotContent(applyInput(store, path));
+    const report = await applyPilotContent(await applyInput(store, path));
 
-    expect(report.records.find((record) => record.key === 'card:09')).toEqual({
+    expect(report.records.find((record) => record.key === 'card:09')).toMatchObject({
       key: 'card:09',
       kind: 'card',
       state: 'draft',
@@ -370,6 +418,17 @@ describe('pilot apply', () => {
     });
     expect(report.counts).toMatchObject({ draft: 1, review: 62, published: 0, indexed: 0 });
     expect(store.cards.get(matrix.cards[8]?.slug ?? '')?.status).toBe('draft');
+  });
+
+  it('keeps a draft when the conditional review update sees a concurrent edit', async () => {
+    const path = await paths();
+    const store = statefulStore();
+    store.concurrentCardReviewFor = '10';
+    const report = await applyPilotContent(await applyInput(store, path));
+    const record = report.records.find((item) => item.key === 'card:10');
+    expect(record).toMatchObject({ key: 'card:10', state: 'draft' });
+    expect(record?.detail).toMatch(/conditional review update matched zero/i);
+    expect(store.cards.get(matrix.cards[9]?.slug ?? '')?.status).toBe('draft');
   });
 
   it('rejects cyclic or missing-parent collection graphs before creating anything', () => {
@@ -389,9 +448,17 @@ describe('pilot apply', () => {
   it('does not write a report when imported IDs verify as published or indexable', async () => {
     const path = await paths();
     const store = statefulStore();
-    store.verifyImported = () => Promise.resolve({ published: 1, indexed: 0 });
+    const verify = store.verifyImported.bind(store);
+    store.verifyImported = async (expected) => {
+      const snapshot = await verify(expected);
+      const first = snapshot.cards[0];
+      return first === undefined ? snapshot : {
+        ...snapshot,
+        cards: [{ ...first, status: 'published' }, ...snapshot.cards.slice(1)],
+      };
+    };
 
-    await expect(applyPilotContent(applyInput(store, path))).rejects.toThrow(/published=1/i);
+    await expect(applyPilotContent(await applyInput(store, path))).rejects.toThrow(/published=1/i);
     await expect(readFile(path.reportPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -420,9 +487,9 @@ describe('pilot apply', () => {
       },
       update(input: Record<string, unknown>) {
         mutations.push(input);
-        return Promise.resolve(input.collection === 'collections'
+        return Promise.resolve({ docs: [input.collection === 'collections'
           ? { ...collectionDoc, status: 'review' }
-          : { ...cardDoc, status: 'review' });
+          : { ...cardDoc, status: 'review' }] });
       },
     } as unknown as Payload;
     const store = createPayloadPilotApplyStore(payload, actorDocument);
@@ -430,8 +497,8 @@ describe('pilot apply', () => {
     const createdCollection = await store.createCollection(collectionSeed, null);
     const image = await store.createImage(cardSeed, jpeg);
     const createdCard = await store.createCard(cardSeed, image.id, createdCollection.id);
-    await store.moveCollectionToReview(createdCollection.id);
-    await store.moveCardToReview(createdCard.id);
+    await store.moveCollectionToReview(createdCollection.id, createdCollection.updatedAt ?? '');
+    await store.moveCardToReview(createdCard.id, createdCard.updatedAt ?? '');
 
     expect(mutations).toHaveLength(5);
     expect(mutations.every((call) => call.overrideAccess === false && call.user === actorDocument)).toBe(true);
@@ -443,6 +510,42 @@ describe('pilot apply', () => {
       expect(data).not.toHaveProperty('robots', 'index,follow');
       expect(data).not.toHaveProperty('status', 'published');
     }
+  });
+
+  it('uses a trusted override only for the inaccessible claim registry lookup', async () => {
+    const actorDocument = {
+      id: 91, collection: 'users', createdAt: '2026-08-30T00:00:00.000Z',
+      email: 'pilot-ai@example.test', role: 'ai-editor', updatedAt: '2026-08-30T00:00:00.000Z',
+    } satisfies User;
+    const calls: Array<Record<string, unknown>> = [];
+    const payload = { find(input: Record<string, unknown>) {
+      calls.push(input);
+      return Promise.resolve({ docs: input.collection === 'content-path-claims'
+        ? [{ ownerCollection: 'cards', ownerKey: 'cards:key', path: '/otkrytki/x' }]
+        : [] });
+    } } as unknown as Payload;
+    const store = createPayloadPilotImportStore(payload, actorDocument);
+    await store.findCardBySlug('x');
+    const claim = await store.findContentPathClaimByPath('/otkrytki/x');
+    expect(claim?.ownerKey).toBe('cards:key');
+    expect(calls).toEqual([
+      expect.objectContaining({ collection: 'cards', overrideAccess: false, user: actorDocument }),
+      expect.objectContaining({ collection: 'content-path-claims', overrideAccess: true }),
+    ]);
+  });
+
+  it('writes concurrent reports with unique private temp paths and cleans both', async () => {
+    const path = await paths();
+    const store = statefulStore();
+    const report = await applyPilotContent(await applyInput(store, path));
+    const other = { ...report, finishedAt: '2026-08-30T23:59:59.000Z' };
+    await Promise.all([
+      writePilotImportReportAtomically(path.reportPath, report),
+      writePilotImportReportAtomically(path.reportPath, other),
+    ]);
+    const written = JSON.parse(await readFile(path.reportPath, 'utf8')) as typeof report;
+    expect([report.finishedAt, other.finishedAt]).toContain(written.finishedAt);
+    expect((await readdir(join(path.reportPath, '..'))).filter((name) => name.endsWith('.tmp'))).toEqual([]);
   });
 });
 

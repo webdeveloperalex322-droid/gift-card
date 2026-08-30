@@ -16,7 +16,7 @@ import {
   applyPilotContent,
   type PilotApplyStore,
   type PilotImportReport,
-  type PilotImportedIds,
+  type PilotVerificationExpected,
 } from '../src/import/pilot-apply';
 import {
   runPilotPreflight,
@@ -27,6 +27,11 @@ import {
   type PilotPreflightReport,
 } from '../src/import/pilot-preflight';
 import { pilotIntroDocument } from '../src/import/pilot-types';
+import {
+  pilotCardImportKey,
+  pilotImageImportKey,
+  trustedPilotImportContext,
+} from '../src/import/pilot-import-identity';
 import { loadEnvFiles, workspaceRoot } from '../src/env.mjs';
 import type { Card, CardImage, Collection, User } from '../src/payload-types';
 
@@ -185,6 +190,8 @@ function toExistingCard(doc: Card): ExistingCard {
   const image = imageRecord(doc.image);
   return {
     id: doc.id,
+    pilotImportKey: doc.pilotImportKey ?? null,
+    updatedAt: doc.updatedAt,
     alt: doc.alt ?? null,
     caption: doc.caption ?? null,
     collectionPaths: collections.flatMap((value) => {
@@ -194,6 +201,7 @@ function toExistingCard(doc: Card): ExistingCard {
     description: doc.description ?? null,
     h1: doc.h1 ?? null,
     imageAssignedFilename: image?.filename ?? null,
+    imageId: image?.id ?? (doc.image as number | null),
     imageHeight: image?.source?.height ?? null,
     imageMimeType: image?.mimeType ?? null,
     imageRevision: image?.revision ?? null,
@@ -214,9 +222,21 @@ function toExistingCard(doc: Card): ExistingCard {
   };
 }
 
+function toExistingImage(doc: CardImage) {
+  return {
+    id: doc.id,
+    pilotImportKey: doc.pilotImportKey ?? null,
+    revision: doc.revision ?? null,
+    mimeType: doc.mimeType ?? null,
+    width: doc.source?.width ?? null,
+    height: doc.source?.height ?? null,
+  };
+}
+
 function toExistingCollection(doc: Collection): ExistingCollection {
   return {
     id: doc.id,
+    updatedAt: doc.updatedAt,
     description: doc.description ?? null,
     h1: doc.h1 ?? null,
     intro: doc.intro ?? null,
@@ -232,39 +252,51 @@ function toExistingCollection(doc: Collection): ExistingCollection {
   };
 }
 
-export function createPayloadPilotImportStore(payload: Payload): PilotImportStore {
+export function createPayloadPilotImportStore(payload: Payload, actor: User): PilotImportStore {
+  const user = actor;
   return {
-    async findActor(email) {
+    findActor(email) {
+      return Promise.resolve(email === actor.email
+        ? { id: actor.id, email: actor.email, role: actor.role }
+        : null);
+    },
+    async findCardByPilotImportKey(key) {
       const result = await payload.find({
-        collection: 'users',
-        depth: 0,
-        limit: 1,
-        overrideAccess: true,
-        pagination: false,
-        where: { email: { equals: email } },
+        collection: 'cards', depth: 1, limit: 1, overrideAccess: false,
+        pagination: false, user, where: { pilotImportKey: { equals: key } },
       });
-      const actor = result.docs[0];
-      return actor === undefined ? null : { id: actor.id, role: actor.role };
+      const doc = result.docs[0];
+      return doc === undefined ? null : toExistingCard(doc);
     },
     async findCardBySlug(slug) {
       const result = await payload.find({
         collection: 'cards',
         depth: 1,
         limit: 1,
-        overrideAccess: true,
+        overrideAccess: false,
         pagination: false,
+        user,
         where: { slug: { equals: slug } },
       });
       const doc = result.docs[0];
       return doc === undefined ? null : toExistingCard(doc);
+    },
+    async findImageByPilotImportKey(key) {
+      const result = await payload.find({
+        collection: 'card-images', depth: 0, limit: 1, overrideAccess: false,
+        pagination: false, user, where: { pilotImportKey: { equals: key } },
+      });
+      const doc = result.docs[0];
+      return doc === undefined ? null : toExistingImage(doc);
     },
     async findCollectionByPath(path) {
       const result = await payload.find({
         collection: 'collections',
         depth: 1,
         limit: 1,
-        overrideAccess: true,
+        overrideAccess: false,
         pagination: false,
+        user,
         where: { path: { equals: path } },
       });
       const doc = result.docs[0];
@@ -301,7 +333,25 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
   const user = actor;
   return {
     findActor(email) {
-      return Promise.resolve(email === actor.email ? { id: actor.id, role: actor.role } : null);
+      return Promise.resolve(email === actor.email
+        ? { id: actor.id, email: actor.email, role: actor.role }
+        : null);
+    },
+    async findCardByPilotImportKey(key) {
+      const result = await payload.find({
+        collection: 'cards', depth: 1, limit: 1, overrideAccess: false,
+        pagination: false, user, where: { pilotImportKey: { equals: key } },
+      });
+      const doc = result.docs[0];
+      return doc === undefined ? null : toExistingCard(doc);
+    },
+    async findImageByPilotImportKey(key) {
+      const result = await payload.find({
+        collection: 'card-images', depth: 0, limit: 1, overrideAccess: false,
+        pagination: false, user, where: { pilotImportKey: { equals: key } },
+      });
+      const doc = result.docs[0];
+      return doc === undefined ? null : toExistingImage(doc);
     },
     async findCardBySlug(slug) {
       const result = await payload.find({
@@ -334,9 +384,10 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
         collection: 'content-path-claims',
         depth: 0,
         limit: 1,
-        overrideAccess: false,
+        // Internal claims are unreadable to ai-editor. This isolated read-only
+        // lookup is trusted; all content/image reads remain access-checked.
+        overrideAccess: true,
         pagination: false,
-        user,
         where: { path: { equals: path } },
       });
       const claim = result.docs[0];
@@ -378,8 +429,9 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
         },
         overrideAccess: false,
         user,
+        context: trustedPilotImportContext(pilotImageImportKey(seed.pilotId), actor.id),
       });
-      return { id: doc.id };
+      return toExistingImage(doc);
     },
     async createCard(seed, imageId, collectionId) {
       const doc = await payload.create({
@@ -400,62 +452,66 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
         },
         overrideAccess: false,
         user,
+        context: trustedPilotImportContext(pilotCardImportKey(seed.pilotId), actor.id),
       });
       return toExistingCard(doc);
     },
-    async moveCollectionToReview(id) {
-      const doc = await payload.update({
+    async moveCollectionToReview(id, expectedUpdatedAt) {
+      const result = await payload.update({
         collection: 'collections',
-        id,
         data: { status: 'review' },
+        limit: 1,
         overrideAccess: false,
         user,
+        where: { and: [{ id: { equals: id } }, { updatedAt: { equals: expectedUpdatedAt } }] },
       });
-      return toExistingCollection(doc);
+      const doc = result.docs[0];
+      return doc === undefined ? null : toExistingCollection(doc);
     },
-    async moveCardToReview(id) {
-      const doc = await payload.update({
+    async moveCardToReview(id, expectedUpdatedAt) {
+      const result = await payload.update({
         collection: 'cards',
-        id,
         data: { status: 'review' },
+        limit: 1,
         overrideAccess: false,
         user,
+        where: { and: [{ id: { equals: id } }, { updatedAt: { equals: expectedUpdatedAt } }] },
       });
-      return toExistingCard(doc);
+      const doc = result.docs[0];
+      return doc === undefined ? null : toExistingCard(doc);
     },
-    async verifyImported(ids: PilotImportedIds) {
-      const [cards, collections] = await Promise.all([
-        ids.cardIds.length === 0
-          ? Promise.resolve([] as Card[])
-          : payload.find({
+    async verifyImported(expected: PilotVerificationExpected) {
+      const [cards, collections, images] = await Promise.all([
+        payload.find({
               collection: 'cards',
               depth: 0,
               overrideAccess: false,
               pagination: false,
               user,
-              where: { id: { in: [...ids.cardIds] } },
+              where: { pilotImportKey: { in: expected.cards.map((item) => item.key) } },
             }).then((result) => result.docs),
-        ids.collectionIds.length === 0
-          ? Promise.resolve([] as Collection[])
-          : payload.find({
+        payload.find({
               collection: 'collections',
               depth: 0,
               overrideAccess: false,
               pagination: false,
               user,
-              where: { id: { in: [...ids.collectionIds] } },
+              where: { path: { in: expected.collections.map((item) => item.path) } },
             }).then((result) => result.docs),
+        payload.find({
+          collection: 'card-images', depth: 0, overrideAccess: false,
+          pagination: false, user,
+          where: { pilotImportKey: { in: expected.images.map((item) => item.key) } },
+        }).then((result) => result.docs),
       ]);
-      if (cards.length !== ids.cardIds.length || collections.length !== ids.collectionIds.length) {
-        throw new Error(
-          `Imported-id verification was incomplete: cards ${String(cards.length)}/${String(ids.cardIds.length)}, ` +
-            `collections ${String(collections.length)}/${String(ids.collectionIds.length)}.`,
-        );
-      }
-      const docs = [...cards, ...collections];
       return {
-        published: docs.filter((doc) => doc.status === 'published').length,
-        indexed: docs.filter((doc) => doc.robots === 'index,follow').length,
+        cards: cards.map((doc) => ({
+          id: doc.id, key: doc.pilotImportKey ?? null, robots: doc.robots, status: doc.status,
+        })),
+        collections: collections.map((doc) => ({
+          id: doc.id, path: doc.path ?? '', robots: doc.robots, status: doc.status,
+        })),
+        images: images.map((doc) => ({ id: doc.id, key: doc.pilotImportKey ?? null })),
       };
     },
   };
@@ -510,12 +566,19 @@ async function main(): Promise<void> {
     loadSiteContent(resolve(workspaceRoot, 'content/pilot-2026-08/site-content.json')),
     loadManifest(resolve(workspaceRoot, 'content/pilot-2026-08/manifest.json')),
   ]);
+  // Actor bootstrap is the only trusted user lookup. From this point onward
+  // content and image reads/writes use this actor with overrideAccess:false.
+  const actor = await findPilotActorDocument(
+    initialized.payload,
+    initialized.environment.actorEmail,
+  );
+  const store = createPayloadPilotApplyStore(initialized.payload, actor);
   const report = await runPilotPreflight({
     actorEmail: initialized.environment.actorEmail,
     assetRoot: initialized.environment.assetRoot,
     manifest,
     matrix,
-    store: createPayloadPilotImportStore(initialized.payload),
+    store,
   });
   console.log(compactReport(report));
   if (report.blockingErrors.length > 0) {
@@ -523,17 +586,15 @@ async function main(): Promise<void> {
   }
   if (initialized.mode === 'dry-run') return;
 
-  const actor = await findPilotActorDocument(
-    initialized.payload,
-    initialized.environment.actorEmail,
-  );
   const applied = await applyPilotContent({
     actor,
+    actorEmail: initialized.environment.actorEmail,
     assetRoot: initialized.environment.assetRoot,
+    manifest,
     matrix,
     preflight: report,
     reportPath: resolve(workspaceRoot, 'content/pilot-2026-08/import-report.json'),
-    store: createPayloadPilotApplyStore(initialized.payload, actor),
+    store,
   });
   console.log(compactApplyReport(applied));
 }
