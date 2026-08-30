@@ -153,6 +153,38 @@ const collectionByPilotId = new Map<string, string>([
   ...assignments(46, 50, '14-fevralya'),
 ]);
 
+const matrixKeys = new Set(['collections', 'cards']);
+const collectionKeys = new Set([
+  'key',
+  'slug',
+  'nodeKind',
+  'parentKey',
+  'path',
+  'title',
+  'h1',
+  'metaDescription',
+  'intro',
+  'description',
+  'leafTopic',
+  'status',
+  'robots',
+]);
+const cardKeys = new Set([
+  'pilotId',
+  'collectionKey',
+  'sourceFile',
+  'slug',
+  'title',
+  'h1',
+  'metaDescription',
+  'alt',
+  'caption',
+  'description',
+  'usageTerms',
+  'status',
+  'robots',
+]);
+
 function ids(first: number, last: number): string[] {
   return Array.from(
     { length: last - first + 1 },
@@ -166,6 +198,10 @@ function assignments(first: number, last: number, key: string): Array<readonly [
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasMatrixArrays(value: unknown): value is SiteContentMatrix {
+  return isRecord(value) && Array.isArray(value.collections) && Array.isArray(value.cards);
 }
 
 function normalized(value: string): string {
@@ -193,19 +229,27 @@ function requireText(
   }
 }
 
+function rejectUnknownKeys(
+  errors: string[],
+  record: Record<string, unknown>,
+  allowedKeys: ReadonlySet<string>,
+  label: string,
+): void {
+  for (const key of Object.keys(record)) {
+    if (!allowedKeys.has(key)) errors.push(`${label} contains unknown key "${key}".`);
+  }
+}
+
 function filenameSlug(fileName: string): string {
   return fileName.endsWith('.jpg') ? fileName.slice(0, -4) : fileName;
 }
 
 export async function loadSiteContent(path: string): Promise<SiteContentMatrix> {
   const parsed = JSON.parse(await readFile(path, 'utf8')) as unknown;
-  if (!isRecord(parsed) || !Array.isArray(parsed.collections) || !Array.isArray(parsed.cards)) {
+  if (!hasMatrixArrays(parsed)) {
     throw new Error('Site content matrix must contain collections and cards arrays.');
   }
-  return {
-    collections: parsed.collections as CollectionSeed[],
-    cards: parsed.cards as CardSeed[],
-  };
+  return parsed;
 }
 
 export function validateSiteContent(matrix: unknown, manifest: readonly CardRecord[]): string[] {
@@ -213,6 +257,7 @@ export function validateSiteContent(matrix: unknown, manifest: readonly CardReco
   if (!isRecord(matrix) || !Array.isArray(matrix.collections) || !Array.isArray(matrix.cards)) {
     return ['Site content matrix must contain collections and cards arrays.'];
   }
+  rejectUnknownKeys(errors, matrix, matrixKeys, 'Site content matrix');
 
   const collections = matrix.collections.filter(isRecord);
   const cards = matrix.cards.filter(isRecord);
@@ -224,6 +269,7 @@ export function validateSiteContent(matrix: unknown, manifest: readonly CardReco
   const collectionsByKey = new Map<string, Record<string, unknown>>();
   for (const collection of collections) {
     const key = typeof collection.key === 'string' ? collection.key : 'unknown';
+    rejectUnknownKeys(errors, collection, collectionKeys, `Collection ${key}`);
     requireText(
       errors,
       collection,
@@ -270,9 +316,17 @@ export function validateSiteContent(matrix: unknown, manifest: readonly CardReco
   }
 
   const manifestById = new Map(manifest.map((record) => [record.id, record]));
+  for (const manifestCard of manifest) {
+    if (manifestCard.status !== 'accepted') {
+      errors.push(
+        `Manifest card ${manifestCard.id} must have accepted status; received ${manifestCard.status}.`,
+      );
+    }
+  }
   const cardsByPilotId = new Map<string, Record<string, unknown>>();
   for (const card of cards) {
     const pilotId = typeof card.pilotId === 'string' ? card.pilotId : 'unknown';
+    rejectUnknownKeys(errors, card, cardKeys, `Card ${pilotId}`);
     requireText(
       errors,
       card,

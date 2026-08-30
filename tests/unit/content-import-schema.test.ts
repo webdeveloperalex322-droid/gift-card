@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { loadManifest } from '../../scripts/content-pilot/manifest.mjs';
 import {
   loadSiteContent,
@@ -8,6 +11,13 @@ import {
 
 const manifestPath = 'content/pilot-2026-08/manifest.json';
 const matrixPath = 'content/pilot-2026-08/site-content.json';
+const temporaryPaths: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+  );
+});
 
 async function loadFixture(): Promise<SiteContentMatrix> {
   return loadSiteContent(matrixPath);
@@ -38,6 +48,54 @@ describe('pilot site content matrix', () => {
     expect(validateSiteContent(matrix, manifest)).toContain(
       'Collection den-rozhdeniya-zhenshchine path must be /otkrytki/prazdniki/den-rozhdeniya/zhenshchine.',
     );
+  });
+
+  it('preserves and rejects unknown own enumerable keys at every schema level', async () => {
+    const manifest = await loadManifest(manifestPath);
+    const source = structuredClone(await loadFixture()) as unknown as {
+      collections: Array<Record<string, unknown>>;
+      cards: Array<Record<string, unknown>>;
+      publishedAt?: string;
+    };
+    const [collection] = source.collections;
+    const [card] = source.cards;
+    if (!collection || !card) throw new Error('Expected matrix records.');
+    source.publishedAt = '2026-08-30T00:00:00.000Z';
+    collection.canonical = 'https://example.test/forbidden';
+    card.publishedAt = '2026-08-30T00:00:00.000Z';
+
+    const directory = await mkdtemp(join(tmpdir(), 'otkritka-site-content-'));
+    temporaryPaths.push(directory);
+    const path = join(directory, 'site-content.json');
+    await writeFile(path, JSON.stringify(source), 'utf8');
+    const loaded = await loadSiteContent(path);
+    const loadedRoot = loaded as unknown as Record<string, unknown>;
+    const loadedCollection = loaded.collections[0] as unknown as Record<string, unknown>;
+    const loadedCard = loaded.cards[0] as unknown as Record<string, unknown>;
+
+    expect(Object.hasOwn(loadedRoot, 'publishedAt')).toBe(true);
+    expect(Object.hasOwn(loadedCollection, 'canonical')).toBe(true);
+    expect(Object.hasOwn(loadedCard, 'publishedAt')).toBe(true);
+    expect(validateSiteContent(loaded, manifest)).toEqual(expect.arrayContaining([
+      'Site content matrix contains unknown key "publishedAt".',
+      'Collection prazdniki contains unknown key "canonical".',
+      'Card 01 contains unknown key "publishedAt".',
+    ]));
+  });
+
+  it('does not treat inherited enumerable properties as JSON fields', async () => {
+    const manifest = await loadManifest(manifestPath);
+    const matrix = structuredClone(await loadFixture());
+    const [first] = matrix.cards;
+    if (!first) throw new Error('Expected a pilot card.');
+    const inherited = Object.assign(
+      Object.create({ canonical: 'https://example.test/inherited' }) as Record<string, unknown>,
+      first,
+    );
+    matrix.cards[0] = inherited;
+
+    expect(Object.keys(inherited)).not.toContain('canonical');
+    expect(validateSiteContent(matrix, manifest)).toEqual([]);
   });
 
   it('rejects missing, extra, misplaced, or manifest-divergent cards', async () => {
@@ -72,6 +130,21 @@ describe('pilot site content matrix', () => {
       'Card 02 caption must be the exact manifest headline plus wish.',
     ]));
   });
+
+  it.each(['rejected', 'generated', 'planned'] as const)(
+    'rejects a manifest card with %s status',
+    async (status) => {
+      const manifest = structuredClone(await loadManifest(manifestPath));
+      const matrix = await loadFixture();
+      const [first] = manifest;
+      if (!first) throw new Error('Expected a manifest card.');
+      first.status = status;
+
+      expect(validateSiteContent(matrix, manifest)).toContain(
+        `Manifest card 01 must have accepted status; received ${status}.`,
+      );
+    },
+  );
 
   it('rejects normalized duplicate title, H1, and meta description values', async () => {
     const manifest = await loadManifest(manifestPath);
