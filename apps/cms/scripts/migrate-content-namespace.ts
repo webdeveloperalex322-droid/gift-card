@@ -20,6 +20,9 @@ interface MigrationDocument {
   readonly parent?: unknown;
   readonly path?: unknown;
   readonly pathClaimKey?: unknown;
+  readonly publishedAt?: unknown;
+  readonly ownerCollection?: unknown;
+  readonly ownerKey?: unknown;
   readonly slug?: unknown;
   readonly status?: unknown;
   readonly title?: unknown;
@@ -47,9 +50,15 @@ function isLegacyPath(path: unknown): path is string {
 export function assertNoPublishedLegacyCollections(
   collections: readonly MigrationDocument[],
 ): void {
-  const blocked = collections.filter(
-    (doc) => doc.status === 'published' && isLegacyPath(doc.path),
-  );
+  const blocked = collections.flatMap((doc) => {
+    const current = typeof doc.path === 'string' ? doc.path : null;
+    const future = projectedPath('collections', doc);
+    const wasPublished =
+      doc.publishedAt !== undefined && doc.publishedAt !== null && doc.publishedAt !== '';
+    return wasPublished && current !== null && future !== null && current !== future
+      ? [{ current, doc, future }]
+      : [];
+  });
   if (blocked.length === 0) {
     return;
   }
@@ -58,9 +67,9 @@ export function assertNoPublishedLegacyCollections(
     'Миграция остановлена: опубликованные URL /podborki требуют выбранного человеком ' +
       'одиночного 301. Записи: ' +
       blocked
-        .map(
-          (doc) =>
-            `${String(doc.id)} «${typeof doc.title === 'string' ? doc.title : 'без названия'}» ${String(doc.path)}`,
+        .map(({ current, doc, future }) =>
+          `${String(doc.id)} «${typeof doc.title === 'string' ? doc.title : 'без названия'}» ` +
+          `${current} → ${future}`,
         )
         .join('; '),
   );
@@ -124,15 +133,66 @@ function assertNoProjectedCollisions(
       if (path === null) {
         continue;
       }
-      const owner = `${kind}:${String(doc.id)}`;
+      const owner = `${kind}:id:${String(doc.id)}`;
       const previous = owners.get(path);
-      if (previous !== undefined && previous !== owner) {
+      if (previous !== undefined) {
         throw new Error(
           `Миграция остановлена: итоговый путь «${path}» одновременно принадлежит ` +
             `${previous} и ${owner}. Сначала выберите другой slug.`,
         );
       }
       owners.set(path, owner);
+    }
+  }
+}
+
+function stableOwnerKey(
+  collection: 'cards' | 'collections',
+  doc: MigrationDocument,
+): string | null {
+  return typeof doc.pathClaimKey === 'string' && doc.pathClaimKey.trim() !== ''
+    ? `${collection}:${doc.pathClaimKey}`
+    : null;
+}
+
+export function assertProjectedClaimsAvailable(
+  cards: readonly MigrationDocument[],
+  collections: readonly MigrationDocument[],
+  claims: readonly MigrationDocument[],
+): void {
+  const claimsByPath = new Map<string, MigrationDocument>();
+  for (const claim of claims) {
+    if (typeof claim.path === 'string') {
+      claimsByPath.set(claim.path, claim);
+    }
+  }
+
+  for (const [collection, docs] of [
+    ['cards', cards],
+    ['collections', collections],
+  ] as const) {
+    for (const doc of docs) {
+      const path = projectedPath(collection, doc);
+      if (path === null) {
+        continue;
+      }
+      const claim = claimsByPath.get(path);
+      if (claim === undefined) {
+        continue;
+      }
+      const expectedOwner = stableOwnerKey(collection, doc);
+      if (claim.ownerCollection === collection && claim.ownerKey === expectedOwner) {
+        continue;
+      }
+      const actualOwner =
+        typeof claim.ownerKey === 'string' && claim.ownerKey !== ''
+          ? claim.ownerKey
+          : `${String(claim.ownerCollection)}:без-stable-owner-key`;
+      throw new Error(
+        `Миграция остановлена: итоговый путь «${path}» навсегда занят claim ` +
+          `«${actualOwner}», а запись ${collection}:${String(doc.id)} ожидает ` +
+          `«${expectedOwner ?? 'отсутствующий stable owner key'}».`,
+      );
     }
   }
 }
@@ -175,12 +235,14 @@ export async function runContentNamespaceMigration(
   mode: MigrationMode,
 ): Promise<void> {
   // Сначала читается весь контент и выполняются все блокирующие preflight-проверки.
-  const [cards, collections] = await Promise.all([
+  const [cards, collections, claims] = await Promise.all([
     readAll(payload, 'cards'),
     readAll(payload, 'collections'),
+    readAll(payload, 'content-path-claims'),
   ]);
   assertNoPublishedLegacyCollections(collections);
   assertNoProjectedCollisions(cards, collections);
+  assertProjectedClaimsAvailable(cards, collections, claims);
 
   const roots = topLevelLegacyCollectionIds(collections);
   console.log(

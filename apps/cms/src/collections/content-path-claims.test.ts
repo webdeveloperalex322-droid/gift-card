@@ -24,37 +24,73 @@ function stringField(value: unknown, field: string): string | undefined {
   return typeof candidate === 'string' ? candidate : undefined;
 }
 
-function requestStand(): { readonly claims: Claim[]; readonly req: PayloadRequest } {
+function requestStand(): {
+  readonly claims: Claim[];
+  readonly nestedCreateCalls: { count: number };
+  readonly req: PayloadRequest;
+  readonly transactionDB: object;
+} {
   const claims: Claim[] = [];
+  const nestedCreateCalls = { count: 0 };
+  const transactionDB = { transaction: 'active' };
+  const fallbackDB = { transaction: 'outside-request' };
+  const pathColumn = { name: 'path' };
   const req = {
+    transactionID: 'tx-content-save',
     payload: {
-      create: (args: Record<string, unknown>) => {
-        expect(args.req).toBe(req);
-        expect(args).not.toHaveProperty('disableTransaction');
-        const data = args.data as Claim;
-        if (claims.some((claim) => claim.path === data.path)) {
-          // Payload/Drizzle преобразует PostgreSQL 23505 в ValidationError:
-          // признак уникальности находится во вложенной ошибке поля, а не в
-          // верхнеуровневом message.
-          const error = new Error('The following field is invalid: path');
-          Object.assign(error, {
-            data: {
-              errors: [{ message: 'Value must be unique', path: 'path' }],
-            },
-          });
-          throw error;
-        }
-        claims.push(data);
-        return Promise.resolve({ id: claims.length, ...data });
+      // Реальный Local API при ошибке вызывает killTransaction(req). Если
+      // production helper всё ещё пойдёт сюда, stand моделирует именно этот
+      // разрушительный эффект, а не безобидный reject.
+      create: () => {
+        nestedCreateCalls.count += 1;
+        delete req.transactionID;
+        return Promise.reject(new Error('nested create killed the outer transaction'));
       },
-      find: (args: Record<string, unknown>) => {
-        expect(args.req).toBe(req);
-        const path = ((args.where as { path: { equals: string } }).path).equals;
-        return Promise.resolve({ docs: claims.filter((claim) => claim.path === path) });
+      db: {
+        drizzle: fallbackDB,
+        insert: ({
+          db,
+          onConflictDoUpdate,
+          tableName,
+          values,
+        }: {
+          db: unknown;
+          onConflictDoUpdate: { set: { path: string }; target: unknown };
+          tableName: string;
+          values: Claim;
+        }) => {
+          expect(db).toBe(transactionDB);
+          expect(tableName).toBe('content_path_claims');
+          expect(onConflictDoUpdate).toEqual({
+            set: { path: values.path },
+            target: pathColumn,
+          });
+          const existing = claims.find((claim) => claim.path === values.path);
+          if (existing !== undefined) {
+            return Promise.resolve([{ ...existing }]);
+          }
+          claims.push({
+            ownerCollection: values.ownerCollection,
+            ownerKey: values.ownerKey,
+            path: values.path,
+          });
+          return Promise.resolve([{ ...values }]);
+        },
+        name: 'postgres',
+        sessions: {
+          'tx-content-save': {
+            db: transactionDB,
+            reject: () => Promise.resolve(),
+            resolve: () => Promise.resolve(),
+          },
+        },
+        tableNameMap: new Map([['content_path_claims', 'content_path_claims']]),
+        tables: { content_path_claims: { path: pathColumn } },
       },
     },
   } as unknown as PayloadRequest;
-  return { claims, req };
+
+  return { claims, nestedCreateCalls, req, transactionDB };
 }
 
 describe('content-path-claims: системный атомарный реестр путей', () => {
@@ -99,6 +135,49 @@ describe('content-path-claims: системный атомарный реест�
     } as never);
 
     expect(stringField(migrated, 'pathClaimKey')).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('duplicate create получает новый ключ, а не ключ originalDoc', async () => {
+    const duplicated: unknown = await assignContentPathClaimKey({
+      data: { title: 'Копия' },
+      operation: 'create',
+      originalDoc: { pathClaimKey: 'key-original-document' },
+    } as never);
+
+    expect(stringField(duplicated, 'pathClaimKey')).toMatch(/^[0-9a-f-]{36}$/);
+    expect(stringField(duplicated, 'pathClaimKey')).not.toBe('key-original-document');
+  });
+
+  it('идемпотентный конфликт не вызывает nested Local API и не убивает transactionID', async () => {
+    const { claims, nestedCreateCalls, req } = requestStand();
+    const args = {
+      collection: 'collections' as const,
+      ownerKey: 'collections:stable-key',
+      path: '/otkrytki/prazdniki',
+      req,
+    };
+
+    await reserveContentPath(args);
+    await reserveContentPath(args);
+
+    expect(claims).toHaveLength(1);
+    expect(nestedCreateCalls.count).toBe(0);
+    expect(req.transactionID).toBe('tx-content-save');
+  });
+
+  it('не занимает путь вне транзакции текущего content request', async () => {
+    const { claims, req } = requestStand();
+    Reflect.deleteProperty(req, 'transactionID');
+
+    await expect(
+      reserveContentPath({
+        collection: 'cards',
+        ownerKey: 'cards:no-transaction',
+        path: '/otkrytki/bez-tranzaktsii',
+        req,
+      }),
+    ).rejects.toThrow(/транзакц/i);
+    expect(claims).toEqual([]);
   });
 
   it('документный хук выводит финальный путь и резервирует его тем же req', async () => {

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import type { PostgresAdapter } from '@payloadcms/db-postgres';
 import {
   APIError,
   type CollectionBeforeChangeHook,
@@ -85,43 +86,59 @@ export interface ReserveContentPathArgs {
   readonly req: PayloadRequest;
 }
 
-function isUniquePathError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  const code = 'code' in error ? String(error.code) : '';
-  if (
-    code === '23505' ||
-    /duplicate key|unique constraint|already exists/i.test(error.message)
-  ) {
-    return true;
-  }
-
-  // Payload/Drizzle превращает 23505 в ValidationError и оставляет признак
-  // уникальности в `data.errors[]`. Проверяем именно поле path, чтобы не
-  // принять за коллизию любой другой validation failure вставки claim.
-  const payloadErrorData: unknown = 'data' in error ? error.data : null;
-  if (
-    typeof payloadErrorData !== 'object' ||
-    payloadErrorData === null ||
-    !('errors' in payloadErrorData)
-  ) {
-    return false;
-  }
-  const errors: unknown = payloadErrorData.errors;
-  const entries: readonly unknown[] = Array.isArray(errors) ? errors : [];
-  return entries.some(
-    (entry) =>
-      isUnknownRecord(entry) &&
-      entry.path === 'path' &&
-      typeof entry.message === 'string' &&
-      /unique|уникальн/i.test(entry.message),
-  );
-}
-
 function isUnknownRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null;
+}
+
+const CLAIM_TABLE_MAP_KEY = 'content_path_claims';
+type ClaimInsertDatabase = Parameters<PostgresAdapter['insert']>[0]['db'];
+type ClaimInsert = (
+  this: PostgresAdapter,
+  args: {
+    readonly db: ClaimInsertDatabase;
+    readonly onConflictDoUpdate: unknown;
+    readonly tableName: string;
+    readonly values: Readonly<Record<string, unknown>>;
+  },
+) => Promise<Record<string, unknown>[]>;
+
+function postgresAdapter(req: PayloadRequest): PostgresAdapter {
+  const adapter = req.payload.db;
+  if (adapter.name !== 'postgres') {
+    throw new APIError(
+      'Атомарный реестр публичных путей требует настроенный PostgreSQL adapter.',
+      500,
+      { rule: 'content-path-adapter-unsupported' },
+      true,
+    );
+  }
+  return adapter as unknown as PostgresAdapter;
+}
+
+async function transactionDatabase(
+  adapter: PostgresAdapter,
+  req: PayloadRequest,
+): Promise<ClaimInsertDatabase> {
+  const transactionID = await req.transactionID;
+  if (transactionID === undefined || transactionID === null) {
+    throw new APIError(
+      'Транзакция сохранения контента не начата: занять публичный путь вне неё нельзя.',
+      500,
+      { rule: 'content-path-transaction-missing' },
+      true,
+    );
+  }
+
+  const session = adapter.sessions[String(transactionID)];
+  if (session === undefined) {
+    throw new APIError(
+      'Транзакция сохранения контента недоступна: занять публичный путь вне неё нельзя.',
+      500,
+      { rule: 'content-path-transaction-missing' },
+      true,
+    );
+  }
+  return session.db;
 }
 
 function ownerLabel(collection: unknown): string {
@@ -131,40 +148,52 @@ function ownerLabel(collection: unknown): string {
 /**
  * Атомарно занимает путь в текущей транзакции Payload.
  *
- * `req` передаётся и во вставку, и в чтение конфликта; `disableTransaction`
- * намеренно отсутствует. Поэтому claim откатывается вместе с неудачным
- * сохранением контента, а уникальный индекс закрывает гонку двух коллекций.
+ * DB handle берётся из transaction session текущего `req`. Nested Local API
+ * здесь запрещён: его ошибка вызвала бы Payload `killTransaction(req)` и
+ * откатила внешнее сохранение до проверки владельца. Adapter-upsert не бросает
+ * unique error (`path = path` на конфликте) и возвращает фактического владельца;
+ * поэтому claim откатывается вместе с контентом, а гонку закрывает индекс БД.
  */
 export async function reserveContentPath(args: ReserveContentPathArgs): Promise<void> {
-  try {
-    await args.req.payload.create({
-      collection: 'content-path-claims',
-      data: {
-        claimedAt: new Date().toISOString(),
-        ownerCollection: args.collection,
-        ownerKey: args.ownerKey,
-        path: args.path,
-      },
-      overrideAccess: true,
-      req: args.req,
-    });
-    return;
-  } catch (error) {
-    if (!isUniquePathError(error)) {
-      throw error;
-    }
+  const adapter = postgresAdapter(args.req);
+  const tableName = adapter.tableNameMap.get(CLAIM_TABLE_MAP_KEY);
+  if (tableName === undefined) {
+    throw new APIError(
+      'Системная таблица content-path-claims не зарегистрирована в Payload.',
+      500,
+      { rule: 'content-path-table-missing' },
+      true,
+    );
+  }
+  const table: unknown = adapter.tables[tableName];
+  if (!isUnknownRecord(table) || !('path' in table)) {
+    throw new APIError(
+      'Системная таблица content-path-claims не содержит уникального поля path.',
+      500,
+      { rule: 'content-path-column-missing' },
+      true,
+    );
   }
 
-  const existing = await args.req.payload.find({
-    collection: 'content-path-claims',
-    depth: 0,
-    limit: 1,
-    overrideAccess: true,
-    pagination: false,
-    req: args.req,
-    where: { path: { equals: args.path } },
+  const now = new Date().toISOString();
+  const insert = adapter.insert as unknown as ClaimInsert;
+  const rows = await insert.call(adapter, {
+    db: await transactionDatabase(adapter, args.req),
+    onConflictDoUpdate: {
+      set: { path: args.path },
+      target: table.path,
+    },
+    tableName,
+    values: {
+      claimedAt: now,
+      createdAt: now,
+      ownerCollection: args.collection,
+      ownerKey: args.ownerKey,
+      path: args.path,
+      updatedAt: now,
+    },
   });
-  const claim = existing.docs[0];
+  const claim = rows[0];
 
   if (claim?.ownerKey === args.ownerKey) {
     return;
@@ -198,6 +227,9 @@ export const assignContentPathClaimKey: CollectionBeforeValidateHook = ({
   const rawData: unknown = data;
   const rawOriginalDoc: unknown = originalDoc;
   const next = isUnknownRecord(rawData) ? { ...rawData } : {};
+  if (operation === 'create') {
+    return { ...next, pathClaimKey: randomUUID() };
+  }
   const stored =
     isUnknownRecord(rawOriginalDoc) &&
     typeof rawOriginalDoc.pathClaimKey === 'string' &&
@@ -208,7 +240,7 @@ export const assignContentPathClaimKey: CollectionBeforeValidateHook = ({
   if (stored !== null) {
     return { ...next, pathClaimKey: stored };
   }
-  if (operation === 'create' || operation === 'update') {
+  if (operation === 'update') {
     return { ...next, pathClaimKey: randomUUID() };
   }
   return next;

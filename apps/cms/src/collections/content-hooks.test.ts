@@ -230,9 +230,15 @@ function createHarness(): Harness {
     info: () => undefined,
     warn: (message: unknown) => warnings.push(String(message)),
   };
+  const transactionDB = { transaction: 'content-hooks-harness' };
 
   const requestFor = (user: unknown): PayloadRequest =>
-    ({ context: {}, payload, user } as unknown as PayloadRequest);
+    ({
+      context: {},
+      payload,
+      transactionID: 'content-hooks-transaction',
+      user,
+    }) as unknown as PayloadRequest;
 
   async function runPipeline(args: {
     readonly data: Doc;
@@ -310,15 +316,31 @@ function createHarness(): Harness {
       );
       return Promise.resolve({ totalDocs: docs.length });
     },
+    db: {
+      drizzle: transactionDB,
+      insert: ({ values }: { values: Doc }) => {
+        const claims = collectionStore('content-path-claims');
+        const existing = [...claims.values()].find((doc) => doc.path === values.path);
+        if (existing !== undefined) {
+          return Promise.resolve([{ ...existing }]);
+        }
+        const id = nextId++;
+        const stored = { ...values, id };
+        claims.set(id, stored);
+        return Promise.resolve([{ ...stored }]);
+      },
+      name: 'postgres',
+      sessions: {
+        'content-hooks-transaction': {
+          db: transactionDB,
+          reject: () => Promise.resolve(),
+          resolve: () => Promise.resolve(),
+        },
+      },
+      tableNameMap: new Map([['content_path_claims', 'content_path_claims']]),
+      tables: { content_path_claims: { path: { name: 'path' } } },
+    },
     create: ({ collection, data }: { collection: string; data: Doc }) => {
-      if (
-        collection === 'content-path-claims' &&
-        [...collectionStore(collection).values()].some((doc) => doc.path === data.path)
-      ) {
-        const error = new Error('duplicate key value violates unique constraint');
-        Object.assign(error, { code: '23505' });
-        return Promise.reject(error);
-      }
       return runPipeline({ data, id: null, slug: collection, user: null });
     },
     delete: ({ collection, id }: { collection: string; id: number }) => {
