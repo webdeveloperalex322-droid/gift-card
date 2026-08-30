@@ -75,6 +75,7 @@ describe('collections: базовые свойства коллекции', () =
         'path',
         'nodeKind',
         'parent',
+        'description',
         'intro',
         'metaDescription',
         'status',
@@ -182,10 +183,11 @@ describe('collections: уникальность итогового пути', ()
     // Правила индексации у подборок и карточек должны быть одними и теми же,
     // поэтому проверяется факт подключения ОБЩЕЙ фабрики, а не локальных копий.
     expect(Collections.hooks?.beforeOperation).toHaveLength(1);
-    // Три хука beforeValidate: статусная модель, проверка дублей метатегов
+    // Четыре хука beforeValidate: системный ключ path claim, статусная модель,
+    // проверка дублей метатегов
     // (Э5-01, оба из общей фабрики) и проверка наполненности узла (Ч-06,
     // п. 5.1) — последняя локальна, потому что подсчёт открыток требует базы.
-    expect(Collections.hooks?.beforeValidate).toHaveLength(3);
+    expect(Collections.hooks?.beforeValidate).toHaveLength(4);
   });
 
   it('удаление узла с вложенными перехватывается хуком', () => {

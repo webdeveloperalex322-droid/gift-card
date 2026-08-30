@@ -94,6 +94,7 @@ describe('полнота перед review', () => {
 
   it('перечень обязательных полей подборки — из ТЗ §8.2', () => {
     expect(COLLECTION_REVIEW_REQUIREMENTS.map((item) => item.field)).toEqual([
+      'description',
       'intro',
       'metaDescription',
       'related',

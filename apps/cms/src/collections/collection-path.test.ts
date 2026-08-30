@@ -22,39 +22,39 @@ import {
 
 const env = { PAYLOAD_ADMIN_PATH: '/admin' } as const;
 
-/** Узел «Праздники»: /podborki/prazdniki. */
+/** Узел «Праздники»: /otkrytki/prazdniki. */
 const prazdniki: CollectionNodeParent = {
   id: 1,
   nodeKind: 'group',
-  path: '/podborki/prazdniki',
+  path: '/otkrytki/prazdniki',
 };
 
-/** Узел «Адресаты»: /podborki/adresaty. */
+/** Узел «Адресаты»: /otkrytki/adresaty. */
 const adresaty: CollectionNodeParent = {
   id: 2,
   nodeKind: 'group',
-  path: '/podborki/adresaty',
+  path: '/otkrytki/adresaty',
 };
 
-/** Праздничная посадочная: /podborki/prazdniki/8-marta. */
+/** Праздничная посадочная: /otkrytki/prazdniki/8-marta. */
 const vosmoeMarta: CollectionNodeParent = {
   id: 3,
   nodeKind: 'occasion',
-  path: '/podborki/prazdniki/8-marta',
+  path: '/otkrytki/prazdniki/8-marta',
 };
 
-/** Адресат под праздником: /podborki/prazdniki/8-marta/mame. */
+/** Адресат под праздником: /otkrytki/prazdniki/8-marta/mame. */
 const mameNa8Marta: CollectionNodeParent = {
   id: 4,
   nodeKind: 'recipient',
-  path: '/podborki/prazdniki/8-marta/mame',
+  path: '/otkrytki/prazdniki/8-marta/mame',
 };
 
-/** Адресат без праздника: /podborki/adresaty/mame. */
+/** Адресат без праздника: /otkrytki/adresaty/mame. */
 const mame: CollectionNodeParent = {
   id: 5,
   nodeKind: 'recipient',
-  path: '/podborki/adresaty/mame',
+  path: '/otkrytki/adresaty/mame',
 };
 
 function expectRule(run: () => unknown, rule: string): void {
@@ -68,13 +68,13 @@ function expectRule(run: () => unknown, rule: string): void {
   throw new Error(`Ожидался отказ по правилу «${rule}», но отказа не было`);
 }
 
-describe('форма путей — решение человека от 2026-08-22', () => {
-  it('группирующий узел живёт прямо под /podborki', () => {
+describe('форма путей в едином контейнере контента', () => {
+  it('группирующий узел живёт прямо под /otkrytki', () => {
     const plan = planCollectionNode({
       candidate: { nodeKind: 'group', parent: null, slug: 'prazdniki' },
       env,
     });
-    expect(plan.path).toBe('/podborki/prazdniki');
+    expect(plan.path).toBe('/otkrytki/prazdniki');
     expect(plan.parentPath).toBeNull();
     expect(plan.depth).toBe(1);
   });
@@ -84,8 +84,8 @@ describe('форма путей — решение человека от 2026-08
       candidate: { nodeKind: 'occasion', parent: prazdniki, slug: '8-marta' },
       env,
     });
-    expect(plan.path).toBe('/podborki/prazdniki/8-marta');
-    expect(plan.parentPath).toBe('/podborki/prazdniki');
+    expect(plan.path).toBe('/otkrytki/prazdniki/8-marta');
+    expect(plan.parentPath).toBe('/otkrytki/prazdniki');
     expect(plan.depth).toBe(2);
   });
 
@@ -94,7 +94,7 @@ describe('форма путей — решение человека от 2026-08
       candidate: { nodeKind: 'recipient', parent: vosmoeMarta, slug: 'mame' },
       env,
     });
-    expect(plan.path).toBe('/podborki/prazdniki/8-marta/mame');
+    expect(plan.path).toBe('/otkrytki/prazdniki/8-marta/mame');
     expect(plan.depth).toBe(3);
   });
 
@@ -103,7 +103,7 @@ describe('форма путей — решение человека от 2026-08
       candidate: { nodeKind: 'recipient', parent: adresaty, slug: 'mame' },
       env,
     });
-    expect(plan.path).toBe('/podborki/adresaty/mame');
+    expect(plan.path).toBe('/otkrytki/adresaty/mame');
   });
 
   it('путь собирается из СОХРАНЁННОГО пути родителя, а не из его slug', () => {
@@ -113,13 +113,13 @@ describe('форма путей — решение человека от 2026-08
       candidate: { nodeKind: 'recipient', parent: vosmoeMarta, slug: 'babushke' },
       env,
     });
-    expect(plan.path).toBe('/podborki/prazdniki/8-marta/babushke');
+    expect(plan.path).toBe('/otkrytki/prazdniki/8-marta/babushke');
   });
 });
 
 describe('порядок сегментов: только «повод → уточнение» (Ч-04-7)', () => {
   it('повод под уточнением не создаётся никогда', () => {
-    // Обратный порядок — /podborki/adresaty/mame/8-marta. Это не предупреждение
+    // Обратный порядок — /otkrytki/adresaty/mame/8-marta. Это не предупреждение
     // и не соглашение: сочетание «родитель recipient → ребёнок occasion»
     // отсутствует в матрице, поэтому запись физически не собирается.
     expectRule(
@@ -270,11 +270,11 @@ describe('итоговый путь проверяется по реестру �
     );
   });
 
-  it('нестандартный PAYLOAD_ADMIN_PATH внутри /podborki участвует в проверке', () => {
+  it('нестандартный PAYLOAD_ADMIN_PATH внутри /otkrytki участвует в проверке', () => {
     // Путь админки не записан строкой, а вычисляется из окружения. Настроен
     // внутрь контейнера подборок — совпадающий узел обязан отклоняться, иначе
     // подборка заняла бы адрес админки.
-    const nested = { PAYLOAD_ADMIN_PATH: '/podborki/upravlenie' };
+    const nested = { PAYLOAD_ADMIN_PATH: '/otkrytki/upravlenie' };
     expectRule(
       () =>
         planCollectionNode({
@@ -288,7 +288,7 @@ describe('итоговый путь проверяется по реестру �
         candidate: { nodeKind: 'group', parent: null, slug: 'prazdniki' },
         env: nested,
       }).path,
-    ).toBe('/podborki/prazdniki');
+    ).toBe('/otkrytki/prazdniki');
   });
 
   it('незаданный PAYLOAD_ADMIN_PATH даёт отказ по реестру, а не путь без проверки', () => {
@@ -306,13 +306,13 @@ describe('итоговый путь проверяется по реестру �
 });
 
 describe('родитель вне пространства подборок и цикл', () => {
-  it('родитель с путём вне /podborki отклоняется', () => {
+  it('родитель с путём вне /otkrytki отклоняется', () => {
     expectRule(
       () =>
         planCollectionNode({
           candidate: {
             nodeKind: 'occasion',
-            parent: { id: 9, nodeKind: 'group', path: '/otkrytki/prazdniki' },
+            parent: { id: 9, nodeKind: 'group', path: '/podborki/prazdniki' },
             slug: '8-marta',
           },
           env,
@@ -355,7 +355,7 @@ describe('родитель вне пространства подборок и �
             nodeKind: 'group',
             parent: prazdniki,
             slug: 'prazdniki',
-            currentPath: '/podborki/prazdniki',
+            currentPath: '/otkrytki/prazdniki',
           },
           env,
         }),
@@ -364,7 +364,7 @@ describe('родитель вне пространства подборок и �
   });
 
   it('узел не может уйти под собственного потомка', () => {
-    // /podborki/prazdniki нельзя подчинить /podborki/prazdniki/8-marta:
+    // /otkrytki/prazdniki нельзя подчинить /otkrytki/prazdniki/8-marta:
     // получилось бы поддерево, недостижимое от корня, и бесконечная склейка.
     expectRule(
       () =>
@@ -374,7 +374,7 @@ describe('родитель вне пространства подборок и �
             nodeKind: 'group',
             parent: vosmoeMarta,
             slug: 'prazdniki',
-            currentPath: '/podborki/prazdniki',
+            currentPath: '/otkrytki/prazdniki',
           },
           env,
         }),
@@ -453,12 +453,12 @@ describe('год в URL ежегодного праздника (условие 
 
   it('путь (а): повод с чистым сегментом под годовой группой тоже отклоняется', () => {
     // Собственный сегмент посадочной безупречен (`8-marta`), а её итоговый
-    // адрес — /podborki/prazdniki-2027/8-marta. Проверка по сегменту это
+    // адрес — /otkrytki/prazdniki-2027/8-marta. Проверка по сегменту это
     // пропускала, проверка по итоговому пути — нет.
     const yearBearingGroup: CollectionNodeParent = {
       id: 20,
       nodeKind: 'group',
-      path: '/podborki/prazdniki-2027',
+      path: '/otkrytki/prazdniki-2027',
     };
     expectRule(
       () =>
@@ -472,7 +472,7 @@ describe('год в URL ежегодного праздника (условие 
 
   it('путь (б): recipient прямо под группой праздников с годом отклоняется', () => {
     // Матрица допускает recipient под группой, поэтому
-    // /podborki/prazdniki/novyy-god-2027 собирался без отказа: вид узла
+    // /otkrytki/prazdniki/novyy-god-2027 собирался без отказа: вид узла
     // recipient, родитель — группа. Отделить его от адресата в ветви
     // «Адресаты» машинно нечем (формы одинаковые), поэтому год запрещён во всей
     // коллекции.
@@ -487,7 +487,7 @@ describe('год в URL ежегодного праздника (условие 
   });
 
   it('адресат без праздника остаётся законным: правило запрещает год, а не цифры', () => {
-    // Явная регрессия из вердикта: /podborki/adresaty/mame собирается как
+    // Явная регрессия из вердикта: /otkrytki/adresaty/mame собирается как
     // раньше — расширение запрета на эту ветвь «за компанию» было бы
     // додумыванием за человека.
     expect(
@@ -495,7 +495,7 @@ describe('год в URL ежегодного праздника (условие 
         candidate: { nodeKind: 'recipient', parent: adresaty, slug: 'mame' },
         env,
       }).path,
-    ).toBe('/podborki/adresaty/mame');
+    ).toBe('/otkrytki/adresaty/mame');
   });
 
   it('цифры в адресе не годы: 8-marta, 23-fevralya, 1-sentyabrya, otkrytka-1920x1080', () => {
@@ -506,12 +506,12 @@ describe('год в URL ежегодного праздника (условие 
           env,
         }).path,
         slug,
-      ).toBe(`/podborki/prazdniki/${slug}`);
+      ).toBe(`/otkrytki/prazdniki/${slug}`);
       // И у группы — тот же набор: правило одно на все виды узлов.
       expect(
         planCollectionNode({ candidate: { nodeKind: 'group', parent: null, slug }, env }).path,
         slug,
-      ).toBe(`/podborki/${slug}`);
+      ).toBe(`/otkrytki/${slug}`);
     }
   });
 
@@ -565,9 +565,9 @@ describe('год в URL ежегодного праздника (условие 
 
 describe('isDescendantPath', () => {
   it('потомок определяется по границе сегмента, а не по подстроке', () => {
-    expect(isDescendantPath('/podborki/prazdniki', '/podborki/prazdniki/8-marta')).toBe(true);
-    expect(isDescendantPath('/podborki/prazdniki', '/podborki/prazdniki-2026')).toBe(false);
-    expect(isDescendantPath('/podborki/prazdniki', '/podborki/prazdniki')).toBe(false);
-    expect(isDescendantPath('/podborki/prazdniki', '/podborki/adresaty/mame')).toBe(false);
+    expect(isDescendantPath('/otkrytki/prazdniki', '/otkrytki/prazdniki/8-marta')).toBe(true);
+    expect(isDescendantPath('/otkrytki/prazdniki', '/otkrytki/prazdniki-2026')).toBe(false);
+    expect(isDescendantPath('/otkrytki/prazdniki', '/otkrytki/prazdniki')).toBe(false);
+    expect(isDescendantPath('/otkrytki/prazdniki', '/otkrytki/adresaty/mame')).toBe(false);
   });
 });

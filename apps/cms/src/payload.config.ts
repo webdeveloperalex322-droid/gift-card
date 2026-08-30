@@ -17,6 +17,7 @@ import {
 import { CardImages } from './collections/card-images';
 import { Cards } from './collections/cards';
 import { Collections } from './collections/collections';
+import { ContentPathClaims } from './collections/content-path-claims';
 import { ImageNameClaims } from './collections/image-name-claims';
 import { Redirects } from './collections/redirects';
 import { SeoHistory } from './collections/seo-history';
@@ -91,7 +92,16 @@ const config = buildConfig({
   },
 
   // Порядок влияет только на меню админки: сверху то, с чем работают чаще.
-  collections: [Cards, Collections, CardImages, Redirects, SeoHistory, ImageNameClaims, Users],
+  collections: [
+    Cards,
+    Collections,
+    CardImages,
+    Redirects,
+    SeoHistory,
+    ContentPathClaims,
+    ImageNameClaims,
+    Users,
+  ],
 
   db: postgresAdapter({
     pool: {
