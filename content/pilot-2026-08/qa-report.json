@@ -1,0 +1,12 @@
+{
+  "stage": "accepted",
+  "checkedCount": 50,
+  "acceptedCount": 50,
+  "missingFiles": [],
+  "formatErrors": [],
+  "dimensionErrors": [],
+  "hashErrors": [],
+  "similarPairs": [],
+  "autoRejectedIds": [],
+  "blockingErrors": []
+}

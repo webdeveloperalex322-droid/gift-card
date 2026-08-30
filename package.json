@@ -14,6 +14,9 @@
     "check": "pnpm run build:libs && pnpm --filter @otkritka/web run check && pnpm --filter @otkritka/cms run check && eslint .",
     "test": "vitest run",
     "test:seo": "node scripts/seo-gate.mjs",
+    "content:pilot:validate": "tsc -b --force packages/images && node scripts/content-pilot/validate.mjs",
+    "content:import:dry-run": "pnpm --filter @otkritka/cms exec payload run ./scripts/import-pilot-content.ts -- --dry-run",
+    "content:import:apply": "pnpm --filter @otkritka/cms exec payload run ./scripts/import-pilot-content.ts -- --apply",
     "verify": "pnpm run check && pnpm run test && pnpm run test:seo"
   },
   "devDependencies": {
