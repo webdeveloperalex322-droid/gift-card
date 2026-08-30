@@ -70,7 +70,7 @@ apps/cms/
     │   ├── card-image-hooks.ts         # хуки карточки: зеркало полей, права, дубли
     │   └── png-fixture.ts              # синтетический PNG для тестов и смоука (без sharp)
     ├── seo/
-    │   ├── paths.ts                    # пути записей: /otkrytki/<slug>, /podborki/…
+    │   ├── paths.ts                    # пути записей: карточки и подборки под /otkrytki
     │   └── robots.ts                   # закрытый набор robots-директив
     └── app/(payload)/                  # маршруты Next: админка, REST, GraphQL
 ```

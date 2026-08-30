@@ -161,7 +161,7 @@ describe('collections: уникальность итогового пути', ()
   });
 
   it('slug НЕ уникален: уникален путь, а не сегмент', () => {
-    // «mame» живёт и под /podborki/prazdniki/8-marta, и под /podborki/adresaty.
+    // «mame» живёт и под /otkrytki/prazdniki/8-marta, и под /otkrytki/adresaty.
     const slug = findField(Collections.fields, 'slug');
     expect('unique' in slug ? slug.unique : undefined).toBe(false);
     expect('required' in slug ? slug.required : undefined).toBe(true);

@@ -33,7 +33,7 @@ import {
   splitPaginatedPath,
 } from '../../apps/web/src/routing/pagination.js';
 
-const BASE = '/podborki/prazdniki/8-marta';
+const BASE = '/otkrytki/prazdniki/8-marta';
 
 describe('форма пути страницы пагинации', () => {
   it('первая страница живёт по базовому URL: /page/1 не собирается никогда', () => {

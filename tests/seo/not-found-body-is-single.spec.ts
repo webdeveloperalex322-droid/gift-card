@@ -53,7 +53,7 @@ const BRANCHES: readonly { readonly path: string; readonly note: string }[] = [
     note: 'маршрут карточки: запись не найдена (ответ маршрута с пустым телом)',
   },
   {
-    path: '/podborki/prazdniki/takogo-prazdnika-net-e3-14',
+    path: '/otkrytki/prazdniki/takogo-prazdnika-net-e3-14',
     note: 'маршрут ветви подборок: узел не найден',
   },
   {

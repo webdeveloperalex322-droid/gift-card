@@ -511,7 +511,6 @@ describe('путь админки вычисляется из PAYLOAD_ADMIN_PATH
     const byPath = new Map(reservedRoutes(env).map((route) => [route.path, route.kind]));
 
     expect(byPath.get('/otkrytki')).toBe('container');
-    expect(byPath.has('/podborki')).toBe(false);
     expect(byPath.get('/cms')).toBe('occupied');
     expect(isReservedPath('/otkrytki/8-marta', env)).toBe(false);
   });
@@ -603,6 +602,5 @@ describe('чего реестр НЕ закрывает: узлы таксоно
 
     // Единственный контейнер собственную запись не принимает.
     expect(isReservedPath('/otkrytki', DEFAULT_ADMIN_ENV)).toBe(true);
-    expect(isReservedPath('/podborki', DEFAULT_ADMIN_ENV)).toBe(false);
   });
 });

@@ -133,7 +133,7 @@ describe('ссылки', () => {
       throw new Error('Поле адреса ссылки не найдено');
     }
 
-    expect(url.validate('/podborki/prazdniki/8-marta')).toBe(true);
+    expect(url.validate('/otkrytki/prazdniki/8-marta')).toBe(true);
     expect(url.validate('https://example.com')).toBe(true);
     expect(typeof url.validate('mailto:info@example.com')).toBe('string');
     expect(typeof url.validate('javascript:alert(1)')).toBe('string');

@@ -336,7 +336,7 @@ describe('Э4-06: from не может быть зарезервированны
   it('сегмент пагинации в источнике отклоняется: страницы /page/N отдаёт сайт', () => {
     const refusal = refusalOf(() =>
       plan({
-        candidate: { from: '/podborki/prazdniki/8-marta/page/2', to: '/otkrytki/x', code: '301' },
+        candidate: { from: '/otkrytki/prazdniki/8-marta/page/2', to: '/otkrytki/x', code: '301' },
         existing: [],
       }),
     );
@@ -420,9 +420,9 @@ describe('Э4-06: что осталось разрешено', () => {
   it('пути ПОД контейнером — обычные адреса записей, перенос с них законен', () => {
     for (const from of [
       '/otkrytki/staraya-otkrytka',
-      '/podborki/prazdniki',
-      '/podborki/prazdniki/8-marta',
-      '/podborki/prazdniki/8-marta/mame',
+      '/otkrytki/prazdniki',
+      '/otkrytki/prazdniki/8-marta',
+      '/otkrytki/prazdniki/8-marta/mame',
     ]) {
       const result = plan({
         candidate: { from, to: '/otkrytki/novaya-otkrytka', code: '301' },
@@ -435,7 +435,7 @@ describe('Э4-06: что осталось разрешено', () => {
   it('цель редиректа на зарезервированном пути допустима: правило только про источник', () => {
     // Перенос на каталог, на служебную страницу и на главную — законные решения
     // человека. Запрет здесь сделал бы часть переносов невыполнимой.
-    for (const to of ['/otkrytki', '/podborki', '/o-proekte', '/']) {
+    for (const to of ['/otkrytki', '/otkrytki/prazdniki', '/o-proekte', '/']) {
       const result = plan({
         candidate: { from: '/otkrytki/staraya-otkrytka', to, code: '301' },
         existing: [],

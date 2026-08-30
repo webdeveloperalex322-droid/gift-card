@@ -164,12 +164,12 @@ describe('сборка модели из записей', () => {
     const { payload } = fakePayload({
       cards: [{ id: 1, slug: 'roza', status: 'published', title: 'Роза' }],
       collections: [
-        { id: 2, path: '/podborki/prazdniki/8-marta', status: 'review', title: '8 марта' },
+        { id: 2, path: '/otkrytki/prazdniki/8-marta', status: 'review', title: '8 марта' },
       ],
     });
     const model = await collectDashboardModel({ payload, req: viewer });
 
     expect(model.statuses[0]).toMatchObject({ collection: 'cards', published: 1 });
-    expect(model.review.rows[0]?.path).toBe('/podborki/prazdniki/8-marta');
+    expect(model.review.rows[0]?.path).toBe('/otkrytki/prazdniki/8-marta');
   });
 });

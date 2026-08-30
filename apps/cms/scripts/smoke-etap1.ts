@@ -206,7 +206,7 @@ async function main(): Promise<void> {
     created.collections.push(groupB.id);
 
     record('создание подборки в draft разрешено', groupA.status === 'draft' && groupA.robots === 'noindex,follow');
-    record('путь подборки собран хуком', groupA.path === '/podborki/smoke-gruppa', String(groupA.path));
+    record('путь подборки собран хуком', groupA.path === '/otkrytki/smoke-gruppa', String(groupA.path));
 
     /* --------------------------------------------------------------- */
     /* Э1-08: создание только в draft                                  */
@@ -937,7 +937,7 @@ async function main(): Promise<void> {
       'перенос поддерева дал по одному 301 на каждый путь',
       fresh.length === 2 &&
         fresh.every((doc) => doc.code === '301') &&
-        movedChild.path === '/podborki/smoke-gruppa-2/smoke-povod',
+        movedChild.path === '/otkrytki/smoke-gruppa-2/smoke-povod',
       `новых редиректов=${String(fresh.length)}: ${fresh.map((doc) => `${String(doc.from)}→${String(doc.to)}`).join(', ')}`,
     );
     record(

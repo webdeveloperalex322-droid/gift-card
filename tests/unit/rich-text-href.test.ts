@@ -18,9 +18,9 @@ import {
 
 describe('publicRichTextHref: что становится ссылкой', () => {
   it('путь от корня сайта — внутренняя ссылка', () => {
-    expect(publicRichTextHref('/podborki/prazdniki/8-marta')).toEqual({
+    expect(publicRichTextHref('/otkrytki/prazdniki/8-marta')).toEqual({
       external: false,
-      href: '/podborki/prazdniki/8-marta',
+      href: '/otkrytki/prazdniki/8-marta',
     });
     expect(publicRichTextHref('  /otkrytki/tyulpany  ')).toEqual({
       external: false,

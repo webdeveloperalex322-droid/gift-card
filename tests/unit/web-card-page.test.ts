@@ -110,8 +110,8 @@ describe('канонический путь записи', () => {
   it('переопределение администратора действует и приводится к канонической форме', () => {
     // Поле, которое шаблон не читает, делает решение администратора молча
     // недействующим: в админке значение есть, в разметке его нет.
-    expect(canonicalPathFor('/podborki/prazdniki/8-marta/', '/otkrytki/8-marta')).toBe(
-      '/podborki/prazdniki/8-marta',
+    expect(canonicalPathFor('/otkrytki/prazdniki/8-marta/', '/otkrytki/8-marta')).toBe(
+      '/otkrytki/prazdniki/8-marta',
     );
   });
 

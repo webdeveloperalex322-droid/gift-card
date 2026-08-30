@@ -264,7 +264,6 @@ test('адрес карты сайта из robots.txt отвечает 200 и �
 const MUST_STAY_CRAWLABLE: readonly { readonly path: string; readonly note: string }[] = [
   { path: '/', note: 'главная' },
   { path: '/otkrytki', note: 'каталог открыток' },
-  { path: '/podborki', note: 'раздел подборок' },
   { path: '/o-proekte', note: 'информационная страница (Ч-23 разрешает ей индексацию)' },
   { path: '/sitemap.xml', note: 'сама карта сайта' },
   {

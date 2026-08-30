@@ -55,7 +55,7 @@ const GROUP: CollectionCrumbNode = {
   parent: null,
   title: 'Праздники — открытки к праздникам',
   h1: 'Праздники',
-  path: '/podborki/prazdniki',
+  path: '/otkrytki/prazdniki',
 };
 
 const OCCASION: CollectionCrumbNode = {
@@ -63,7 +63,7 @@ const OCCASION: CollectionCrumbNode = {
   parent: 1,
   title: 'Открытки на 8 марта',
   h1: '8 марта',
-  path: '/podborki/prazdniki/8-marta',
+  path: '/otkrytki/prazdniki/8-marta',
 };
 
 const RECIPIENT: CollectionCrumbNode = {
@@ -71,7 +71,7 @@ const RECIPIENT: CollectionCrumbNode = {
   parent: 2,
   title: 'Открытки маме на 8 марта',
   h1: 'Маме на 8 марта',
-  path: '/podborki/prazdniki/8-marta/mame',
+  path: '/otkrytki/prazdniki/8-marta/mame',
 };
 
 /** Чтение подборок по фиксированному набору записей. Считает обращения. */
@@ -99,8 +99,8 @@ describe('звено из записи', () => {
   it('адрес берётся из сохранённого `path`, а не собирается заново', () => {
     // Значение расходится со slug записи намеренно: авторитетен именно `path`,
     // посчитанный CMS. Пересчёт здесь означал бы второй способ получить адрес.
-    expect(collectionCrumb({ ...OCCASION, path: '/podborki/prazdniki/vosmoe-marta' })?.path).toBe(
-      '/podborki/prazdniki/vosmoe-marta',
+    expect(collectionCrumb({ ...OCCASION, path: '/otkrytki/prazdniki/vosmoe-marta' })?.path).toBe(
+      '/otkrytki/prazdniki/vosmoe-marta',
     );
   });
 
@@ -142,8 +142,8 @@ describe('обход цепочки родителей', () => {
     const read = readerOf(GROUP, OCCASION, RECIPIENT);
 
     await expect(loadAncestors(RECIPIENT, read)).resolves.toEqual([
-      { label: 'Праздники', path: '/podborki/prazdniki' },
-      { label: '8 марта', path: '/podborki/prazdniki/8-marta' },
+      { label: 'Праздники', path: '/otkrytki/prazdniki' },
+      { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' },
     ]);
     expect(read.calls).toEqual([2, 1]);
   });
@@ -161,7 +161,7 @@ describe('обход цепочки родителей', () => {
 
     await expect(loadAncestors(RECIPIENT, read)).resolves.toEqual([
       null,
-      { label: '8 марта', path: '/podborki/prazdniki/8-marta' },
+      { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' },
     ]);
     // Двух запросов достаточно: выше недоступного звена идентификаторов нет.
     expect(read.calls).toEqual([2, 1]);
@@ -192,16 +192,16 @@ describe('крошки страницы подборки', () => {
 
     expect(trail.map((item) => [item.path, item.linked])).toEqual([
       ['/', true],
-      ['/podborki/prazdniki', true],
-      ['/podborki/prazdniki/8-marta', true],
-      ['/podborki/prazdniki/8-marta/mame', false],
+      ['/otkrytki/prazdniki', true],
+      ['/otkrytki/prazdniki/8-marta', true],
+      ['/otkrytki/prazdniki/8-marta/mame', false],
     ]);
   });
 
-  it('контейнер /podborki звеном не становится', async () => {
+  it('контейнер /otkrytki звеном не становится', async () => {
     const trail = await collectionBreadcrumbs(GROUP, readerOf(GROUP));
 
-    expect(trail.map((item) => item.path)).toEqual(['/', '/podborki/prazdniki']);
+    expect(trail.map((item) => item.path)).toEqual(['/', '/otkrytki/prazdniki']);
   });
 
   it('при обрыве остаются главная, доступные предки и сама подборка', async () => {
@@ -209,8 +209,8 @@ describe('крошки страницы подборки', () => {
 
     expect(trail.map((item) => item.path)).toEqual([
       '/',
-      '/podborki/prazdniki/8-marta',
-      '/podborki/prazdniki/8-marta/mame',
+      '/otkrytki/prazdniki/8-marta',
+      '/otkrytki/prazdniki/8-marta/mame',
     ]);
   });
 
@@ -227,9 +227,9 @@ describe('крошки страницы подборки', () => {
 
     expect(trail.map((item) => [item.path, item.linked])).toEqual([
       ['/', true],
-      ['/podborki/prazdniki', true],
-      ['/podborki/prazdniki/8-marta', true],
-      ['/podborki/prazdniki/8-marta/page/2', false],
+      ['/otkrytki/prazdniki', true],
+      ['/otkrytki/prazdniki/8-marta', true],
+      ['/otkrytki/prazdniki/8-marta/page/2', false],
     ]);
     expect(trail.at(-1)?.label).toBe('Страница 2');
   });
@@ -254,9 +254,9 @@ describe('крошки страницы карточки', () => {
 
     expect(trail.map((item) => [item.label, item.path, item.linked])).toEqual([
       ['Главная', '/', true],
-      ['Праздники', '/podborki/prazdniki', true],
-      ['8 марта', '/podborki/prazdniki/8-marta', true],
-      ['Маме на 8 марта', '/podborki/prazdniki/8-marta/mame', true],
+      ['Праздники', '/otkrytki/prazdniki', true],
+      ['8 марта', '/otkrytki/prazdniki/8-marta', true],
+      ['Маме на 8 марта', '/otkrytki/prazdniki/8-marta/mame', true],
       ['Открытка маме на 8 марта с тюльпанами', '/otkrytki/mame-tyulpany', false],
     ]);
   });

@@ -58,7 +58,7 @@ function collection(overrides: Partial<Collection> = {}): Collection {
     createdAt: '2026-01-01T00:00:00.000Z',
     metaDescription: 'Открытки на 8 Марта: подборка для мам, коллег и подруг.',
     nodeKind: 'occasion',
-    path: '/podborki/prazdniki/8-marta',
+    path: '/otkrytki/prazdniki/8-marta',
     robots: 'noindex,follow',
     slug: '8-marta',
     status: 'published',
@@ -136,8 +136,8 @@ describe('одна формула директивы на шаблон и на �
     expect(
       decideSitemapUrl(
         {
-          canonicalPath: '/podborki/prazdniki/8-marta/page/2',
-          pagePath: '/podborki/prazdniki/8-marta/page/2',
+          canonicalPath: '/otkrytki/prazdniki/8-marta/page/2',
+          pagePath: '/otkrytki/prazdniki/8-marta/page/2',
           respondsOk: true,
           robots,
         },
@@ -153,9 +153,9 @@ describe('одна формула директивы на шаблон и на �
     const node = collection({ robots: 'index,follow' });
     const landing = decideSitemapUrl(
       {
-        canonicalPath: '/podborki/prazdniki/8-marta',
+        canonicalPath: '/otkrytki/prazdniki/8-marta',
         lastmod: '2026-03-01T12:00:00.000Z',
-        pagePath: '/podborki/prazdniki/8-marta',
+        pagePath: '/otkrytki/prazdniki/8-marta',
         respondsOk: true,
         robots: collectionLandingRobots(node),
       },
@@ -164,7 +164,7 @@ describe('одна формула директивы на шаблон и на �
 
     expect(landing.included).toBe(true);
     expect(landing.included ? landing.url.loc : null).toBe(
-      'https://karta.test/podborki/prazdniki/8-marta',
+      'https://karta.test/otkrytki/prazdniki/8-marta',
     );
     expect(landing.included ? landing.url.lastmod : null).toBe('2026-03-01T12:00:00.000Z');
   });
@@ -177,8 +177,8 @@ describe('одна формула директивы на шаблон и на �
     expect(
       decideSitemapUrl(
         {
-          canonicalPath: '/podborki/prazdniki/8-marta',
-          pagePath: '/podborki/prazdniki/8-marta',
+          canonicalPath: '/otkrytki/prazdniki/8-marta',
+          pagePath: '/otkrytki/prazdniki/8-marta',
           respondsOk: false,
           robots: collectionLandingRobots(node),
         },

@@ -82,7 +82,7 @@ describe('validateCanonicalOverride', () => {
 
   it('путь от корня принимается', () => {
     expect(validateCanonicalOverride('/otkrytki/otkrytka-mame')).toBe(true);
-    expect(validateCanonicalOverride('/podborki/prazdniki/8-marta')).toBe(true);
+    expect(validateCanonicalOverride('/otkrytki/prazdniki/8-marta')).toBe(true);
   });
 
   it('абсолютный URL отклоняется: хост собирается из SITE_URL', () => {

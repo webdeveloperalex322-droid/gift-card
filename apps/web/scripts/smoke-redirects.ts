@@ -685,8 +685,7 @@ async function main(): Promise<void> {
     record(
       '410 содержит заголовок и навигацию',
       /<h1[^>]*>/i.test(goneResponse.body) &&
-        goneResponse.body.includes('href="/otkrytki"') &&
-        goneResponse.body.includes('href="/podborki"'),
+        goneResponse.body.includes('href="/otkrytki"'),
       `${String(Buffer.byteLength(goneResponse.body))} байт`,
     );
     record(

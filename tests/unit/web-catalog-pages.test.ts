@@ -1,7 +1,7 @@
 /**
- * Каталоги разделов `/otkrytki` и `/podborki` и навигация сайта (задача Э3-08).
+ * Единый каталог разделов `/otkrytki` и навигация сайта (задача Э3-08).
  *
- * Норма: `CLAUDE.md` — «Правила URL» (`/otkrytki` и `/podborki` — контейнеры
+ * Норма: `CLAUDE.md` — «Правила URL» (`/otkrytki` — контейнер
  * реестра зарезервированных маршрутов, пути под ними — норма), «Рендеринг»
  * (навигация только `<a href>`, всё в HTML-ответе сервера), «Правила индексации»
  * (открыть страницу в `index,follow` может только человек), ТЗ §7.6 (крошки), а
@@ -121,11 +121,10 @@ describe('крошки каталога', () => {
 });
 
 describe('навигация сайта', () => {
-  it('в меню есть один каталог — /otkrytki без старого /podborki', () => {
+  it('в меню есть ровно один каталог — /otkrytki', () => {
     const paths = SITE_NAV.map((link) => link.path);
 
-    expect(paths).toContain('/otkrytki');
-    expect(paths).not.toContain('/podborki');
+    expect(paths.filter((path) => path === '/otkrytki')).toHaveLength(1);
   });
 
   it('первым звеном меню идёт главная', () => {

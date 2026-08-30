@@ -19,7 +19,7 @@
  *     навигацию» — условие п. 5.1 ТЗ, а меню печатает `BaseLayout`. Значит,
  *     каждый шаблон страницы обязан рендерить именно этот layout: шаблон со
  *     своей разметкой `<html>` выпал бы из навигации молча;
- *   - **меню ведёт на оба каталога** — `/otkrytki` и `/podborki` (задача Э3-08);
+ *   - **меню ведёт на единый каталог** — `/otkrytki` (задача Э3-08);
  *   - **клиентского JS в шаблонах нет.** Ни одной директивы `client:*`: острова
  *     добавляются точечно и осознанно, а не появляются в шаблоне списка.
  *
@@ -178,8 +178,7 @@ describe('инварианты всех шаблонов страниц', () => 
     expect(nav).toMatch(/<a\b[^>]*href=\{link\.path\}/);
     expect(markupOf(nav)).not.toContain('href="#"');
     expect(markupOf(nav)).not.toMatch(/<button\b/);
-    expect(paths).toContain('/otkrytki');
-    expect(paths).not.toContain('/podborki');
+    expect(paths.filter((path) => path === '/otkrytki')).toHaveLength(1);
   });
 
   it('BaseLayout печатает подвал, а подвал ведёт на все три служебные страницы', () => {

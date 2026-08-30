@@ -312,7 +312,7 @@ describe('родитель вне пространства подборок и �
         planCollectionNode({
           candidate: {
             nodeKind: 'occasion',
-            parent: { id: 9, nodeKind: 'group', path: '/podborki/prazdniki' },
+            parent: { id: 9, nodeKind: 'group', path: '/drugoe/prazdniki' },
             slug: '8-marta',
           },
           env,

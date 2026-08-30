@@ -94,11 +94,11 @@ test('изображение: полный набор атрибутов раз�
 
 test('ссылки: href и видимый текст', () => {
   const links = anchorLinks(
-    '<nav><a class="x" href="/podborki/8-marta"><span>Открытки к&nbsp;8 марта</span></a>' +
+    '<nav><a class="x" href="/otkrytki/prazdniki/8-marta"><span>Открытки к&nbsp;8 марта</span></a>' +
       '<a>без href</a></nav>',
   );
   expect(links).toHaveLength(2);
-  expect(links[0]?.href).toBe('/podborki/8-marta');
+  expect(links[0]?.href).toBe('/otkrytki/prazdniki/8-marta');
   expect(links[0]?.text, 'Текст ссылки — без вложенных тегов и без сущностей.').toBe(
     'Открытки к 8 марта',
   );
