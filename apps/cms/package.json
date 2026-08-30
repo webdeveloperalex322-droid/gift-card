@@ -12,7 +12,7 @@
     "audit:links": "payload run ./scripts/run-link-audit.ts",
     "audit:links:scheduled": "payload jobs:run --handle-schedules --queue seo-audit",
     "build": "next build",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && tsc --noEmit -p ../../tests/api/tsconfig.json",
     "dev": "next dev --port 3010",
     "ensure-db": "node scripts/ensure-database.mjs",
     "generate:importmap": "payload generate:importmap",

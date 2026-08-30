@@ -1,4 +1,10 @@
-import type { CollectionBeforeValidateHook, CollectionConfig, TypeWithID } from 'payload';
+import type {
+  CollectionBeforeOperationHook,
+  CollectionBeforeValidateHook,
+  CollectionConfig,
+  TypeWithID,
+} from 'payload';
+import { APIError } from 'payload';
 
 import {
   adminOnlyAccess,
@@ -6,7 +12,7 @@ import {
   adminPanelAccess,
   authenticatedAccess,
 } from '../access/policies';
-import { ROLES, isAdmin } from '../access/roles';
+import { ROLES, type RoledUser, isAdmin } from '../access/roles';
 
 /**
  * Пользователи и API-ключи (задача Э1-03, ТЗ §4 и §9).
@@ -31,6 +37,30 @@ import { ROLES, isAdmin } from '../access/roles';
  *     принадлежит пользователю и наследует его роль. Отдельной коллекции
  *     `api-keys` в модели нет — иначе роль ключа и роль пользователя могли бы
  *     разойтись, и разбор «кто это сделал» перестал бы быть однозначным.
+ *
+ * ЗАДАЧА Э6-01 закрыла три дыры в этой картине. Все три существовали потому, что
+ * поля API-ключа Payload добавляет в коллекцию САМ (`auth/baseFields/apiKey.js`)
+ * и БЕЗ собственного access control — они наследовали правило коллекции
+ * «свою запись правит любой аутентифицированный», задуманное для смены пароля:
+ *
+ *   1. **сервисный аккаунт управлял своим ключом.** `PATCH /api/users/<свой id>`
+ *      с полями `enableAPIKey`/`apiKey` проходил: `ai-editor` мог выпустить себе
+ *      новый ключ, перевыпустить существующий или отключить его. ТЗ §11 прямо
+ *      относит «пользователей, ключи» к тому, чего сервисный аккаунт не трогает;
+ *   2. **чужой ключ читался в открытом виде.** У поля `apiKey` есть хук
+ *      `afterRead`, расшифровывающий значение, а `access.read` коллекции
+ *      открыт любому аутентифицированному (это нужно, чтобы админка показывала
+ *      автора записи в `seo-history`). Значит `GET /api/users` от имени
+ *      `ai-editor` отдавал ключи ВСЕХ пользователей, включая администраторов;
+ *   3. **отзыв ключа держался на побочном эффекте.** Стратегия аутентификации
+ *      Payload ищет пользователя ТОЛЬКО по `apiKeyIndex` и `enableAPIKey` не
+ *      проверяет вовсе. Обнуляет индекс хук поля `apiKeyIndex` — но лишь тогда,
+ *      когда `enableAPIKey === false` пришло В ТОМ ЖЕ запросе. Запрос, где
+ *      прислан один `apiKey`, оставлял флаг выключенным, а индекс — рабочим:
+ *      достижимое состояние «ключ отозван, но работает».
+ *
+ * Закрыто тремя средствами, и каждое нужно отдельно (см. {@link API_KEY_FIELDS},
+ * {@link forbiddenAccountFields}, {@link resolveApiKeyIndex}).
  *
  * Чего здесь нет: rate limiting на ключ (Ч-14, задача Э6-03), 2FA для
  * администраторов (ТЗ §11, этап 7) и запрета удалить последнего администратора
@@ -116,6 +146,188 @@ const assignFirstUserRole: CollectionBeforeValidateHook<UserRecord> = async ({
 
   return { ...data, role };
 };
+
+/* ------------------------------------------------------------------ */
+/* Э6-01. API-ключ: выпуск, отзыв, чтение                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Поля API-ключа, которые Payload добавляет в коллекцию сам.
+ *
+ * Имена перечислены здесь ОДИН раз и используются и в объявлении полей, и в
+ * громком отказе, и в тестах: сравнение с литералом в трёх местах даёт не
+ * ошибку компиляции, а тихо пропущенное поле.
+ */
+export const API_KEY_FIELDS = ['enableAPIKey', 'apiKey', 'apiKeyIndex'] as const;
+
+/**
+ * Поля, которыми управляется САМ аккаунт: ключ и роль.
+ *
+ * Роль стоит рядом с ключом не для симметрии: ключ наследует роль владельца, и
+ * право сменить роль равносильно праву выпустить ключ с другими правами.
+ */
+export const ACCOUNT_CONTROL_FIELDS = [...API_KEY_FIELDS, 'role'] as const;
+
+export type AccountControlField = (typeof ACCOUNT_CONTROL_FIELDS)[number];
+
+/**
+ * Какие защищённые поля пользователь пытается задать, не имея на это права.
+ *
+ * Чистая функция ПО СЫРЫМ данным запроса — та же роль, что у
+ * `assertIncomingChangeAllowed` в статусной модели: правило доступа к полю у
+ * Payload молчаливое (поле вырезается, ответ 200 с прежним значением), а
+ * сервисный аккаунт обязан отличать «применено» от «проигнорировано». Поэтому
+ * рядом с правилом поля стоит громкий отказ на входе операции.
+ *
+ * Проверяется НАЛИЧИЕ ключа в объекте, а не истинность значения:
+ * `enableAPIKey: false` — это отключение чужого ключа, то есть тоже действие
+ * администратора.
+ */
+export function forbiddenAccountFields(
+  incoming: Readonly<Record<string, unknown>>,
+  user: RoledUser | null | undefined,
+): readonly AccountControlField[] {
+  if (isAdmin(user)) {
+    return [];
+  }
+  return ACCOUNT_CONTROL_FIELDS.filter((field) => field in incoming);
+}
+
+/**
+ * Итоговое значение `apiKeyIndex` — единственного поля, по которому Payload
+ * находит владельца ключа при аутентификации.
+ *
+ * ЗАЧЕМ ОТДЕЛЬНОЕ ПРАВИЛО, ЕСЛИ ЕСТЬ ПРАВА ПОЛЯ. Права поля выполняются ПОСЛЕ
+ * хуков поля и в рамках Promise.all по всем полям сразу (проверено по
+ * исходникам, `payload/dist/fields/hooks/beforeValidate/`). Хук поля
+ * `apiKeyIndex` читает `data.apiKey` из общего объекта данных, а право поля
+ * `apiKey` этот самый ключ из объекта удаляет — и что случится раньше, зависит
+ * от числа микротактов внутри чужого кода. Полагаться на это нельзя: в
+ * неудачном порядке индекс считался бы от значения, которое права уже
+ * отклонили. Функция снимает вопрос: она вызывается на фазе `beforeValidate`
+ * КОЛЛЕКЦИИ, то есть после того, как все поля отработали, и решает по итоговым
+ * данным.
+ *
+ * Правило состоит из двух частей:
+ *
+ *   1. `enableAPIKey` не равен `true` → индекса нет. Это и есть отзыв ключа,
+ *      выраженный состоянием, а не последовательностью действий: сама стратегия
+ *      Payload флаг не проверяет, поэтому «ключ выключен» обязано означать
+ *      «искать нечего»;
+ *   2. `apiKey` в запросе НЕ приходил → индекс остаётся прежним. Пересчитывать
+ *      его не от чего (в записи ключ хранится зашифрованным), а принимать
+ *      присланный индекс нельзя — это и была бы подстановка чужого ключа.
+ *
+ * Следствие, названное прямо: повторное включение `enableAPIKey` без нового
+ * `apiKey` ключ НЕ воскрешает — индекс остаётся пустым, пока администратор не
+ * выпустит ключ заново. Отзыв в этой модели окончателен, и это осознанный
+ * выбор: «включил обратно — старый ключ снова принимается» означало бы, что
+ * скомпрометированный ключ живёт до тех пор, пока о нём не вспомнят.
+ *
+ * @param incoming данные ПОСЛЕ фазы полей: то, что реально будет записано
+ * @param stored предыдущее состояние записи; `null` при создании
+ */
+export function resolveApiKeyIndex(input: {
+  readonly incoming: Readonly<Record<string, unknown>>;
+  readonly stored: Readonly<Record<string, unknown>> | null;
+}): string | null {
+  const { incoming, stored } = input;
+
+  const enabled = 'enableAPIKey' in incoming ? incoming.enableAPIKey : stored?.enableAPIKey;
+  if (enabled !== true) {
+    return null;
+  }
+
+  const source = 'apiKey' in incoming ? incoming.apiKeyIndex : stored?.apiKeyIndex;
+  return typeof source === 'string' && source !== '' ? source : null;
+}
+
+/**
+ * Громкий отказ на попытку задать чужие или свои служебные поля.
+ *
+ * `overrideAccess` берётся из аргументов операции, а не угадывается: серверные
+ * хуки и сидирование первого администратора ходят через Local API, где проверки
+ * доступа отключены по определению. Правило закрывает ровно внешний путь — REST,
+ * GraphQL и форму админки, — то есть тот, по которому ходит внешний AI-редактор.
+ *
+ * ГРАНИЦА НАЗВАНА ТОЧНО, БЕЗ ОКРУГЛЕНИЯ. Есть ровно один внешний маршрут, на
+ * котором это правило не срабатывает, и он не наш: `POST
+ * /api/users/first-register`. Операция `registerFirstUser` самого Payload зовёт
+ * `payload.create` с `overrideAccess: true` (проверено по исходникам,
+ * `payload/dist/auth/operations/registerFirstUser.js`), поэтому и хук выше, и
+ * права полей `role`/`apiKey`/`enableAPIKey` на ней не действуют: анонимный
+ * запрос может задать роль и сразу выпустить себе API-ключ.
+ *
+ * Почему это не закрывается здесь и не считается дырой: маршрут работает ТОЛЬКО
+ * пока таблица `users` пуста — сам Payload отвечает `Forbidden`, как только в
+ * ней появляется первая запись. Пустая таблица — это установка системы, где
+ * защищать ещё нечего и не от кого: тот, кто выполнил этот запрос, становится
+ * единственным администратором, а «сделать себя администратором» — ровно то, чем
+ * этот маршрут и является. Разграничение прав начинается с существования второго
+ * аккаунта, и с этого момента правило действует без исключений.
+ *
+ * Практически окно закрыто ещё и тем, что первый администратор создаётся при
+ * старте CMS из окружения (`seedFirstAdmin` в `onInit`, решение Ч-16): к моменту,
+ * когда установка отвечает на запросы, таблица уже не пуста. Но это свойство
+ * развёртывания, а не правило коллекции, поэтому названо отдельно — установка,
+ * поднятая наружу без `PAYLOAD_ADMIN_PASSWORD`, оставляет окно открытым, и
+ * закрыть его кодом здесь нельзя.
+ */
+const guardAccountFields: CollectionBeforeOperationHook = ({ args, operation, req }) => {
+  if (operation !== 'create' && operation !== 'update' && operation !== 'updateByID') {
+    return args;
+  }
+
+  const record: Record<string, unknown> =
+    typeof args === 'object' && args !== null ? { ...args } : {};
+
+  if (record.overrideAccess === true) {
+    return args;
+  }
+
+  const incoming: Record<string, unknown> =
+    typeof record.data === 'object' && record.data !== null
+      ? { ...(record.data as Record<string, unknown>) }
+      : {};
+
+  const forbidden = forbiddenAccountFields(incoming, req.user);
+  if (forbidden.length === 0) {
+    return args;
+  }
+
+  throw new APIError(
+    `Поля аккаунта (${forbidden.join(', ')}) задаёт только администратор (ТЗ §11: ` +
+      'пользователей и ключи сервисный аккаунт не трогает). API-ключ принадлежит ' +
+      'пользователю и наследует его роль, поэтому право выпустить, перевыпустить или ' +
+      'отключить ключ — это то же самое право, что назначить роль. Запрос отклонён ' +
+      'целиком, а не выполнен частично: молчаливое срезание поля оставило бы вызывающего ' +
+      'в уверенности, что операция применена.',
+    403,
+    { rule: 'account-fields-require-admin' },
+    true,
+  );
+};
+
+/**
+ * Приводит `apiKeyIndex` в согласие с флагом и присланным ключом.
+ *
+ * Стоит на фазе `beforeValidate` КОЛЛЕКЦИИ: она выполняется строго после всех
+ * хуков и прав полей (порядок Payload: beforeValidate-поля → beforeValidate-
+ * коллекция → beforeChange-коллекция → beforeChange-поля), поэтому здесь видно
+ * итоговое состояние, а не гонку.
+ */
+const sealApiKeyIndex: CollectionBeforeValidateHook<UserRecord> = ({ data, originalDoc }) => {
+  if (data === undefined) {
+    return data;
+  }
+  const stored: Record<string, unknown> | null =
+    typeof originalDoc === 'object' && originalDoc !== null
+      ? { ...(originalDoc as Record<string, unknown>) }
+      : null;
+
+  return { ...data, apiKeyIndex: resolveApiKeyIndex({ incoming: data, stored }) };
+};
+
 export const Users: CollectionConfig = {
   slug: 'users',
   labels: {
@@ -148,9 +360,67 @@ export const Users: CollectionConfig = {
     unlock: adminOnlyAccess,
   },
   hooks: {
-    beforeValidate: [assignFirstUserRole],
+    // Громкий отказ на СЫРЫХ данных — до того, как права полей молча срежут
+    // защищённые значения.
+    beforeOperation: [guardAccountFields],
+    // Порядок значим: роль подставляется первому пользователю, и только потом
+    // приводится в согласие индекс ключа — он зависит от итоговых данных.
+    beforeValidate: [assignFirstUserRole, sealApiKeyIndex],
   },
   fields: [
+    /*
+     * Поля API-ключа объявлены ЯВНО, хотя Payload добавляет их сам.
+     *
+     * Так к ним удаётся привязать access control: `mergeBaseFields` сливает
+     * одноимённое поле конфига с базовым, и свойства конфига выигрывают
+     * (проверено по `payload/dist/fields/mergeBaseFields.js`). Хуки базового
+     * поля при этом сохраняются — здесь их нет, значит шифрование ключа
+     * (`beforeChange`), расшифровка (`afterRead`) и расчёт индекса
+     * (`beforeValidate`) остаются на месте.
+     */
+    {
+      name: 'enableAPIKey',
+      type: 'checkbox',
+      access: {
+        create: adminOnlyFieldAccess,
+        update: adminOnlyFieldAccess,
+        // `read` не ограничен намеренно: это флаг «у аккаунта есть ключ», а не
+        // сам ключ. Закрывать его — значит прятать от админки колонку списка,
+        // ничего при этом не защищая.
+      },
+      admin: {
+        description:
+          'Выдан ли аккаунту API-ключ. Включает и выключает только admin: ключ наследует ' +
+          'роль владельца, поэтому распоряжаться им — то же право, что назначать роли.',
+      },
+    },
+    {
+      name: 'apiKey',
+      type: 'text',
+      access: {
+        create: adminOnlyFieldAccess,
+        // Значение расшифровывается хуком afterRead самого Payload, а список
+        // пользователей читает любой аутентифицированный (это нужно, чтобы
+        // админка показывала автора в seo-history). Без этого правила сервисный
+        // аккаунт одним GET получал бы ключи всех, включая администраторов.
+        read: adminOnlyFieldAccess,
+        update: adminOnlyFieldAccess,
+      },
+      admin: {
+        description:
+          'Сам ключ. Читает и меняет только admin — в том числе у своей записи: ключ ' +
+          'выдаётся аккаунту, а не принадлежит ему.',
+      },
+    },
+    {
+      name: 'apiKeyIndex',
+      type: 'text',
+      access: {
+        create: adminOnlyFieldAccess,
+        read: adminOnlyFieldAccess,
+        update: adminOnlyFieldAccess,
+      },
+    },
     {
       name: 'role',
       type: 'select',
