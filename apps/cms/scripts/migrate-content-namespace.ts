@@ -53,9 +53,10 @@ export function assertNoPublishedLegacyCollections(
   const blocked = collections.flatMap((doc) => {
     const current = typeof doc.path === 'string' ? doc.path : null;
     const future = projectedPath('collections', doc);
-    const wasPublished =
-      doc.publishedAt !== undefined && doc.publishedAt !== null && doc.publishedAt !== '';
-    return wasPublished && current !== null && future !== null && current !== future
+    const isOrWasPublished =
+      doc.status === 'published' ||
+      (doc.publishedAt !== undefined && doc.publishedAt !== null && doc.publishedAt !== '');
+    return isOrWasPublished && current !== null && future !== null && current !== future
       ? [{ current, doc, future }]
       : [];
   });

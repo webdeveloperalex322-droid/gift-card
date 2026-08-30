@@ -59,6 +59,19 @@ describe('migrate-content-namespace: безопасный режим запус�
     ).toThrow(/7.*8 марта.*\/podborki\/prazdniki\/8-marta.*\/otkrytki\/prazdniki\/8-marta/i);
   });
 
+  it('path lock блокирует current published legacy URL даже без publishedAt', () => {
+    expect(() =>
+      assertNoPublishedLegacyCollections([
+        {
+          id: 8,
+          path: '/podborki/prazdniki/9-maya',
+          status: 'published',
+          title: '9 мая',
+        },
+      ]),
+    ).toThrow(/8.*9 мая.*\/podborki\/prazdniki\/9-maya.*\/otkrytki\/prazdniki\/9-maya/i);
+  });
+
   it('для пересборки выбирает только draft/review верхнего уровня старого namespace', () => {
     expect(
       topLevelLegacyCollectionIds([
@@ -109,5 +122,24 @@ describe('migrate-content-namespace: безопасный режим запус�
     expect(stand.reads).toContain('content-path-claims');
     expect(stand.updates).toEqual([]);
     log.mockRestore();
+  });
+
+  it('apply preflight отклоняет current published legacy descendant до любого update', async () => {
+    const stand = migrationPayloadStand({
+      collections: [
+        {
+          id: 8,
+          parent: 7,
+          path: '/podborki/prazdniki/9-maya',
+          status: 'published',
+          title: '9 мая',
+        },
+      ],
+    });
+
+    await expect(runContentNamespaceMigration(stand.payload, 'apply')).rejects.toThrow(
+      /podborki.*одиночного 301/i,
+    );
+    expect(stand.updates).toEqual([]);
   });
 });
