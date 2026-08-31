@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node 'D:\\_WORK_\\laragon_2025\\www\\otkritka\\.codex\\hooks\\seo-touch-reminder.mjs'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node 'D:\\_WORK_\\laragon_2025\\www\\otkritka\\.codex\\hooks\\finish-reminder.mjs'"
+          }
+        ]
+      }
+    ]
+  }
+}
