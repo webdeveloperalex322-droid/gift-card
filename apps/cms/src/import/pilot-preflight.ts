@@ -10,7 +10,11 @@ import { computeImageRevision } from '@otkritka/images';
 import { validateSiteContent } from '../../../../scripts/content-import/schema.js';
 import type { CardSeed, CollectionSeed } from '../../../../scripts/content-import/schema.js';
 import { buildCardPath, CARD_PATH_PREFIX } from '../seo/paths';
-import { pilotCardImportKey, pilotImageImportKey } from './pilot-import-identity';
+import {
+  pilotCardImportKey,
+  pilotCollectionImportKey,
+  pilotImageImportKey,
+} from './pilot-import-identity';
 import {
   pilotIntroDocument,
   type ExistingCard,
@@ -109,6 +113,7 @@ function expectedCollectionFields(
   collectionsByKey: ReadonlyMap<string, CollectionSeed>,
 ): Readonly<Record<string, unknown>> {
   return {
+    pilotImportKey: pilotCollectionImportKey(seed.key),
     slug: seed.slug,
     path: seed.path,
     nodeKind: seed.nodeKind,
@@ -135,6 +140,7 @@ export function collectionManagedFieldDifferences(
 
 function actualCollectionFields(existing: ExistingCollection): Readonly<Record<string, unknown>> {
   return {
+    pilotImportKey: existing.pilotImportKey ?? null,
     slug: existing.slug,
     path: existing.path,
     nodeKind: existing.nodeKind,
@@ -240,7 +246,9 @@ async function checkCollection(
   collectionsByKey: ReadonlyMap<string, CollectionSeed>,
 ): Promise<CheckedRecord> {
   const errors: string[] = [];
-  const [existing, cardCollision, claim] = await Promise.all([
+  const importKey = pilotCollectionImportKey(seed.key);
+  const [existing, pathMatch, cardCollision, claim] = await Promise.all([
+    store.findCollectionByPilotImportKey(importKey),
     store.findCollectionByPath(seed.path),
     (() => {
       const slug = cardSlugForPath(seed.path);
@@ -251,6 +259,11 @@ async function checkCollection(
   if (cardCollision !== null) {
     errors.push(
       `Collection ${seed.key} final path ${seed.path} is occupied by card ${String(cardCollision.id)}.`,
+    );
+  }
+  if (pathMatch !== null && (existing === null || String(pathMatch.id) !== String(existing.id))) {
+    errors.push(
+      `Collection ${seed.key} final path ${seed.path} is occupied by collection ${String(pathMatch.id)} with another import identity.`,
     );
   }
   if (existing !== null) {
@@ -264,7 +277,10 @@ async function checkCollection(
     const state = statusError('Collection', seed.key, existing);
     if (state !== null) errors.push(state);
   }
-  const problem = claimError(`Collection ${seed.key}`, seed.path, 'collections', existing, claim);
+  const identityAtExpectedPath = existing !== null && existing.path === seed.path ? existing : null;
+  const problem = pathMatch !== null && identityAtExpectedPath === null
+    ? null
+    : claimError(`Collection ${seed.key}`, seed.path, 'collections', identityAtExpectedPath, claim);
   if (problem !== null) errors.push(problem);
   return {
     errors,

@@ -123,6 +123,19 @@ describe('collections: базовые свойства коллекции', () =
   });
 });
 
+describe('collections: служебная pilot identity', () => {
+  it('хранит неизменяемый уникальный ключ импорта только для системного хука', () => {
+    const field = findField(Collections.fields, 'pilotImportKey');
+    expect('unique' in field ? field.unique : undefined).toBe(true);
+    expect('index' in field ? field.index : undefined).toBe(true);
+    expect('access' in field ? field.access?.create : undefined).toBe(systemFieldAccess);
+    expect('access' in field ? field.access?.update : undefined).toBe(systemFieldAccess);
+    expect('admin' in field && field.admin && 'hidden' in field.admin
+      ? field.admin.hidden
+      : undefined).toBe(true);
+  });
+});
+
 describe('collections: дефолты новой записи', () => {
   it('статус по умолчанию — draft', () => {
     const status = findField(Collections.fields, 'status');
@@ -183,11 +196,11 @@ describe('collections: уникальность итогового пути', ()
     // Правила индексации у подборок и карточек должны быть одними и теми же,
     // поэтому проверяется факт подключения ОБЩЕЙ фабрики, а не локальных копий.
     expect(Collections.hooks?.beforeOperation).toHaveLength(1);
-    // Четыре хука beforeValidate: системный ключ path claim, статусная модель,
-    // проверка дублей метатегов
+    // Пять хуков beforeValidate: неизменяемая pilot identity, системный ключ
+    // path claim, статусная модель, проверка дублей метатегов
     // (Э5-01, оба из общей фабрики) и проверка наполненности узла (Ч-06,
     // п. 5.1) — последняя локальна, потому что подсчёт открыток требует базы.
-    expect(Collections.hooks?.beforeValidate).toHaveLength(4);
+    expect(Collections.hooks?.beforeValidate).toHaveLength(5);
   });
 
   it('удаление узла с вложенными перехватывается хуком', () => {

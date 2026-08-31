@@ -37,6 +37,7 @@ export interface ExistingCard {
 
 export interface ExistingCollection {
   id: number | string;
+  pilotImportKey?: string | null;
   updatedAt?: string;
   path: string;
   pathClaimKey: string | null;
@@ -73,6 +74,7 @@ export interface PilotImportStore {
   findCardByPilotImportKey(key: string): Promise<ExistingCard | null>;
   findCardBySlug(slug: string): Promise<ExistingCard | null>;
   findImageByPilotImportKey(key: string): Promise<ExistingImage | null>;
+  findCollectionByPilotImportKey(key: string): Promise<ExistingCollection | null>;
   findCollectionByPath(path: string): Promise<ExistingCollection | null>;
   findContentPathClaimByPath(path: string): Promise<ExistingContentPathClaim | null>;
 }

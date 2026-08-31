@@ -16,6 +16,10 @@ export function pilotImageImportKey(pilotId: string): string {
   return `${PILOT_IMPORT_PREFIX}:image:${pilotId}`;
 }
 
+export function pilotCollectionImportKey(key: string): string {
+  return `${PILOT_IMPORT_PREFIX}:collection:${key}`;
+}
+
 export function trustedPilotImportContext(
   key: string,
   actorId: number | string,
@@ -29,7 +33,8 @@ function trustedClaim(context: unknown): TrustedPilotImportContext | null {
   if (typeof value !== 'object' || value === null) return null;
   const { actorId, key } = value as Partial<TrustedPilotImportContext>;
   if ((typeof actorId !== 'number' && typeof actorId !== 'string') ||
-      typeof key !== 'string' || !/^pilot-2026-08:(?:card|image):\d{2}$/u.test(key)) return null;
+      typeof key !== 'string' ||
+      !/^pilot-2026-08:(?:(?:card|image):\d{2}|collection:[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(key)) return null;
   return { actorId, key };
 }
 

@@ -77,6 +77,10 @@ function fakeStore(input: {
   const collections = new Map(
     (input.collections ?? []).map((collection) => [collection.path, collection]),
   );
+  const collectionsByImportKey = new Map((input.collections ?? []).flatMap((collection) => {
+    const key = (collection as ExistingCollection & { pilotImportKey?: string | null }).pilotImportKey;
+    return typeof key === 'string' ? [[key, collection] as const] : [];
+  }));
   const claims = new Map((input.claims ?? []).map((claim) => [claim.path, claim]));
   const store: FakeStore = {
     claimLookups: [],
@@ -96,6 +100,9 @@ function fakeStore(input: {
     },
     findImageByPilotImportKey() {
       return Promise.resolve(null);
+    },
+    findCollectionByPilotImportKey(key: string) {
+      return Promise.resolve(collectionsByImportKey.get(key) ?? null);
     },
     findCollectionByPath(path) {
       return Promise.resolve(collections.get(path) ?? null);
@@ -321,6 +328,24 @@ describe('pilot import preflight', () => {
 
     expect(report.blockingErrors).toContain(
       `Collection ${first.key} existing record ${String(existing.id)} differs in managed field description.`,
+    );
+  });
+
+  it('finds a collection by immutable pilot identity and blocks a manually changed path', async () => {
+    const root = await assetRoot();
+    const first = matrix.collections[0];
+    if (first === undefined) throw new Error('Expected a pilot collection.');
+    const existing = existingCollectionFor(first) as ExistingCollection & { pilotImportKey: string };
+    existing.pilotImportKey = `pilot-2026-08:collection:${first.key}`;
+    existing.path = '/otkrytki/ruchnoy-perenos';
+
+    const report = await runPilotPreflight(input(root, fakeStore({ collections: [existing] })));
+
+    expect(report.records.find((record) => record.key === `collection:${first.key}`)).toMatchObject({
+      state: 'blocked',
+    });
+    expect(report.blockingErrors).toContain(
+      `Collection ${first.key} existing record ${String(existing.id)} differs in managed field path.`,
     );
   });
 
@@ -610,6 +635,7 @@ function existingCollectionFor(
     : matrix.collections.find((item) => item.key === seed.parentKey)?.path ?? null;
   return {
     id: `collection-${seed.key}`,
+    pilotImportKey: `pilot-2026-08:collection:${seed.key}`,
     description: seed.description,
     h1: seed.h1,
     intro: pilotIntroDocument(seed.intro),

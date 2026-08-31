@@ -23,6 +23,7 @@ import {
 import { ROLES, type RoledUser } from '../access/roles';
 import type { Collection } from '../payload-types';
 import { publicRichTextEditor, publicRichTextHooks } from '../editor/public-rich-text';
+import { assignTrustedPilotImportKey } from '../import/pilot-import-identity';
 import { COLLECTION_PATH_PREFIX, contentDocumentPath } from '../seo/paths';
 import { isIndexableRobots, isRobotsDirective } from '../seo/robots';
 import {
@@ -596,6 +597,14 @@ function relatedFilterOptions({ id }: FilterOptionsProps<Collection>): Where | b
  */
 const collectionFields: Field[] = [
   {
+    name: 'pilotImportKey',
+    type: 'text',
+    unique: true,
+    index: true,
+    access: { create: systemFieldAccess, update: systemFieldAccess },
+    admin: { hidden: true },
+  },
+  {
     name: 'title',
     type: 'text',
     required: true,
@@ -871,6 +880,7 @@ export const Collections: CollectionConfig = {
     // review, полнота полей), и только потом тратится запрос к базе на подсчёт
     // открыток.
     beforeValidate: [
+      assignTrustedPilotImportKey(),
       assignContentPathClaimKey,
       ...collectionContentHooks.beforeValidate,
       assertPublishableVolume,

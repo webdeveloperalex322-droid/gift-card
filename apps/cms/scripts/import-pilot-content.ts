@@ -39,6 +39,7 @@ import { pilotIntroDocument } from '../src/import/pilot-types';
 import { buildCardPath } from '../src/seo/paths';
 import {
   pilotCardImportKey,
+  pilotCollectionImportKey,
   pilotImageImportKey,
   trustedPilotImportContext,
 } from '../src/import/pilot-import-identity';
@@ -247,6 +248,7 @@ function toExistingImage(doc: CardImage) {
 function toExistingCollection(doc: Collection): ExistingCollection {
   return {
     id: doc.id,
+    pilotImportKey: doc.pilotImportKey ?? null,
     updatedAt: doc.updatedAt,
     description: doc.description ?? null,
     h1: doc.h1 ?? null,
@@ -301,6 +303,14 @@ export function createPayloadPilotImportStore(payload: Payload, actor: User): Pi
       const doc = result.docs[0];
       return doc === undefined ? null : toExistingImage(doc);
     },
+    async findCollectionByPilotImportKey(key) {
+      const result = await payload.find({
+        collection: 'collections', depth: 1, limit: 1, overrideAccess: false,
+        pagination: false, showHiddenFields: true, user, where: { pilotImportKey: { equals: key } },
+      });
+      const doc = result.docs[0];
+      return doc === undefined ? null : toExistingCollection(doc);
+    },
     async findCollectionByPath(path) {
       const result = await payload.find({
         collection: 'collections',
@@ -308,6 +318,7 @@ export function createPayloadPilotImportStore(payload: Payload, actor: User): Pi
         limit: 1,
         overrideAccess: false,
         pagination: false,
+        showHiddenFields: true,
         user,
         where: { path: { equals: path } },
       });
@@ -370,6 +381,7 @@ function reviewManagedSnapshot(doc: ExistingCard | ExistingCollection): Readonly
   }
   return {
     updatedAt: doc.updatedAt ?? '',
+    pilotImportKey: doc.pilotImportKey ?? null,
     path: doc.path,
     pathClaimKey: doc.pathClaimKey,
     slug: doc.slug,
@@ -412,11 +424,12 @@ async function lockReviewRow(
   await database.execute(sql`select ${table.id} from ${table} where ${table.id} = ${id} for update`);
 }
 
-async function promotePayloadDocumentWithRowLock<T extends ExistingCard | ExistingCollection>(input: {
+async function setPayloadDocumentStatusWithRowLock<T extends ExistingCard | ExistingCollection>(input: {
   readonly actor: User;
   readonly collection: ReviewCollection;
   readonly expected: T;
   readonly payload: Payload;
+  readonly status: 'draft' | 'review';
   readonly toExisting: (doc: Card | Collection) => T;
 }): Promise<T | null> {
   const adapter = postgresReviewAdapter(input.payload);
@@ -443,7 +456,7 @@ async function promotePayloadDocumentWithRowLock<T extends ExistingCard | Existi
     }
     const updated = await input.payload.update({
       collection: input.collection,
-      data: { status: 'review' },
+      data: { status: input.status },
       depth: 1,
       id: input.expected.id,
       overrideAccess: false,
@@ -483,6 +496,14 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
       const doc = result.docs[0];
       return doc === undefined ? null : toExistingImage(doc);
     },
+    async findCollectionByPilotImportKey(key) {
+      const result = await payload.find({
+        collection: 'collections', depth: 1, limit: 1, overrideAccess: false,
+        pagination: false, showHiddenFields: true, user, where: { pilotImportKey: { equals: key } },
+      });
+      const doc = result.docs[0];
+      return doc === undefined ? null : toExistingCollection(doc);
+    },
     async findCardBySlug(slug) {
       const result = await payload.find({
         collection: 'cards',
@@ -504,6 +525,7 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
         limit: 1,
         overrideAccess: false,
         pagination: false,
+        showHiddenFields: true,
         user,
         where: { path: { equals: path } },
       });
@@ -546,6 +568,7 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
         overrideAccess: false,
         showHiddenFields: true,
         user,
+        context: trustedPilotImportContext(pilotCollectionImportKey(seed.key), actor.id),
       });
       return toExistingCollection(doc);
     },
@@ -592,20 +615,32 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
       return toExistingCard(doc);
     },
     moveCollectionToReview(expected) {
-      return promotePayloadDocumentWithRowLock({
+      return setPayloadDocumentStatusWithRowLock({
         actor,
         collection: 'collections',
         expected,
         payload,
+        status: 'review',
         toExisting: (doc) => toExistingCollection(doc as Collection),
       });
     },
-    moveCardToReview(expected) {
-      return promotePayloadDocumentWithRowLock({
+    moveCardToDraft(expected) {
+      return setPayloadDocumentStatusWithRowLock({
         actor,
         collection: 'cards',
         expected,
         payload,
+        status: 'draft',
+        toExisting: (doc) => toExistingCard(doc as Card),
+      });
+    },
+    moveCardToReview(expected) {
+      return setPayloadDocumentStatusWithRowLock({
+        actor,
+        collection: 'cards',
+        expected,
+        payload,
+        status: 'review',
         toExisting: (doc) => toExistingCard(doc as Card),
       });
     },
@@ -633,6 +668,7 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
               showHiddenFields: true,
               user,
               where: { or: [
+                { pilotImportKey: { in: expected.collections.map((item) => item.key) } },
                 { path: { in: expected.collections.map((item) => item.path) } },
                 { id: { in: collectionIds } },
               ] },
@@ -686,6 +722,7 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
           const claim = claims.find((item) => item.path === path);
           return {
             id: doc.id,
+            key: doc.pilotImportKey ?? null,
             path,
             pathClaimKey: doc.pathClaimKey ?? null,
             robots: doc.robots,

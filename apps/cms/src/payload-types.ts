@@ -488,6 +488,7 @@ export interface CardImage {
  */
 export interface Collection {
   id: number;
+  pilotImportKey?: string | null;
   /**
    * Заголовок страницы (title). Уникален в пределах каталога — совпадения проверяются при сохранении (задача Э5-01). Смена заголовка URL не меняет.
    */
@@ -1137,6 +1138,7 @@ export interface CardsSelect<T extends boolean = true> {
  * via the `definition` "collections_select".
  */
 export interface CollectionsSelect<T extends boolean = true> {
+  pilotImportKey?: T;
   title?: T;
   h1?: T;
   slug?: T;
