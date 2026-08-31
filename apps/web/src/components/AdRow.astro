@@ -99,14 +99,18 @@ const { position, slots } = Astro.props;
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1px dashed currentColor;
-    border-radius: 0.25rem;
-    opacity: 0.55;
+    /* Пунктир по линии разметки, а не по цвету текста: место заглушки обязано
+       читаться как незаполненное, но не перетягивать внимание с открыток.
+       Прежняя `opacity` снята — она гасила и рамку, и подпись целиком, из-за
+       чего подпись переставала проходить по контрасту. */
+    border: 1px dashed var(--rule);
+    color: var(--ink-faint);
   }
 
   .ad-row__stub {
-    font-size: 0.8125rem;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.1em;
   }
 </style>

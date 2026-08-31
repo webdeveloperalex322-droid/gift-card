@@ -53,35 +53,60 @@ const { fieldId = 'site-search-query', query = null } = Astro.props;
 </form>
 
 <style>
+  /* Поле — адресная линейка открытки: подчёркивание вместо коробки. Метка над
+     полем набрана служебным начертанием, как надпись «Кому» на бланке. */
   .search-form {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
+    align-items: flex-end;
     gap: 0.5rem;
-    margin-block: 1rem 0;
+    margin-block: 1.25rem 0;
   }
 
   .search-form__label {
     flex: 0 0 100%;
-    font-size: 0.875rem;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
   }
 
   .search-form__input {
     flex: 1 1 16rem;
     min-width: 0;
-    padding: 0.5rem 0.625rem;
-    border: 1px solid currentColor;
-    border-radius: 0.25rem;
-    font: inherit;
-  }
-
-  .search-form__submit {
-    padding: 0.5rem 1rem;
-    border: 1px solid currentColor;
-    border-radius: 0.25rem;
+    padding: 0.4375rem 0.125rem;
+    border: 0;
+    border-block-end: 2px solid var(--ink);
     background: transparent;
     color: inherit;
     font: inherit;
+  }
+
+  .search-form__input::placeholder {
+    color: var(--ink-faint);
+  }
+
+  /* Единственная закрашенная кнопка на сайте — акцент израсходован здесь.
+     При наведении фон уходит в чернильный, а не светлеет фильтром: фильтр в
+     тёмной теме дал бы почти белую заливку. */
+  .search-form__submit {
+    padding: 0.5rem 1.125rem;
+    border: 0;
+    background: var(--stamp);
+    color: var(--paper-raised);
+    font: inherit;
+    font-weight: 500;
     cursor: pointer;
+  }
+
+  .search-form__submit:hover {
+    background: var(--ink);
+  }
+
+  /* Фокусное кольцо у закрашенной кнопки — чернильное, а не акцентное: акцент
+     по акценту почти не читается, между кольцом и заливкой всего 2 px. */
+  .search-form__submit:focus-visible {
+    outline-color: var(--ink);
   }
 </style>
