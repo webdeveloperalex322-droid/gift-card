@@ -18,6 +18,7 @@ import {
   type ExistingContentPathClaim,
   type PilotImportStore,
   type PilotAssetIdentity,
+  type PilotPreparedAsset,
   type PilotPreflightInput,
   type PilotPreflightRecord,
   type PilotPreflightReport,
@@ -42,6 +43,7 @@ interface AssetCheck {
   readonly valid: boolean;
   readonly errors: readonly string[];
   readonly identity: PilotAssetIdentity | null;
+  readonly bytes: Buffer | null;
 }
 
 function valueLabel(value: unknown): string {
@@ -165,6 +167,7 @@ function expectedCardFields(
     robots: seed.robots,
     collectionPaths: collectionPath === undefined ? [] : [collectionPath],
     imageRevision: identity?.revision ?? null,
+    imagePilotImportKey: pilotImageImportKey(seed.pilotId),
     imageMimeType: identity?.mimeType ?? null,
     imageWidth: identity?.width ?? null,
     imageHeight: identity?.height ?? null,
@@ -197,6 +200,7 @@ function actualCardFields(existing: ExistingCard): Readonly<Record<string, unkno
     robots: existing.robots,
     collectionPaths: [...existing.collectionPaths],
     imageRevision: existing.imageRevision,
+    imagePilotImportKey: existing.imagePilotImportKey ?? null,
     imageMimeType: existing.imageMimeType,
     imageWidth: existing.imageWidth,
     imageHeight: existing.imageHeight,
@@ -359,6 +363,7 @@ async function checkAsset(assetRoot: string, seed: CardSeed): Promise<AssetCheck
     return {
       valid: false,
       identity: null,
+      bytes: null,
       errors: [code === 'ENOENT'
         ? `Asset ${seed.sourceFile} is missing.`
         : `Asset ${seed.sourceFile} cannot be read: ${error instanceof Error ? error.message : String(error)}.`],
@@ -405,7 +410,7 @@ async function checkAsset(assetRoot: string, seed: CardSeed): Promise<AssetCheck
       `Asset ${seed.sourceFile} cannot be decoded by Sharp: ${error instanceof Error ? error.message : valueLabel(error)}.`,
     );
   }
-  return { valid: errors.length === 0, errors, identity };
+  return { valid: errors.length === 0, errors, identity, bytes };
 }
 
 function stableValue(value: unknown): unknown {
@@ -519,6 +524,14 @@ export async function runPilotPreflight(input: PilotPreflightInput): Promise<Pil
         matrix: input.matrix,
       })
     : null;
+  const preparedAssets: PilotPreparedAsset[] = preflightFingerprint === null
+    ? []
+    : input.matrix.cards.flatMap((seed, index) => {
+        const check = assetChecks[index];
+        return check?.valid === true && check.identity !== null && check.bytes !== null
+          ? [{ pilotId: seed.pilotId, sourceFile: seed.sourceFile, bytes: check.bytes, identity: check.identity }]
+          : [];
+      });
 
   return {
     mode: 'dry-run',
@@ -531,5 +544,6 @@ export async function runPilotPreflight(input: PilotPreflightInput): Promise<Pil
     blockingErrors: uniqueBlockingErrors,
     records,
     fingerprint: preflightFingerprint,
+    preparedAssets,
   };
 }

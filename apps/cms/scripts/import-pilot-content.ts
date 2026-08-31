@@ -7,8 +7,17 @@
  * plus onInit seeding so initialization is read-only too.
  */
 import { resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
-import type { Payload } from 'payload';
+import type { PostgresAdapter } from '@payloadcms/db-postgres';
+import { sql } from '@payloadcms/db-postgres';
+import {
+  commitTransaction,
+  initTransaction,
+  killTransaction,
+  type Payload,
+  type PayloadRequest,
+} from 'payload';
 
 import { loadManifest } from '../../../scripts/content-pilot/manifest.mjs';
 import { loadSiteContent } from '../../../scripts/content-import/schema.js';
@@ -202,6 +211,7 @@ function toExistingCard(doc: Card): ExistingCard {
     h1: doc.h1 ?? null,
     imageAssignedFilename: image?.filename ?? null,
     imageId: image?.id ?? (doc.image as number | null),
+    imagePilotImportKey: image?.pilotImportKey ?? null,
     imageHeight: image?.source?.height ?? null,
     imageMimeType: image?.mimeType ?? null,
     imageRevision: image?.revision ?? null,
@@ -263,7 +273,7 @@ export function createPayloadPilotImportStore(payload: Payload, actor: User): Pi
     async findCardByPilotImportKey(key) {
       const result = await payload.find({
         collection: 'cards', depth: 1, limit: 1, overrideAccess: false,
-        pagination: false, user, where: { pilotImportKey: { equals: key } },
+        pagination: false, showHiddenFields: true, user, where: { pilotImportKey: { equals: key } },
       });
       const doc = result.docs[0];
       return doc === undefined ? null : toExistingCard(doc);
@@ -275,6 +285,7 @@ export function createPayloadPilotImportStore(payload: Payload, actor: User): Pi
         limit: 1,
         overrideAccess: false,
         pagination: false,
+        showHiddenFields: true,
         user,
         where: { slug: { equals: slug } },
       });
@@ -284,7 +295,7 @@ export function createPayloadPilotImportStore(payload: Payload, actor: User): Pi
     async findImageByPilotImportKey(key) {
       const result = await payload.find({
         collection: 'card-images', depth: 0, limit: 1, overrideAccess: false,
-        pagination: false, user, where: { pilotImportKey: { equals: key } },
+        pagination: false, showHiddenFields: true, user, where: { pilotImportKey: { equals: key } },
       });
       const doc = result.docs[0];
       return doc === undefined ? null : toExistingImage(doc);
@@ -329,6 +340,124 @@ function payloadRelationId(id: number | string): number {
   return id;
 }
 
+type ReviewCollection = 'cards' | 'collections';
+
+function reviewManagedSnapshot(doc: ExistingCard | ExistingCollection): Readonly<Record<string, unknown>> {
+  if ('collectionPaths' in doc) {
+    return {
+      updatedAt: doc.updatedAt ?? '',
+      pilotImportKey: doc.pilotImportKey ?? null,
+      slug: doc.slug,
+      pathClaimKey: doc.pathClaimKey,
+      title: doc.title,
+      h1: doc.h1,
+      metaDescription: doc.metaDescription,
+      alt: doc.alt,
+      caption: doc.caption,
+      description: doc.description,
+      usageTerms: doc.usageTerms,
+      status: doc.status,
+      robots: doc.robots,
+      collectionPaths: [...doc.collectionPaths],
+      imageId: doc.imageId ?? null,
+      imagePilotImportKey: doc.imagePilotImportKey ?? null,
+      imageRevision: doc.imageRevision,
+      imageMimeType: doc.imageMimeType,
+      imageWidth: doc.imageWidth,
+      imageHeight: doc.imageHeight,
+    };
+  }
+  return {
+    updatedAt: doc.updatedAt ?? '',
+    path: doc.path,
+    pathClaimKey: doc.pathClaimKey,
+    slug: doc.slug,
+    nodeKind: doc.nodeKind,
+    parentPath: doc.parentPath,
+    title: doc.title,
+    h1: doc.h1,
+    metaDescription: doc.metaDescription,
+    intro: doc.intro,
+    description: doc.description,
+    status: doc.status,
+    robots: doc.robots,
+  };
+}
+
+function postgresReviewAdapter(payload: Payload): PostgresAdapter {
+  if (payload.db.name !== 'postgres') {
+    throw new Error('Pilot review promotion requires the configured PostgreSQL adapter.');
+  }
+  return payload.db as unknown as PostgresAdapter;
+}
+
+async function lockReviewRow(
+  adapter: PostgresAdapter,
+  collection: ReviewCollection,
+  id: number | string,
+  req: PayloadRequest,
+): Promise<void> {
+  const transactionID = await req.transactionID;
+  if (transactionID === undefined || transactionID === null) {
+    throw new Error('Pilot review transaction was not started.');
+  }
+  const session = adapter.sessions[String(transactionID)];
+  const tableName = adapter.tableNameMap.get(collection);
+  const table: unknown = tableName === undefined ? undefined : adapter.tables[tableName];
+  if (session === undefined || tableName === undefined || typeof table !== 'object' || table === null || !('id' in table)) {
+    throw new Error(`Pilot review cannot lock ${collection} row in the active Payload transaction.`);
+  }
+  const database = session.db as { execute(query: unknown): Promise<unknown> };
+  await database.execute(sql`select ${table.id} from ${table} where ${table.id} = ${id} for update`);
+}
+
+async function promotePayloadDocumentWithRowLock<T extends ExistingCard | ExistingCollection>(input: {
+  readonly actor: User;
+  readonly collection: ReviewCollection;
+  readonly expected: T;
+  readonly payload: Payload;
+  readonly toExisting: (doc: Card | Collection) => T;
+}): Promise<T | null> {
+  const adapter = postgresReviewAdapter(input.payload);
+  // The Local API enriches this same object on the locked read/update. Starting
+  // the transaction first ensures both operations inherit one adapter session.
+  const req = { context: {}, payload: input.payload, user: input.actor } as PayloadRequest;
+  const started = await initTransaction(req);
+  if (!started) throw new Error('Pilot review transaction could not be started.');
+  try {
+    await lockReviewRow(adapter, input.collection, input.expected.id, req);
+    const locked = await input.payload.findByID({
+      collection: input.collection,
+      depth: 1,
+      id: input.expected.id,
+      overrideAccess: false,
+      req,
+      showHiddenFields: true,
+      user: input.actor,
+    });
+    const current = input.toExisting(locked);
+    if (!isDeepStrictEqual(reviewManagedSnapshot(current), reviewManagedSnapshot(input.expected))) {
+      await commitTransaction(req);
+      return null;
+    }
+    const updated = await input.payload.update({
+      collection: input.collection,
+      data: { status: 'review' },
+      depth: 1,
+      id: input.expected.id,
+      overrideAccess: false,
+      req,
+      showHiddenFields: true,
+      user: input.actor,
+    });
+    await commitTransaction(req);
+    return input.toExisting(updated);
+  } catch (error) {
+    await killTransaction(req);
+    throw error;
+  }
+}
+
 export function createPayloadPilotApplyStore(payload: Payload, actor: User): PilotApplyStore {
   const user = actor;
   return {
@@ -340,7 +469,7 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
     async findCardByPilotImportKey(key) {
       const result = await payload.find({
         collection: 'cards', depth: 1, limit: 1, overrideAccess: false,
-        pagination: false, user, where: { pilotImportKey: { equals: key } },
+        pagination: false, showHiddenFields: true, user, where: { pilotImportKey: { equals: key } },
       });
       const doc = result.docs[0];
       return doc === undefined ? null : toExistingCard(doc);
@@ -348,7 +477,7 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
     async findImageByPilotImportKey(key) {
       const result = await payload.find({
         collection: 'card-images', depth: 0, limit: 1, overrideAccess: false,
-        pagination: false, user, where: { pilotImportKey: { equals: key } },
+        pagination: false, showHiddenFields: true, user, where: { pilotImportKey: { equals: key } },
       });
       const doc = result.docs[0];
       return doc === undefined ? null : toExistingImage(doc);
@@ -360,6 +489,7 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
         limit: 1,
         overrideAccess: false,
         pagination: false,
+        showHiddenFields: true,
         user,
         where: { slug: { equals: slug } },
       });
@@ -413,6 +543,7 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
           title: seed.title,
         },
         overrideAccess: false,
+        showHiddenFields: true,
         user,
       });
       return toExistingCollection(doc);
@@ -428,6 +559,7 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
           size: bytes.byteLength,
         },
         overrideAccess: false,
+        showHiddenFields: true,
         user,
         context: trustedPilotImportContext(pilotImageImportKey(seed.pilotId), actor.id),
       });
@@ -436,6 +568,7 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
     async createCard(seed, imageId, collectionId) {
       const doc = await payload.create({
         collection: 'cards',
+        depth: 1,
         data: {
           alt: seed.alt,
           caption: seed.caption,
@@ -451,42 +584,38 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
           usageTerms: seed.usageTerms,
         },
         overrideAccess: false,
+        showHiddenFields: true,
         user,
         context: trustedPilotImportContext(pilotCardImportKey(seed.pilotId), actor.id),
       });
       return toExistingCard(doc);
     },
-    async moveCollectionToReview(id, expectedUpdatedAt) {
-      const result = await payload.update({
+    moveCollectionToReview(expected) {
+      return promotePayloadDocumentWithRowLock({
+        actor,
         collection: 'collections',
-        data: { status: 'review' },
-        limit: 1,
-        overrideAccess: false,
-        user,
-        where: { and: [{ id: { equals: id } }, { updatedAt: { equals: expectedUpdatedAt } }] },
+        expected,
+        payload,
+        toExisting: (doc) => toExistingCollection(doc as Collection),
       });
-      const doc = result.docs[0];
-      return doc === undefined ? null : toExistingCollection(doc);
     },
-    async moveCardToReview(id, expectedUpdatedAt) {
-      const result = await payload.update({
+    moveCardToReview(expected) {
+      return promotePayloadDocumentWithRowLock({
+        actor,
         collection: 'cards',
-        data: { status: 'review' },
-        limit: 1,
-        overrideAccess: false,
-        user,
-        where: { and: [{ id: { equals: id } }, { updatedAt: { equals: expectedUpdatedAt } }] },
+        expected,
+        payload,
+        toExisting: (doc) => toExistingCard(doc as Card),
       });
-      const doc = result.docs[0];
-      return doc === undefined ? null : toExistingCard(doc);
     },
     async verifyImported(expected: PilotVerificationExpected) {
       const [cards, collections, images] = await Promise.all([
         payload.find({
               collection: 'cards',
-              depth: 0,
+              depth: 1,
               overrideAccess: false,
               pagination: false,
+              showHiddenFields: true,
               user,
               where: { pilotImportKey: { in: expected.cards.map((item) => item.key) } },
             }).then((result) => result.docs),
@@ -500,18 +629,31 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
             }).then((result) => result.docs),
         payload.find({
           collection: 'card-images', depth: 0, overrideAccess: false,
-          pagination: false, user,
+          pagination: false, showHiddenFields: true, user,
           where: { pilotImportKey: { in: expected.images.map((item) => item.key) } },
         }).then((result) => result.docs),
       ]);
       return {
-        cards: cards.map((doc) => ({
-          id: doc.id, key: doc.pilotImportKey ?? null, robots: doc.robots, status: doc.status,
-        })),
+        cards: cards.map((doc) => {
+          const image = imageRecord(doc.image);
+          return {
+            id: doc.id,
+            key: doc.pilotImportKey ?? null,
+            robots: doc.robots,
+            status: doc.status,
+            image: image === null ? null : {
+              id: image.id,
+              key: image.pilotImportKey ?? null,
+              revision: image.revision ?? null,
+            },
+          };
+        }),
         collections: collections.map((doc) => ({
           id: doc.id, path: doc.path ?? '', robots: doc.robots, status: doc.status,
         })),
-        images: images.map((doc) => ({ id: doc.id, key: doc.pilotImportKey ?? null })),
+        images: images.map((doc) => ({
+          id: doc.id, key: doc.pilotImportKey ?? null, revision: doc.revision ?? null,
+        })),
       };
     },
   };

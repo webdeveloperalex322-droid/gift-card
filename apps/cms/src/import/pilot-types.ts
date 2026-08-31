@@ -26,6 +26,7 @@ export interface ExistingCard {
   /** Assigned upload filename is informational and never re-derived on resume. */
   imageAssignedFilename: string | null;
   imageId?: number | string | null;
+  imagePilotImportKey?: string | null;
   imageRevision: string | null;
   imageMimeType: string | null;
   imageWidth: number | null;
@@ -106,6 +107,8 @@ export interface PilotPreflightReport {
   readonly records: readonly PilotPreflightRecord[];
   /** SHA-256 of the closed matrix, accepted manifest, actor and all asset facts. */
   readonly fingerprint: string | null;
+  /** Exact buffers read and validated by this preflight. Never serialize in CLI output. */
+  readonly preparedAssets: readonly PilotPreparedAsset[];
 }
 
 export interface PilotAssetIdentity {
@@ -117,6 +120,13 @@ export interface PilotAssetIdentity {
   readonly height: number;
   readonly ratio: '4:5';
   readonly path: string;
+}
+
+export interface PilotPreparedAsset {
+  readonly pilotId: string;
+  readonly sourceFile: string;
+  readonly bytes: Buffer;
+  readonly identity: PilotAssetIdentity;
 }
 
 /** Minimal Lexical value used by the importer and compared byte-for-byte on resume. */

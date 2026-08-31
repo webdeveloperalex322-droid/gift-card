@@ -1,10 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-
-import sharp from 'sharp';
-
-import { computeImageRevision } from '@otkritka/images';
 import type { CardRecord } from '../../../../scripts/content-pilot/manifest.mjs';
 
 import type {
@@ -22,22 +18,31 @@ import type {
   ExistingCard,
   ExistingCollection,
   ExistingImage,
-  PilotAssetIdentity,
   PilotImportActor,
   PilotImportStore,
   PilotPreflightReport,
 } from './pilot-types';
 
 export interface PilotVerificationExpected {
-  readonly cards: readonly { readonly key: string; readonly id: number | string | null }[];
+  readonly cards: readonly {
+    readonly key: string;
+    readonly id: number | string | null;
+    readonly image: { readonly id: number | string | null; readonly key: string; readonly revision: string };
+  }[];
   readonly collections: readonly { readonly path: string; readonly id: number | string | null }[];
-  readonly images: readonly { readonly key: string; readonly id: number | string | null }[];
+  readonly images: readonly { readonly key: string; readonly id: number | string | null; readonly revision: string }[];
 }
 
 export interface PilotVerificationSnapshot {
-  readonly cards: readonly { readonly key: string | null; readonly id: number | string; readonly status: string; readonly robots: string }[];
+  readonly cards: readonly {
+    readonly key: string | null;
+    readonly id: number | string;
+    readonly status: string;
+    readonly robots: string;
+    readonly image: { readonly id: number | string; readonly key: string | null; readonly revision: string | null } | null;
+  }[];
   readonly collections: readonly { readonly path: string; readonly id: number | string; readonly status: string; readonly robots: string }[];
-  readonly images: readonly { readonly key: string | null; readonly id: number | string }[];
+  readonly images: readonly { readonly key: string | null; readonly id: number | string; readonly revision: string | null }[];
 }
 
 export interface PilotApplyStore extends PilotImportStore {
@@ -51,8 +56,8 @@ export interface PilotApplyStore extends PilotImportStore {
     imageId: number | string,
     collectionId: number | string,
   ): Promise<ExistingCard>;
-  moveCollectionToReview(id: number | string, expectedUpdatedAt: string): Promise<ExistingCollection | null>;
-  moveCardToReview(id: number | string, expectedUpdatedAt: string): Promise<ExistingCard | null>;
+  moveCollectionToReview(expected: ExistingCollection): Promise<ExistingCollection | null>;
+  moveCardToReview(expected: ExistingCard): Promise<ExistingCard | null>;
   verifyImported(expected: PilotVerificationExpected): Promise<PilotVerificationSnapshot>;
 }
 
@@ -99,13 +104,14 @@ export interface PilotApplyInput {
   readonly now?: () => Date;
 }
 
-interface WorkingRecord {
+interface WorkingRecord<TDocument extends ExistingCard | ExistingCollection> {
   readonly key: string;
   readonly kind: PilotImportRecord['kind'];
   readonly id: number | string;
   detail: string;
   status: string;
   updatedAt: string;
+  document: TDocument;
 }
 
 function errorMessage(error: unknown): string {
@@ -169,23 +175,6 @@ export function sortPilotCollections(seeds: readonly CollectionSeed[]): Collecti
     }
   }
   return ordered;
-}
-
-async function assetIdentity(bytes: Buffer, path: string): Promise<PilotAssetIdentity> {
-  const metadata = await sharp(bytes).metadata();
-  if (metadata.format !== 'jpeg' || !Number.isInteger(metadata.width) || !Number.isInteger(metadata.height)) {
-    throw new Error('Preflight-approved asset no longer decodes as a JPEG with integer dimensions.');
-  }
-  return {
-    sha256: createHash('sha256').update(bytes).digest('hex'),
-    revision: await computeImageRevision(bytes),
-    mimeType: 'image/jpeg',
-    format: 'jpeg',
-    width: metadata.width,
-    height: metadata.height,
-    ratio: '4:5',
-    path,
-  };
 }
 
 function visualSignal(doc: ExistingCard): string | null {
@@ -255,11 +244,16 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
       refreshed.fingerprint !== input.preflight.fingerprint) {
     throw new Error('Pilot inputs or managed CMS state changed after preflight; apply performed zero mutations.');
   }
+  const preparedAssets = new Map(refreshed.preparedAssets.map((asset) => [asset.pilotId, asset]));
+  if (preparedAssets.size !== input.matrix.cards.length ||
+      input.matrix.cards.some((seed) => preparedAssets.get(seed.pilotId)?.sourceFile !== seed.sourceFile)) {
+    throw new Error('Fresh preflight did not retain one validated buffer for every pilot card; apply performed zero mutations.');
+  }
   const orderedCollections = sortPilotCollections(input.matrix.collections);
   const startedAt = (input.now?.() ?? new Date()).toISOString();
   const collectionsByKey = new Map(input.matrix.collections.map((seed) => [seed.key, seed]));
-  const collectionDocs = new Map<string, WorkingRecord>();
-  const cardDocs = new Map<string, WorkingRecord>();
+  const collectionDocs = new Map<string, WorkingRecord<ExistingCollection>>();
+  const cardDocs = new Map<string, WorkingRecord<ExistingCard>>();
   const imageDocs = new Map<string, { readonly id: number | string; readonly key: string }>();
   const records: PilotImportRecord[] = [];
   let collectionsCreated = 0;
@@ -299,6 +293,7 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
         status: existing.status,
         detail: `resumed existing ${String(existing.id)}`,
         updatedAt: existing.updatedAt ?? '',
+        document: existing,
       });
       continue;
     }
@@ -313,6 +308,7 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
         status: created.status,
         detail: `created draft ${String(created.id)}`,
         updatedAt: created.updatedAt ?? '',
+        document: created,
       });
     } catch (error) {
       records.push({ key, kind: 'collection', state: 'error', detail: errorMessage(error) });
@@ -334,16 +330,12 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
       continue;
     }
 
-    let bytes: Buffer;
-    let identity: PilotAssetIdentity;
-    try {
-      const sourcePath = join(input.assetRoot, seed.sourceFile);
-      bytes = await readFile(sourcePath);
-      identity = await assetIdentity(bytes, sourcePath);
-    } catch (error) {
-      records.push({ key, kind: 'card', state: 'error', detail: errorMessage(error) });
+    const prepared = preparedAssets.get(seed.pilotId);
+    if (prepared === undefined) {
+      records.push({ key, kind: 'card', state: 'error', detail: 'fresh preflight buffer is missing' });
       continue;
     }
+    const { bytes, identity } = prepared;
 
     const importKey = pilotCardImportKey(seed.pilotId);
     const imageImportKey = pilotImageImportKey(seed.pilotId);
@@ -383,6 +375,7 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
           visualSignal(existing),
         ].filter((value): value is string => value !== null).join('; '),
         updatedAt: existing.updatedAt ?? '',
+        document: existing,
       });
       if (existing.imageId !== null && existing.imageId !== undefined) {
         imageDocs.set(seed.pilotId, { id: existing.imageId, key: imageImportKey });
@@ -408,6 +401,7 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
           visualSignal(created),
         ].filter((value): value is string => value !== null).join('; '),
         updatedAt: created.updatedAt ?? '',
+        document: created,
       });
     } catch (error) {
       const message = errorMessage(error);
@@ -441,11 +435,12 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
       continue;
     }
     try {
-      const moved = await input.store.moveCardToReview(item.id, item.updatedAt);
+      const moved = await input.store.moveCardToReview(item.document);
       if (moved === null) throw new Error('concurrent update detected; conditional review update matched zero records');
       if (moved.status !== 'review') throw new Error(`review update returned status ${moved.status}`);
       item.status = moved.status;
       item.updatedAt = moved.updatedAt ?? item.updatedAt;
+      item.document = moved;
       const signal = visualSignal(moved);
       records.push({
         key: item.key,
@@ -469,11 +464,12 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
       continue;
     }
     try {
-      const moved = await input.store.moveCollectionToReview(item.id, item.updatedAt);
+      const moved = await input.store.moveCollectionToReview(item.document);
       if (moved === null) throw new Error('concurrent update detected; conditional review update matched zero records');
       if (moved.status !== 'review') throw new Error(`review update returned status ${moved.status}`);
       item.status = moved.status;
       item.updatedAt = moved.updatedAt ?? item.updatedAt;
+      item.document = moved;
       records.push({ key: item.key, kind: item.kind, state: 'review', detail: item.detail });
     } catch (error) {
       records.push({
@@ -489,6 +485,11 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
     cards: input.matrix.cards.map((seed) => ({
       key: pilotCardImportKey(seed.pilotId),
       id: cardDocs.get(seed.pilotId)?.id ?? null,
+      image: {
+        id: imageDocs.get(seed.pilotId)?.id ?? null,
+        key: pilotImageImportKey(seed.pilotId),
+        revision: preparedAssets.get(seed.pilotId)?.identity.revision ?? '',
+      },
     })),
     collections: input.matrix.collections.map((seed) => ({
       path: seed.path,
@@ -497,26 +498,51 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
     images: input.matrix.cards.map((seed) => ({
       key: pilotImageImportKey(seed.pilotId),
       id: imageDocs.get(seed.pilotId)?.id ?? null,
+      revision: preparedAssets.get(seed.pilotId)?.identity.revision ?? '',
     })),
   };
   const verified = await input.store.verifyImported(expected);
-  const verifyUnique = <T>(values: readonly T[], label: string): void => {
-    if (new Set(values.map(String)).size !== values.length) throw new Error(`Pilot verification found ambiguous ${label}.`);
+  const verifyUnique = (values: readonly (string | null)[], label: string): void => {
+    if (values.some((value) => value === null) || new Set(values).size !== values.length) {
+      throw new Error(`Pilot verification found ambiguous ${label}.`);
+    }
   };
   verifyUnique(verified.cards.map((doc) => doc.key), 'card import keys');
   verifyUnique(verified.collections.map((doc) => doc.path), 'collection paths');
   verifyUnique(verified.images.map((doc) => doc.key), 'image import keys');
-  const missing = [
-    ...expected.cards.filter((item) => verified.cards.filter((doc) => doc.key === item.key &&
-      (item.id === null || String(doc.id) === String(item.id))).length !== 1).map((item) => item.key),
-    ...expected.collections.filter((item) => verified.collections.filter((doc) => doc.path === item.path &&
-      (item.id === null || String(doc.id) === String(item.id))).length !== 1).map((item) => item.path),
-    ...expected.images.filter((item) => verified.images.filter((doc) => doc.key === item.key &&
-      (item.id === null || String(doc.id) === String(item.id))).length !== 1).map((item) => item.key),
-  ];
-  if (missing.length > 0 || verified.cards.length !== 50 || verified.collections.length !== 13 ||
-      verified.images.length !== 50) {
-    throw new Error(`Pilot verification vetoed report: missing or ambiguous expected records: ${missing.join(', ') || 'count mismatch'}.`);
+  for (const item of expected.cards) {
+    const doc = verified.cards.find((candidate) => candidate.key === item.key);
+    if (item.id !== null && (doc === undefined || String(doc.id) !== String(item.id))) {
+      throw new Error(`Pilot identity verification failed for card ${item.key}.`);
+    }
+  }
+  for (const item of expected.collections) {
+    const doc = verified.collections.find((candidate) => candidate.path === item.path);
+    if (item.id !== null && (doc === undefined || String(doc.id) !== String(item.id))) {
+      throw new Error(`Pilot identity verification failed for collection ${item.path}.`);
+    }
+  }
+  for (const item of expected.images) {
+    const doc = verified.images.find((candidate) => candidate.key === item.key);
+    if (item.id !== null && (doc === undefined || String(doc.id) !== String(item.id))) {
+      throw new Error(`Pilot identity verification failed for image ${item.key}.`);
+    }
+    if (doc !== undefined && doc.revision !== item.revision) {
+      throw new Error(`Pilot image relation verification failed for ${item.key}: revision mismatch.`);
+    }
+  }
+  for (const doc of verified.cards) {
+    const item = expected.cards.find((candidate) => candidate.key === doc.key);
+    if (item === undefined || doc.image === null || doc.image.key !== item.image.key ||
+        doc.image.revision !== item.image.revision ||
+        (item.image.id !== null && String(doc.image.id) !== String(item.image.id))) {
+      throw new Error(`Pilot card image relation verification failed for ${doc.key ?? String(doc.id)}.`);
+    }
+    const image = verified.images.find((candidate) => candidate.key === doc.image?.key);
+    if (image === undefined || String(image.id) !== String(doc.image.id) ||
+        image.revision !== doc.image.revision) {
+      throw new Error(`Pilot card image relation verification failed for ${doc.key ?? String(doc.id)}.`);
+    }
   }
   const contentDocs = [...verified.cards, ...verified.collections];
   const published = contentDocs.filter((doc) => doc.status === 'published').length;
@@ -529,19 +555,38 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
     throw new Error(`Pilot invariant failed before report write: published=${String(published)}, indexed=${String(indexed)}.`);
   }
 
+  const expectedRecordKeys = new Set([
+    ...input.matrix.cards.map((seed) => `card:${seed.pilotId}`),
+    ...input.matrix.collections.map((seed) => `collection:${seed.key}`),
+  ]);
+  if (records.length !== expectedRecordKeys.size || new Set(records.map((record) => record.key)).size !== records.length ||
+      records.some((record) => !expectedRecordKeys.has(record.key))) {
+    throw new Error('Pilot identity verification found missing or ambiguous report records.');
+  }
   records.sort((left, right) => left.key.localeCompare(right.key));
   const mappedRecords = records.map((record): PilotImportRecord => {
     if (record.kind === 'card') {
       const pilotId = record.key.slice('card:'.length);
       const stableKey = pilotCardImportKey(pilotId);
       const doc = verified.cards.find((item) => item.key === stableKey);
-      if (doc === undefined) throw new Error(`Pilot verification lost ${record.key}.`);
-      return { ...record, id: doc.id, stableKey };
+      if (doc === undefined) {
+        if (record.state === 'draft' || record.state === 'review') {
+          throw new Error(`Pilot identity verification lost ${record.key}.`);
+        }
+        return { ...record, stableKey };
+      }
+      return { ...record, id: doc.id, stableKey, state: doc.status as 'draft' | 'review' };
     }
     const seed = input.matrix.collections.find((item) => `collection:${item.key}` === record.key);
     const doc = seed === undefined ? undefined : verified.collections.find((item) => item.path === seed.path);
-    if (seed === undefined || doc === undefined) throw new Error(`Pilot verification lost ${record.key}.`);
-    return { ...record, id: doc.id, stableKey: seed.path };
+    if (seed === undefined) throw new Error(`Pilot identity verification lost ${record.key}.`);
+    if (doc === undefined) {
+      if (record.state === 'draft' || record.state === 'review') {
+        throw new Error(`Pilot identity verification lost ${record.key}.`);
+      }
+      return { ...record, stableKey: seed.path };
+    }
+    return { ...record, id: doc.id, stableKey: seed.path, state: doc.status as 'draft' | 'review' };
   });
   const report: PilotImportReport = {
     mode: 'apply',

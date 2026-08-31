@@ -22,7 +22,7 @@ import type {
   ExistingContentPathClaim,
 } from './pilot-types';
 import { pilotIntroDocument } from './pilot-types';
-import { pilotCardImportKey } from './pilot-import-identity';
+import { pilotCardImportKey, pilotImageImportKey } from './pilot-import-identity';
 import {
   initializePilotDryRun,
   initializePilotImport,
@@ -561,6 +561,7 @@ function existingCardFor(seed: SiteContentMatrix['cards'][number]): ExistingCard
     imageHeight: 1280,
     imageMimeType: 'image/jpeg',
     imageRevision: validRevision,
+    imagePilotImportKey: pilotImageImportKey(seed.pilotId),
     imageWidth: 1024,
     metaDescription: seed.metaDescription,
     pathClaimKey: `pilot-card-${seed.pilotId}`,
