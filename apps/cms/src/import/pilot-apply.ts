@@ -13,6 +13,7 @@ import {
   collectionManagedFieldDifferences,
   runPilotPreflight,
 } from './pilot-preflight';
+import { buildCardPath } from '../seo/paths';
 import { pilotCardImportKey, pilotImageImportKey } from './pilot-import-identity';
 import type {
   ExistingCard,
@@ -27,21 +28,47 @@ export interface PilotVerificationExpected {
   readonly cards: readonly {
     readonly key: string;
     readonly id: number | string | null;
+    readonly path: string;
+    readonly pathClaimKey: string | null;
+    readonly slug: string;
     readonly image: { readonly id: number | string | null; readonly key: string; readonly revision: string };
   }[];
-  readonly collections: readonly { readonly path: string; readonly id: number | string | null }[];
+  readonly collections: readonly {
+    readonly path: string;
+    readonly id: number | string | null;
+    readonly pathClaimKey: string | null;
+    readonly slug: string;
+  }[];
   readonly images: readonly { readonly key: string; readonly id: number | string | null; readonly revision: string }[];
+}
+
+interface PilotVerificationClaim {
+  readonly ownerCollection: 'cards' | 'collections';
+  readonly ownerKey: string;
+  readonly path: string;
 }
 
 export interface PilotVerificationSnapshot {
   readonly cards: readonly {
     readonly key: string | null;
     readonly id: number | string;
+    readonly path: string;
+    readonly pathClaimKey: string | null;
+    readonly slug: string;
     readonly status: string;
     readonly robots: string;
+    readonly claim: PilotVerificationClaim | null;
     readonly image: { readonly id: number | string; readonly key: string | null; readonly revision: string | null } | null;
   }[];
-  readonly collections: readonly { readonly path: string; readonly id: number | string; readonly status: string; readonly robots: string }[];
+  readonly collections: readonly {
+    readonly path: string;
+    readonly id: number | string;
+    readonly pathClaimKey: string | null;
+    readonly slug: string;
+    readonly status: string;
+    readonly robots: string;
+    readonly claim: PilotVerificationClaim | null;
+  }[];
   readonly images: readonly { readonly key: string | null; readonly id: number | string; readonly revision: string | null }[];
 }
 
@@ -485,6 +512,9 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
     cards: input.matrix.cards.map((seed) => ({
       key: pilotCardImportKey(seed.pilotId),
       id: cardDocs.get(seed.pilotId)?.id ?? null,
+      path: buildCardPath(seed.slug),
+      pathClaimKey: cardDocs.get(seed.pilotId)?.document.pathClaimKey ?? null,
+      slug: seed.slug,
       image: {
         id: imageDocs.get(seed.pilotId)?.id ?? null,
         key: pilotImageImportKey(seed.pilotId),
@@ -494,6 +524,8 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
     collections: input.matrix.collections.map((seed) => ({
       path: seed.path,
       id: collectionDocs.get(seed.key)?.id ?? null,
+      pathClaimKey: collectionDocs.get(seed.key)?.document.pathClaimKey ?? null,
+      slug: seed.slug,
     })),
     images: input.matrix.cards.map((seed) => ({
       key: pilotImageImportKey(seed.pilotId),
@@ -510,16 +542,48 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
   verifyUnique(verified.cards.map((doc) => doc.key), 'card import keys');
   verifyUnique(verified.collections.map((doc) => doc.path), 'collection paths');
   verifyUnique(verified.images.map((doc) => doc.key), 'image import keys');
+  const verifyClaim = (
+    doc: { readonly claim: PilotVerificationClaim | null; readonly path: string; readonly pathClaimKey: string | null },
+    ownerCollection: 'cards' | 'collections',
+    label: string,
+  ): void => {
+    if (doc.pathClaimKey === null || doc.pathClaimKey.trim() === '' || doc.claim === null) {
+      throw new Error(`Pilot final path identity verification failed for ${label}: permanent claim is missing.`);
+    }
+    if (doc.claim.path !== doc.path) {
+      throw new Error(`Pilot final path identity verification failed for ${label}: claim path drift.`);
+    }
+    if (doc.claim.ownerCollection !== ownerCollection ||
+        doc.claim.ownerKey !== `${ownerCollection}:${doc.pathClaimKey}`) {
+      throw new Error(`Pilot final path identity verification failed for ${label}: claim owner drift.`);
+    }
+  };
+  for (const doc of verified.cards) {
+    if (doc.path !== buildCardPath(doc.slug)) {
+      throw new Error(`Pilot final path identity verification failed for card ${doc.key ?? String(doc.id)}: slug/path drift.`);
+    }
+    verifyClaim(doc, 'cards', `card ${doc.key ?? String(doc.id)}`);
+  }
+  for (const doc of verified.collections) {
+    if (doc.path.split('/').filter(Boolean).at(-1) !== doc.slug) {
+      throw new Error(`Pilot final path identity verification failed for collection ${doc.path}: slug/path drift.`);
+    }
+    verifyClaim(doc, 'collections', `collection ${doc.path}`);
+  }
   for (const item of expected.cards) {
-    const doc = verified.cards.find((candidate) => candidate.key === item.key);
-    if (item.id !== null && (doc === undefined || String(doc.id) !== String(item.id))) {
-      throw new Error(`Pilot identity verification failed for card ${item.key}.`);
+    if (item.id === null) continue;
+    const doc = verified.cards.find((candidate) => String(candidate.id) === String(item.id));
+    if (doc === undefined || doc.key !== item.key || doc.slug !== item.slug || doc.path !== item.path ||
+        doc.pathClaimKey !== item.pathClaimKey) {
+      throw new Error(`Pilot final path identity verification failed for card ${item.key}.`);
     }
   }
   for (const item of expected.collections) {
-    const doc = verified.collections.find((candidate) => candidate.path === item.path);
-    if (item.id !== null && (doc === undefined || String(doc.id) !== String(item.id))) {
-      throw new Error(`Pilot identity verification failed for collection ${item.path}.`);
+    if (item.id === null) continue;
+    const doc = verified.collections.find((candidate) => String(candidate.id) === String(item.id));
+    if (doc === undefined || doc.slug !== item.slug || doc.path !== item.path ||
+        doc.pathClaimKey !== item.pathClaimKey) {
+      throw new Error(`Pilot final path identity verification failed for collection ${item.path}.`);
     }
   }
   for (const item of expected.images) {
@@ -544,12 +608,23 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
       throw new Error(`Pilot card image relation verification failed for ${doc.key ?? String(doc.id)}.`);
     }
   }
-  const contentDocs = [...verified.cards, ...verified.collections];
-  const published = contentDocs.filter((doc) => doc.status === 'published').length;
-  const indexed = contentDocs.filter((doc) => doc.robots === 'index,follow').length;
-  const sitemapUrlsAdded = contentDocs.filter((doc) =>
+  const presentContentDocs = [...verified.cards, ...verified.collections];
+  const importedCards = expected.cards.flatMap((item) => {
+    if (item.id === null) return [];
+    const doc = verified.cards.find((candidate) => String(candidate.id) === String(item.id));
+    return doc === undefined ? [] : [doc];
+  });
+  const importedCollections = expected.collections.flatMap((item) => {
+    if (item.id === null) return [];
+    const doc = verified.collections.find((candidate) => String(candidate.id) === String(item.id));
+    return doc === undefined ? [] : [doc];
+  });
+  const importedContentDocs = [...importedCards, ...importedCollections];
+  const published = presentContentDocs.filter((doc) => doc.status === 'published').length;
+  const indexed = presentContentDocs.filter((doc) => doc.robots === 'index,follow').length;
+  const sitemapUrlsAdded = presentContentDocs.filter((doc) =>
     doc.status === 'published' && doc.robots === 'index,follow').length;
-  const invalidState = contentDocs.filter((doc) =>
+  const invalidState = presentContentDocs.filter((doc) =>
     (doc.status !== 'draft' && doc.status !== 'review') || doc.robots !== 'noindex,follow');
   if (published !== 0 || indexed !== 0 || sitemapUrlsAdded !== 0 || invalidState.length > 0) {
     throw new Error(`Pilot invariant failed before report write: published=${String(published)}, indexed=${String(indexed)}.`);
@@ -568,24 +643,24 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
     if (record.kind === 'card') {
       const pilotId = record.key.slice('card:'.length);
       const stableKey = pilotCardImportKey(pilotId);
-      const doc = verified.cards.find((item) => item.key === stableKey);
-      if (doc === undefined) {
-        if (record.state === 'draft' || record.state === 'review') {
-          throw new Error(`Pilot identity verification lost ${record.key}.`);
-        }
-        return { ...record, stableKey };
+      if (record.state === 'error' || record.state === 'conflict') return { ...record, stableKey };
+      const item = expected.cards.find((candidate) => candidate.key === stableKey);
+      if (item?.id === null || item === undefined) {
+        throw new Error(`Pilot identity verification lost ${record.key}.`);
       }
+      const doc = verified.cards.find((candidate) => String(candidate.id) === String(item.id));
+      if (doc === undefined) throw new Error(`Pilot identity verification lost ${record.key}.`);
       return { ...record, id: doc.id, stableKey, state: doc.status as 'draft' | 'review' };
     }
     const seed = input.matrix.collections.find((item) => `collection:${item.key}` === record.key);
-    const doc = seed === undefined ? undefined : verified.collections.find((item) => item.path === seed.path);
     if (seed === undefined) throw new Error(`Pilot identity verification lost ${record.key}.`);
-    if (doc === undefined) {
-      if (record.state === 'draft' || record.state === 'review') {
-        throw new Error(`Pilot identity verification lost ${record.key}.`);
-      }
-      return { ...record, stableKey: seed.path };
+    if (record.state === 'error' || record.state === 'conflict') return { ...record, stableKey: seed.path };
+    const item = expected.collections.find((candidate) => candidate.path === seed.path);
+    if (item?.id === null || item === undefined) {
+      throw new Error(`Pilot identity verification lost ${record.key}.`);
     }
+    const doc = verified.collections.find((candidate) => String(candidate.id) === String(item.id));
+    if (doc === undefined) throw new Error(`Pilot identity verification lost ${record.key}.`);
     return { ...record, id: doc.id, stableKey: seed.path, state: doc.status as 'draft' | 'review' };
   });
   const report: PilotImportReport = {
@@ -599,11 +674,12 @@ export async function applyPilotContent(input: PilotApplyInput): Promise<PilotIm
       collectionsCreated,
       cardsCreated,
       resumed,
-      draft: contentDocs.filter((doc) => doc.status === 'draft').length,
-      review: contentDocs.filter((doc) => doc.status === 'review').length,
-      published,
-      indexed,
-      sitemapUrlsAdded,
+      draft: importedContentDocs.filter((doc) => doc.status === 'draft').length,
+      review: importedContentDocs.filter((doc) => doc.status === 'review').length,
+      published: importedContentDocs.filter((doc) => doc.status === 'published').length,
+      indexed: importedContentDocs.filter((doc) => doc.robots === 'index,follow').length,
+      sitemapUrlsAdded: importedContentDocs.filter((doc) =>
+        doc.status === 'published' && doc.robots === 'index,follow').length,
     },
     records: mappedRecords,
   };

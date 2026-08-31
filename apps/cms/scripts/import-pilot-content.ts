@@ -36,6 +36,7 @@ import {
   type PilotPreflightReport,
 } from '../src/import/pilot-preflight';
 import { pilotIntroDocument } from '../src/import/pilot-types';
+import { buildCardPath } from '../src/seo/paths';
 import {
   pilotCardImportKey,
   pilotImageImportKey,
@@ -609,6 +610,8 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
       });
     },
     async verifyImported(expected: PilotVerificationExpected) {
+      const cardIds = expected.cards.flatMap((item) => item.id === null ? [] : [item.id]);
+      const collectionIds = expected.collections.flatMap((item) => item.id === null ? [] : [item.id]);
       const [cards, collections, images] = await Promise.all([
         payload.find({
               collection: 'cards',
@@ -617,15 +620,22 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
               pagination: false,
               showHiddenFields: true,
               user,
-              where: { pilotImportKey: { in: expected.cards.map((item) => item.key) } },
+              where: { or: [
+                { pilotImportKey: { in: expected.cards.map((item) => item.key) } },
+                { id: { in: cardIds } },
+              ] },
             }).then((result) => result.docs),
         payload.find({
               collection: 'collections',
               depth: 0,
               overrideAccess: false,
               pagination: false,
+              showHiddenFields: true,
               user,
-              where: { path: { in: expected.collections.map((item) => item.path) } },
+              where: { or: [
+                { path: { in: expected.collections.map((item) => item.path) } },
+                { id: { in: collectionIds } },
+              ] },
             }).then((result) => result.docs),
         payload.find({
           collection: 'card-images', depth: 0, overrideAccess: false,
@@ -633,14 +643,37 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
           where: { pilotImportKey: { in: expected.images.map((item) => item.key) } },
         }).then((result) => result.docs),
       ]);
+      const actualPaths = [
+        ...cards.map((doc) => buildCardPath(doc.slug)),
+        ...collections.flatMap((doc) => doc.path === null || doc.path === undefined ? [] : [doc.path]),
+      ];
+      const claims = actualPaths.length === 0 ? [] : await payload.find({
+        collection: 'content-path-claims',
+        depth: 0,
+        // The registry is inaccessible to ai-editor. Keep this one final,
+        // read-only identity lookup isolated from all access-checked content reads.
+        overrideAccess: true,
+        pagination: false,
+        where: { path: { in: actualPaths } },
+      }).then((result) => result.docs);
       return {
         cards: cards.map((doc) => {
           const image = imageRecord(doc.image);
+          const path = buildCardPath(doc.slug);
+          const claim = claims.find((item) => item.path === path);
           return {
             id: doc.id,
             key: doc.pilotImportKey ?? null,
+            path,
+            pathClaimKey: doc.pathClaimKey ?? null,
             robots: doc.robots,
+            slug: doc.slug,
             status: doc.status,
+            claim: claim === undefined ? null : {
+              ownerCollection: claim.ownerCollection,
+              ownerKey: claim.ownerKey,
+              path: claim.path,
+            },
             image: image === null ? null : {
               id: image.id,
               key: image.pilotImportKey ?? null,
@@ -648,9 +681,23 @@ export function createPayloadPilotApplyStore(payload: Payload, actor: User): Pil
             },
           };
         }),
-        collections: collections.map((doc) => ({
-          id: doc.id, path: doc.path ?? '', robots: doc.robots, status: doc.status,
-        })),
+        collections: collections.map((doc) => {
+          const path = doc.path ?? '';
+          const claim = claims.find((item) => item.path === path);
+          return {
+            id: doc.id,
+            path,
+            pathClaimKey: doc.pathClaimKey ?? null,
+            robots: doc.robots,
+            slug: doc.slug,
+            status: doc.status,
+            claim: claim === undefined ? null : {
+              ownerCollection: claim.ownerCollection,
+              ownerKey: claim.ownerKey,
+              path: claim.path,
+            },
+          };
+        }),
         images: images.map((doc) => ({
           id: doc.id, key: doc.pilotImportKey ?? null, revision: doc.revision ?? null,
         })),

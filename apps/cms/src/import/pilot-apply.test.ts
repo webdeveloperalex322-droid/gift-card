@@ -232,7 +232,18 @@ function statefulStore(): StatefulStore {
     verifyImported(expected) {
       return Promise.resolve({
         cards: [...cards.values()].filter((doc) => expected.cards.some((item) => item.key === doc.pilotImportKey)).map((doc) => ({
-          id: doc.id, key: doc.pilotImportKey ?? null, status: doc.status, robots: doc.robots,
+          id: doc.id,
+          key: doc.pilotImportKey ?? null,
+          path: `/otkrytki/${doc.slug}`,
+          pathClaimKey: doc.pathClaimKey,
+          slug: doc.slug,
+          status: doc.status,
+          robots: doc.robots,
+          claim: doc.pathClaimKey === null ? null : {
+            path: `/otkrytki/${doc.slug}`,
+            ownerCollection: 'cards' as const,
+            ownerKey: `cards:${doc.pathClaimKey}`,
+          },
           image: doc.imageId === null || doc.imageId === undefined ? null : {
             id: doc.imageId,
             key: [...images.values()].find((image) => String(image.id) === String(doc.imageId))?.pilotImportKey ?? null,
@@ -240,7 +251,17 @@ function statefulStore(): StatefulStore {
           },
         })),
         collections: [...collections.values()].filter((doc) => expected.collections.some((item) => item.path === doc.path)).map((doc) => ({
-          id: doc.id, path: doc.path, status: doc.status, robots: doc.robots,
+          id: doc.id,
+          path: doc.path,
+          pathClaimKey: doc.pathClaimKey,
+          slug: doc.slug,
+          status: doc.status,
+          robots: doc.robots,
+          claim: doc.pathClaimKey === null ? null : {
+            path: doc.path,
+            ownerCollection: 'collections' as const,
+            ownerKey: `collections:${doc.pathClaimKey}`,
+          },
         })),
         images: [...images.values()].filter((doc) => expected.images.some((item) => item.key === doc.pilotImportKey)).map((doc) => ({
           id: doc.id, key: doc.pilotImportKey, revision: doc.revision,
@@ -516,6 +537,132 @@ describe('pilot apply', () => {
     await expect(readFile(path.reportPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('keeps a create error when a foreign card appears under the expected key before final verification', async () => {
+    const path = await paths();
+    const store = statefulStore();
+    store.failCardCreateFor = '08';
+    const failedSeed = matrix.cards.find((item) => item.pilotId === '08');
+    if (failedSeed === undefined) throw new Error('Expected failed card seed.');
+    const failedPath = `/otkrytki/${failedSeed.slug}`;
+    const verify = store.verifyImported.bind(store);
+    store.verifyImported = async (expected) => {
+      const snapshot = await verify(expected);
+      const expectedCard = expected.cards.find((item) => item.key === pilotCardImportKey('08'));
+      if (expectedCard === undefined) throw new Error('Expected failed card identity.');
+      return {
+        ...snapshot,
+        cards: [...snapshot.cards, {
+          claim: {
+            ownerCollection: 'cards' as const,
+            ownerKey: 'cards:foreign-card-claim',
+            path: failedPath,
+          },
+          id: 'foreign-card',
+          image: {
+            id: expectedCard.image.id ?? 'missing-image',
+            key: expectedCard.image.key,
+            revision: expectedCard.image.revision,
+          },
+          key: expectedCard.key,
+          path: failedPath,
+          pathClaimKey: 'foreign-card-claim',
+          robots: 'noindex,follow',
+          slug: failedSeed.slug,
+          status: 'review',
+        }],
+      };
+    };
+
+    const report = await applyPilotContent(await applyInput(store, path));
+
+    expect(report.records.find((record) => record.key === 'card:08')).toMatchObject({ state: 'error' });
+    expect(report.counts).toMatchObject({ draft: 0, review: 62 });
+  });
+
+  it('vetoes the report when a foreign post-failure card steals the expected path claim', async () => {
+    const path = await paths();
+    const store = statefulStore();
+    store.failCardCreateFor = '08';
+    const failedSeed = matrix.cards.find((item) => item.pilotId === '08');
+    if (failedSeed === undefined) throw new Error('Expected failed card seed.');
+    const failedPath = `/otkrytki/${failedSeed.slug}`;
+    const verify = store.verifyImported.bind(store);
+    store.verifyImported = async (expected) => {
+      const snapshot = await verify(expected);
+      const expectedCard = expected.cards.find((item) => item.key === pilotCardImportKey('08'));
+      if (expectedCard === undefined) throw new Error('Expected failed card identity.');
+      return {
+        ...snapshot,
+        cards: [...snapshot.cards, {
+          claim: {
+            ownerCollection: 'cards' as const,
+            ownerKey: 'cards:another-owner',
+            path: failedPath,
+          },
+          id: 'foreign-card',
+          image: {
+            id: expectedCard.image.id ?? 'missing-image',
+            key: expectedCard.image.key,
+            revision: expectedCard.image.revision,
+          },
+          key: expectedCard.key,
+          path: failedPath,
+          pathClaimKey: 'foreign-card-claim',
+          robots: 'noindex,follow',
+          slug: failedSeed.slug,
+          status: 'review',
+        }],
+      };
+    };
+
+    await expect(applyPilotContent(await applyInput(store, path))).rejects.toThrow(/claim owner/i);
+    await expect(readFile(path.reportPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('vetoes final card slug drift after the row-locked review commit', async () => {
+    const path = await paths();
+    const store = statefulStore();
+    const verify = store.verifyImported.bind(store);
+    store.verifyImported = async (expected) => {
+      const snapshot = await verify(expected);
+      const first = snapshot.cards[0];
+      if (first === undefined) return snapshot;
+      return {
+        ...snapshot,
+        cards: [{
+          ...first,
+          path: '/otkrytki/chuzhoy-slug',
+          slug: 'chuzhoy-slug',
+          claim: first.claim === null ? null : { ...first.claim, path: '/otkrytki/chuzhoy-slug' },
+        }, ...snapshot.cards.slice(1)],
+      };
+    };
+
+    await expect(applyPilotContent(await applyInput(store, path))).rejects.toThrow(/final path identity/i);
+    await expect(readFile(path.reportPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('vetoes final collection claim drift after the row-locked review commit', async () => {
+    const path = await paths();
+    const store = statefulStore();
+    const verify = store.verifyImported.bind(store);
+    store.verifyImported = async (expected) => {
+      const snapshot = await verify(expected);
+      const first = snapshot.collections[0];
+      if (first === undefined || first.claim === null) return snapshot;
+      return {
+        ...snapshot,
+        collections: [{
+          ...first,
+          claim: { ...first.claim, ownerKey: 'collections:stolen-claim' },
+        }, ...snapshot.collections.slice(1)],
+      };
+    };
+
+    await expect(applyPilotContent(await applyInput(store, path))).rejects.toThrow(/claim owner/i);
+    await expect(readFile(path.reportPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('rejects cyclic or missing-parent collection graphs before creating anything', () => {
     const first = matrix.collections[0];
     const second = matrix.collections[1];
@@ -699,6 +846,78 @@ describe('pilot apply', () => {
       expect.objectContaining({ collection: 'cards', overrideAccess: false, user: actorDocument }),
       expect.objectContaining({ collection: 'content-path-claims', overrideAccess: true }),
     ]);
+  });
+
+  it('adds permanent claims to the final snapshot through one isolated trusted read', async () => {
+    const collectionSeed = matrix.collections[0];
+    const cardSeed = matrix.cards[0];
+    if (collectionSeed === undefined || cardSeed === undefined) throw new Error('Expected pilot seeds.');
+    const collectionDoc = payloadCollection(collectionSeed);
+    const cardDoc = payloadCard(cardSeed, collectionDoc);
+    const imageDoc = cardDoc.image as CardImage;
+    const cardPath = `/otkrytki/${cardSeed.slug}`;
+    const calls: Array<Record<string, unknown>> = [];
+    const payload = {
+      find(input: Record<string, unknown>) {
+        calls.push(input);
+        if (input.collection === 'cards') return Promise.resolve({ docs: [cardDoc] });
+        if (input.collection === 'collections') return Promise.resolve({ docs: [collectionDoc] });
+        if (input.collection === 'card-images') return Promise.resolve({ docs: [imageDoc] });
+        if (input.collection === 'content-path-claims') return Promise.resolve({ docs: [
+          { path: cardPath, ownerCollection: 'cards', ownerKey: `cards:${cardDoc.pathClaimKey}` },
+          {
+            path: collectionDoc.path,
+            ownerCollection: 'collections',
+            ownerKey: `collections:${collectionDoc.pathClaimKey}`,
+          },
+        ] });
+        return Promise.resolve({ docs: [] });
+      },
+    } as unknown as Payload;
+
+    const snapshot = await createPayloadPilotApplyStore(payload, actorDocument()).verifyImported({
+      cards: [{
+        id: cardDoc.id,
+        image: { id: imageDoc.id, key: pilotImageImportKey(cardSeed.pilotId), revision },
+        key: pilotCardImportKey(cardSeed.pilotId),
+        path: cardPath,
+        pathClaimKey: cardDoc.pathClaimKey ?? null,
+        slug: cardSeed.slug,
+      }],
+      collections: [{
+        id: collectionDoc.id,
+        path: collectionSeed.path,
+        pathClaimKey: collectionDoc.pathClaimKey ?? null,
+        slug: collectionSeed.slug,
+      }],
+      images: [{ id: imageDoc.id, key: pilotImageImportKey(cardSeed.pilotId), revision }],
+    });
+
+    expect(snapshot.cards[0]?.claim).toEqual({
+      path: cardPath,
+      ownerCollection: 'cards',
+      ownerKey: `cards:${cardDoc.pathClaimKey}`,
+    });
+    expect(snapshot.collections[0]?.claim).toEqual({
+      path: collectionSeed.path,
+      ownerCollection: 'collections',
+      ownerKey: `collections:${collectionDoc.pathClaimKey}`,
+    });
+    const contentCalls = calls.filter((call) => call.collection !== 'content-path-claims');
+    expect(contentCalls.map((call) => ({
+      collection: call.collection,
+      overrideAccess: call.overrideAccess,
+    }))).toEqual(expect.arrayContaining([
+      { collection: 'cards', overrideAccess: false },
+      { collection: 'collections', overrideAccess: false },
+      { collection: 'card-images', overrideAccess: false },
+    ]));
+    expect(contentCalls.every((call) => call.user !== undefined)).toBe(true);
+    const claimCalls = calls.filter((call) => call.collection === 'content-path-claims');
+    expect(claimCalls).toHaveLength(1);
+    expect(claimCalls[0]?.overrideAccess).toBe(true);
+    const claimWhere = claimCalls[0]?.where as { readonly path?: { readonly in?: readonly string[] } } | undefined;
+    expect(claimWhere?.path?.in).toEqual(expect.arrayContaining([cardPath, collectionSeed.path]));
   });
 
   it('writes concurrent reports with unique private temp paths and cleans both', async () => {
