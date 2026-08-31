@@ -51,6 +51,7 @@
  */
 import CardGrid from '../components/CardGrid.astro';
 import SearchForm from '../components/SearchForm.astro';
+import StampMark from '../components/StampMark.astro';
 import { homePage } from '../data';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { HOME_PAGE } from '../seo/home-page';
@@ -69,22 +70,31 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
   canonicalPath={content.view.canonicalPath}
   robots={content.view.robots}
 >
-  <h1>{content.view.heading}</h1>
+  {/* Герой — обратная сторона открытки: бумажный лист, оттиск штемпеля в углу,
+      заголовок и поиск на нём. Это оформление, а не структура: внутри тот же
+      единственный `<h1>`, тот же вводный текст и та же форма поиска, что были
+      до направления «Почтовый штемпель». Оттиск помечен `aria-hidden`, потому
+      что содержания не несёт. */}
+  <div class="hero">
+    <StampMark class="hero__mark" size={96} />
 
-  <div class="home__lead">
-    {content.lead.map((paragraph) => <p>{paragraph}</p>)}
+    <h1>{content.view.heading}</h1>
+
+    <div class="home__lead">
+      {content.lead.map((paragraph) => <p>{paragraph}</p>)}
+    </div>
+
+    {/* Форма поиска (Э3-10): обычная HTML-форма с method="get", ноль клиентского
+        JS. Она ведёт на единственный маршрут /search с чистым canonical и второго
+        адреса главной не создаёт. */}
+    <SearchForm fieldId="home-search-query" />
   </div>
-
-  {/* Форма поиска (Э3-10): обычная HTML-форма с method="get", ноль клиентского
-      JS. Она ведёт на единственный маршрут /search с чистым canonical и второго
-      адреса главной не создаёт. */}
-  <SearchForm fieldId="home-search-query" />
 
   {
     content.seasonal.length === 0 ? null : (
       <nav class="page-section" aria-label={HOME_PAGE.seasonal.listLabel}>
         <h2>{HOME_PAGE.seasonal.heading}</h2>
-        <ul class="link-row">
+        <ul class="home__stamps">
           {
             content.seasonal.map((link) => (
               <li>
@@ -148,10 +158,81 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
 <style>
   .home__lead {
     max-width: 45rem;
+    color: var(--ink-soft);
   }
 
   .home__lead > p {
     margin-block: 0 0.75rem;
+  }
+
+  /* Сезонные подборки — марки с зубцовкой: второй характерный предмет
+     почтового направления после штемпеля. */
+  .home__stamps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .home__stamps a {
+    position: relative;
+    /* Свой контекст наложения: подложка уходит под текст ссылки, но НЕ под
+       фон родителя. */
+    isolation: isolate;
+    display: block;
+    padding: 0.625rem 0.8125rem;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    text-decoration: none;
+  }
+
+  /* Зубцовка вырезана маской из четырёх слоёв и висит на `::before`, а не на
+     самой ссылке. Причина: маска обрезает ВСЮ отрисовку элемента, а `outline`
+     рисуется вне border-box — на фокусируемой ссылке маска срезала бы видимое
+     фокусное кольцо, то есть ломала бы навигацию с клавиатуры.
+
+     Там, где браузер не понимает `mask-composite`, четыре слоя складываются в
+     объединение и марка остаётся обычным прямоугольником. Это осознанная
+     деградация: ни один вариант не даёт «дырявого» блока с пропавшим текстом. */
+  .home__stamps a::before {
+    --stamp-perf-dot: 4px;
+    --stamp-perf-step: 11px;
+
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--paper-sunken);
+    -webkit-mask:
+      radial-gradient(var(--stamp-perf-dot) at 50% 0, #0000 98%, #000) 0 0 /
+        var(--stamp-perf-step) 100%,
+      radial-gradient(var(--stamp-perf-dot) at 50% 100%, #0000 98%, #000) 0 100% /
+        var(--stamp-perf-step) 100%,
+      radial-gradient(var(--stamp-perf-dot) at 0 50%, #0000 98%, #000) 0 0 / 100%
+        var(--stamp-perf-step),
+      radial-gradient(var(--stamp-perf-dot) at 100% 50%, #0000 98%, #000) 100% 0 / 100%
+        var(--stamp-perf-step);
+    -webkit-mask-composite: source-in;
+    mask:
+      radial-gradient(var(--stamp-perf-dot) at 50% 0, #0000 98%, #000) 0 0 /
+        var(--stamp-perf-step) 100%,
+      radial-gradient(var(--stamp-perf-dot) at 50% 100%, #0000 98%, #000) 0 100% /
+        var(--stamp-perf-step) 100%,
+      radial-gradient(var(--stamp-perf-dot) at 0 50%, #0000 98%, #000) 0 0 / 100%
+        var(--stamp-perf-step),
+      radial-gradient(var(--stamp-perf-dot) at 100% 50%, #0000 98%, #000) 100% 0 / 100%
+        var(--stamp-perf-step);
+    mask-composite: intersect;
+  }
+
+  .home__stamps a:hover::before {
+    background: var(--stamp-tint);
+  }
+
+  .home__stamps a:hover {
+    color: var(--stamp);
   }
 
   .home__sections {

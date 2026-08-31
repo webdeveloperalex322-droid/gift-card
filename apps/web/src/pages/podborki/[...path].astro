@@ -367,12 +367,26 @@ const updatedLabel =
   .collection__filtered {
     margin-block: 1rem 0;
     font-size: 0.9375rem;
-    opacity: 0.85;
+    color: var(--ink-soft);
   }
 
+  /* Дата содержательного обновления — служебная строка бланка, а не текст
+     подборки: моноширинный, с отчёркиванием слева, как отметка на обороте. */
   .collection__updated {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
     margin-block-start: 2rem;
-    font-size: 0.875rem;
-    opacity: 0.75;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+    color: var(--ink-faint);
+  }
+
+  .collection__updated::before {
+    content: '';
+    flex: 0 0 1.5rem;
+    height: 1px;
+    background: var(--rule);
   }
 </style>

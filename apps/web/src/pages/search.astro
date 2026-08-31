@@ -103,16 +103,21 @@ const query = content.view.query;
   .search__lead {
     max-width: 45rem;
     margin-block: 0 0.5rem;
+    color: var(--ink-soft);
   }
 
+  /* Сводка результатов — содержательная фраза с запросом посетителя, а не
+     служебная подпись: остаётся в основном начертании и в основном размере.
+     Моноширинный мелкий кегль здесь был бы нечитаем. */
   .search__summary {
-    margin-block: 1rem 0;
+    margin-block: 1.25rem 0;
+    color: var(--ink-soft);
   }
 
   .search__notice {
     max-width: 45rem;
     margin-block: 1rem 0;
     font-size: 0.9375rem;
-    opacity: 0.85;
+    color: var(--ink-soft);
   }
 </style>

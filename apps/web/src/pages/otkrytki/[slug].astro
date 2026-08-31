@@ -205,18 +205,61 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
     margin: 0;
   }
 
+  /* Рамка изображения живёт в критическом CSS `../../layouts/BaseLayout.astro`,
+     а не здесь: scoped-стиль страницы до элементов picture и img не достаёт —
+     их печатает `CardImage.astro`, и атрибута области видимости этой страницы
+     они не несут. Обоснование целиком — в комментарии у самого правила. */
+
+  /* Мера в `em`, а не в `ch`: `ch` — это ширина знака «0» ТЕКУЩЕГО шрифта,
+     поэтому при подмене шрифта она меняется и переворачивает переносы. */
   .card__figure figcaption {
-    margin-block-start: 0.5rem;
+    max-width: 28em;
+    margin-block-start: 0.75rem;
     font-size: 0.9375rem;
+    color: var(--ink-soft);
   }
 
+  /* Скачивание — главное действие страницы, поэтому единственная закрашенная
+     кнопка здесь. Ссылка остаётся ссылкой с атрибутом `download`: кнопкой её
+     делает оформление, а не скрипт. */
   .card__download {
-    margin-block: 1rem 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem 0.875rem;
+    margin-block: 1.25rem 0;
   }
 
-  .card__download-note,
-  .card__attribute-kind {
-    opacity: 0.75;
+  .card__download > a {
+    padding: 0.5rem 1.125rem;
+    background: var(--stamp);
+    color: var(--paper-raised);
+    font-weight: 500;
+    text-decoration: none;
+  }
+
+  .card__download > a:hover {
+    background: var(--ink);
+  }
+
+  /* Фокусное кольцо у закрашенной кнопки — чернильное, а не акцентное: акцент
+     по акценту почти не читается, между кольцом и заливкой всего 2 px. */
+  .card__download > a:focus-visible {
+    outline-color: var(--ink);
+  }
+
+  .card__download-note {
     font-size: 0.875rem;
+    color: var(--ink-soft);
+  }
+
+  /* Вид атрибута — служебная подпись бланка, поэтому моноширинный и капитель.
+     Само значение остаётся ссылкой в основном начертании. */
+  .card__attribute-kind {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
   }
 </style>

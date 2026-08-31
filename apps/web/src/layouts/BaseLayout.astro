@@ -24,6 +24,142 @@
  * решение об `index,follow` принимает человек (п. 7.1 и п. 23 ТЗ), поэтому
  * забывчивость обязана быть ошибкой типов, а не поведением.
  *
+ * ## Дизайн-система «Почтовый штемпель»
+ *
+ * Направление и его токены живут в критическом CSS этого файла — единственном
+ * месте, где объявлены палитра, гарнитуры и оформление общих блоков. Форма взята
+ * у предмета: обратная сторона почтовой открытки. Правила направления, которые
+ * обязаны соблюдаться при любой правке шаблонов:
+ *
+ *   - **акцент один** — фиолетовый штемпельной краски (`--stamp`). Закрашенных
+ *     им элементов на странице не больше одного, и это главное действие страницы
+ *     (поиск на главной, скачивание на карточке);
+ *   - **ни скруглений, ни градиентов, ни теней**: оправа не спорит с цветными
+ *     открытками, а они и есть содержание сайта;
+ *   - **состояние кодируется цветом и линией, а не прозрачностью.** Погашенный
+ *     активный элемент читается как «недоступно», и вместе с рамкой
+ *     прозрачность гасит подпись, из-за чего та перестаёт проходить по
+ *     контрасту;
+ *   - **начертания только те, файлы которых есть** — 600 у Unbounded, 400 и 500
+ *     у Golos Text. Значения 700 в стилях проекта нет нигде, включая `strong`:
+ *     браузер нарисовал бы поддельный жир;
+ *   - **тема — системная настройка посетителя.** Переключателя нет и не будет:
+ *     он потребовал бы клиентского JS, а инвариант проекта — ноль клиентского JS
+ *     по умолчанию. Поэтому состояний ровно два, и каждый цвет объявлен в обоих.
+ *
+ * ### Граница применимости `--ink-faint`
+ *
+ * Этим цветом набраны служебные подписи кеглем 11–12 px, поэтому он обязан давать
+ * ≥ 4,5:1. Замерено: 4,83 на `--paper` и 5,27 на `--paper-raised` в светлой теме,
+ * 5,48 и 4,97 в тёмной — то есть на ОБОИХ бумажных фонах он проходит.
+ *
+ * На двух остальных подложках он порога НЕ даёт: 4,44 на `--paper-sunken` и 4,31
+ * на `--stamp-tint`. Текста этим цветом на них сейчас нет; если понадобится —
+ * берите `--ink-soft`, а не осветляйте фон. Осветление фона просаживает порог
+ * молча, и заметить это можно только замером.
+ *
+ * ### Шрифты
+ *
+ * Файлы лежат в `public/fonts` и отдаются своим же доменом. Внешний хост
+ * (`fonts.googleapis.com`) отклонён по двум причинам: это второй origin в
+ * критическом пути первого экрана — DNS и TLS до появления текста, — и внешняя
+ * зависимость отдачи шрифта, за которую проект не отвечает.
+ *
+ * Подмножества раздельные: `unicode-range` заставляет браузер скачать кириллицу
+ * и латиницу отдельными файлами и только те, что нужны странице. Цифры и знаки
+ * препинания лежат в ЛАТИНСКОМ диапазоне, поэтому на русской странице грузятся
+ * оба файла — это учтено в весе (шесть файлов, 71,5 КБ на всё направление).
+ *
+ * `font-display: swap`: текст обязан быть виден с первого кадра, поэтому сначала
+ * системный шрифт, затем подмена. Пара КИРИЛЛИЧЕСКИХ файлов предзагружается
+ * ссылками `rel="preload"` в `<head>` — их ждёт текст первого экрана на каждой
+ * странице, поэтому окно подмены закрывается почти сразу. Латиница и начертание
+ * 500 предзагрузку не получают: они встречаются ниже и в меньшем объёме, и
+ * занимать ими полосу первого экрана незачем.
+ *
+ * `crossorigin` у ссылок предзагрузки обязателен даже для своего домена: шрифты
+ * запрашиваются в режиме CORS всегда, и без атрибута браузер считает
+ * предзагруженный файл другим ресурсом и качает его во второй раз.
+ *
+ * Утилитарная роль (даты, служебные подписи, метаданные) отдана СИСТЕМНОМУ
+ * monospace намеренно: отдельный файл ради подписей стоил бы ещё 26 КБ на первом
+ * экране, а системный моноширинный на этих кеглях не хуже.
+ *
+ * Откуда взялись файлы (пин на случай обновления — автоматической синхронизации
+ * НЕТ, файлы скопированы один раз и лежат в git):
+ *
+ *   - `@fontsource/unbounded@5.3.0` → `files/unbounded-{cyrillic,latin}-600-normal.woff2`;
+ *   - `@fontsource/golos-text@5.3.0` → `files/golos-text-{cyrillic,latin}-{400,500}-normal.woff2`.
+ *
+ * Пакеты стоят в `devDependencies` `apps/web` ровно как источник этих файлов и
+ * ничем не импортируются. Обе гарнитуры под SIL Open Font License 1.1; текст
+ * лицензии лежит рядом с файлами (`public/fonts/LICENSE-*.txt`), как требует
+ * условие перераспространения. При обновлении пакета файлы и этот пин надо
+ * привести в соответствие вручную — расхождение `pnpm verify` не поймает.
+ *
+ * Следствие, принятое осознанно: `public/fonts/LICENSE-*.txt` доступны по своим
+ * адресам и никакой директивой не закрыты. Это правильно, а не упущение — OFL
+ * требует, чтобы текст лицензии сопровождал файлы. Страницами они не являются,
+ * ссылок на них нет, в sitemap не попадают.
+ *
+ * Не закрыто и отдано этапу 7: файлы из `public/fonts` отдаются БЕЗ
+ * `Cache-Control` — `immutableCacheControlFor` (`../routing/path-policy.ts`)
+ * знает только префикс `/_astro/`. Честный долгий кеш требует контент-хеша в
+ * имени файла, то есть шага сборки, а это задача Э7-04 («длительное кеширование
+ * статики с контент-хешами»), а не оформления.
+ *
+ * ### Знак в шапке
+ *
+ * Рисунок живёт в `../components/StampMark.astro` — он выводится и здесь, и
+ * крупным оттиском в герое главной, поэтому геометрия обязана быть в одном месте.
+ * Что в рисунке есть, чего в нём намеренно нет (названия, города, даты) и почему
+ * — в шапке компонента.
+ *
+ * Здесь знак завёрнут в ссылку на `/`. Доступное имя даёт `aria-label` ссылки, а
+ * сам рисунок помечен `aria-hidden`: иначе скринридер прочитал бы ссылку без
+ * названия. Оформление (цвет, положение) задаётся классом `wordmark__mark`
+ * снаружи компонента: знак в шапке и оттиск в герое — два разных предмета, а не
+ * один в двух размерах.
+ *
+ * ### Почему оформление изображений живёт в ЭТОМ файле
+ *
+ * Рамки плиток списка и главного изображения карточки объявлены здесь, а не в
+ * блоках стилей своих шаблонов. Причина не в удобстве: scoped-стили Astro
+ * дописывают `data-astro-cid-…` КАЖДОМУ звену селектора, а элементы picture и
+ * img печатает компонент `CardImage.astro` — они атрибута страницы не несут, и
+ * правило вида `.card__figure picture` из стилей страницы не совпало бы ни с
+ * чем. Блок `is:inline` не скоупится, поэтому здесь селектор работает.
+ *
+ * Рамки устроены РАЗНО, и это не небрежность:
+ *
+ *   - у **плитки сетки** рамка просто блочная, а изображению задана ширина
+ *     `100%`. Трек сетки уже самой узкой производной, поэтому растягивания не
+ *     происходит, а рамка и так занимает трек целиком;
+ *   - у **главного изображения карточки** ширина изображению НЕ задаётся: она
+ *     растянула бы файл 640 px до ширины колонки, то есть выдала бы мыло вместо
+ *     резкости. Поэтому рамке нужен `width: fit-content` — иначе она растянулась
+ *     бы на всю колонку и у карточки с небольшим исходником вокруг картинки
+ *     осталось бы пустое поле внутри рамки.
+ *
+ * `fit-content` там взят вместо `display: inline-block`, который решал ту же
+ * задачу: у `inline-block` под изображением оставался зазор строчного бокса,
+ * величина которого зависит от метрик шрифта строки, — при подмене шрифта он
+ * менялся и сдвигал подпись со всем, что ниже.
+ *
+ * ### Два правила для правок блока `is:inline`
+ *
+ * Блок уезжает в ответ сервера КАК ЕСТЬ: Astro его не обрабатывает и не
+ * минифицирует. Отсюда два следствия, оба проверены на практике:
+ *
+ *   - **проза принадлежит этой шапке, а не блоку стилей.** Комментарий внутри
+ *     блока — это байты в каждом ответе на каждой странице, даже там, где
+ *     правило неприменимо. В блоке остаются однострочные указатели;
+ *   - **имена тегов внутри блока пишутся БЕЗ угловых скобок.** Приёмка SEO ищет
+ *     теги регулярным выражением по всему ответу (`openingTags` в
+ *     `tests/seo/support/html.ts`), поэтому литерал в CSS-комментарии она
+ *     считает разметкой. Однажды это уже уронило `image-attributes.spec.ts` на
+ *     пяти страницах с сообщением «у img обязан быть реальный src».
+ *
  * Про `is:inline` у блока стилей: без этой директивы судьбу критического CSS
  * решает Astro (`build.inlineStylesheets: 'auto'`) и при росте файла выносит его
  * во внешний запрос. Критический CSS обязан приходить первым ответом, иначе
@@ -32,6 +168,7 @@
  * комментарий уехал бы в каждый ответ сервера.
  */
 import SiteFooter from '../components/SiteFooter.astro';
+import StampMark from '../components/StampMark.astro';
 import SiteNav from '../components/SiteNav.astro';
 import { canonicalUrlFor } from '../routing/canonical';
 import type { PageRobots } from '../seo/robots-directive';
@@ -117,45 +254,197 @@ const descriptionText = description?.trim() ?? '';
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link
+      rel="preload"
+      href="/fonts/unbounded-cyrillic-600-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/fonts/golos-text-cyrillic-400-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <title>{title}</title>
     {descriptionText === '' ? null : <meta name="description" content={descriptionText} />}
     <meta name="robots" content={robots} />
     {canonicalUrl === null ? null : <link rel="canonical" href={canonicalUrl} />}
     <style is:inline>
-      :root {
-        color-scheme: light dark;
-        --content-max: 60rem;
+      /* Шрифты. Обоснование выбора, веса и подмножеств — в шапке файла. */
+      @font-face {
+        font-family: 'Unbounded';
+        font-style: normal;
+        font-weight: 600;
+        font-display: swap;
+        src: url('/fonts/unbounded-cyrillic-600-normal.woff2') format('woff2');
+        unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
       }
+      @font-face {
+        font-family: 'Unbounded';
+        font-style: normal;
+        font-weight: 600;
+        font-display: swap;
+        src: url('/fonts/unbounded-latin-600-normal.woff2') format('woff2');
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+          U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+          U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+      @font-face {
+        font-family: 'Golos Text';
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url('/fonts/golos-text-cyrillic-400-normal.woff2') format('woff2');
+        unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+      }
+      @font-face {
+        font-family: 'Golos Text';
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url('/fonts/golos-text-latin-400-normal.woff2') format('woff2');
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+          U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+          U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+      @font-face {
+        font-family: 'Golos Text';
+        font-style: normal;
+        font-weight: 500;
+        font-display: swap;
+        src: url('/fonts/golos-text-cyrillic-500-normal.woff2') format('woff2');
+        unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+      }
+      @font-face {
+        font-family: 'Golos Text';
+        font-style: normal;
+        font-weight: 500;
+        font-display: swap;
+        src: url('/fonts/golos-text-latin-500-normal.woff2') format('woff2');
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+          U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+          U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+
+      /* Токены направления «Почтовый штемпель» — см. шапку файла. Оба состояния
+         темы объявляют ОДИН и тот же набор имён. */
+      :root {
+        color-scheme: light;
+
+        --content-max: 60rem;
+
+        --paper: #f1f0f4;
+        --paper-raised: #fbfafc;
+        --paper-sunken: #e8e6ee;
+        --ink: #1c1b26;
+        --ink-soft: #5c5a6b;
+        /* Не светлее. Границы применимости — в шапке файла. */
+        --ink-faint: #6a6779;
+        --stamp: #57327d;
+        --stamp-tint: #e9e1f2;
+        --rule: #d6d3de;
+
+        --font-display: 'Unbounded', system-ui, sans-serif;
+        --font-body: 'Golos Text', system-ui, -apple-system, 'Segoe UI', Roboto, Arial,
+          sans-serif;
+        --font-mono: ui-monospace, 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', monospace;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+
+          --paper: #17161c;
+          --paper-raised: #201f28;
+          --paper-sunken: #2a2833;
+          --ink: #edecf2;
+          --ink-soft: #a8a5b6;
+          --ink-faint: #8f8c9d;
+          --stamp: #b491de;
+          --stamp-tint: #2c2438;
+          --rule: #393644;
+        }
+      }
+
       *,
       *::before,
       *::after {
         box-sizing: border-box;
       }
       html {
-        font-family:
-          system-ui,
-          -apple-system,
-          'Segoe UI',
-          Roboto,
-          Arial,
-          sans-serif;
-        line-height: 1.5;
+        font-family: var(--font-body);
+        line-height: 1.55;
         text-size-adjust: 100%;
       }
+      /* Фон и цвет — явно из токенов: без этого тёмная тема системы дала бы
+         тёмный фон под тёмным текстом. */
       body {
         margin: 0;
         min-height: 100vh;
         display: flex;
         flex-direction: column;
+        background: var(--paper);
+        color: var(--ink);
       }
+      h1,
+      h2,
+      h3 {
+        font-family: var(--font-display);
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        text-wrap: balance;
+      }
+      h1 {
+        font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2.125rem);
+        line-height: 1.15;
+        margin-block: 0 0.75rem;
+      }
+      /* 500, а не 700: файла начертания 700 в проекте нет — см. шапку. */
+      strong,
+      b {
+        font-weight: 500;
+      }
+      img {
+        max-width: 100%;
+        height: auto;
+      }
+      a {
+        color: inherit;
+      }
+      a:focus-visible,
+      button:focus-visible,
+      input:focus-visible {
+        outline: 2px solid var(--stamp);
+        outline-offset: 2px;
+      }
+
       .layout__header {
         width: 100%;
         max-width: var(--content-max);
         margin-inline: auto;
-        padding: 0.75rem 1rem 0;
+        padding: 0.875rem 1rem;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.75rem 1.5rem;
+        border-block-end: 1px solid var(--rule);
       }
-      /* Меню — в критическом CSS по той же причине, что сетка превью: это первый
-         экран каждой страницы, и внешний запрос за CSS сдвигал бы макет. */
+      .wordmark {
+        display: flex;
+        flex: 0 0 auto;
+      }
+      .wordmark__mark {
+        display: block;
+        color: var(--stamp);
+      }
+      /* Меню — в критическом CSS по той же причине, что сетка превью: это
+         первый экран каждой страницы. */
+      .site-nav {
+        margin-inline-start: auto;
+      }
       .site-nav__list {
         display: flex;
         flex-wrap: wrap;
@@ -165,9 +454,17 @@ const descriptionText = description?.trim() ?? '';
         list-style: none;
         font-size: 0.9375rem;
       }
-      .site-nav__link[aria-current='page'] {
-        font-weight: 700;
+      .site-nav__link {
         text-decoration: none;
+        padding-block-end: 2px;
+        border-block-end: 1px solid transparent;
+      }
+      .site-nav__link:hover {
+        color: var(--stamp);
+        border-block-end-color: var(--stamp);
+      }
+      .site-nav__link[aria-current='page'] {
+        border-block-end-color: var(--ink);
       }
       .layout__main {
         flex: 1 0 auto;
@@ -176,38 +473,54 @@ const descriptionText = description?.trim() ?? '';
         margin-inline: auto;
         padding: 1rem;
       }
-      /* Подвал — в критическом CSS по той же причине, что меню: он есть на
-         каждой странице, и внешний запрос за его стилями двигал бы макет. */
+      /* Подвал — на каждой странице, поэтому тоже в критическом CSS. */
       .site-footer {
         width: 100%;
         max-width: var(--content-max);
         margin-inline: auto;
-        padding: 1rem;
-        font-size: 0.875rem;
-        opacity: 0.85;
+        margin-block-start: 1.5rem;
+        padding: 1.25rem 1rem 2rem;
+        border-block-start: 1px solid var(--rule);
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        letter-spacing: 0.04em;
+        color: var(--ink-soft);
       }
-      h1 {
-        font-size: 1.75rem;
-        line-height: 1.2;
-        margin-block: 0 0.75rem;
+
+      /* Герой главной — первый экран, поэтому здесь, а не в стилях страницы. */
+      .hero {
+        position: relative;
+        border: 1px solid var(--rule);
+        background: var(--paper-raised);
+        padding: clamp(1.25rem, 3vw, 2rem) clamp(1rem, 4vw, 2.25rem);
       }
-      img {
-        max-width: 100%;
-        height: auto;
+      .hero__mark {
+        position: absolute;
+        inset-block-start: 0.75rem;
+        inset-inline-end: 0.75rem;
+        color: var(--stamp);
+        opacity: 0.5;
+        transform: rotate(-9deg);
+        pointer-events: none;
       }
-      a {
-        color: inherit;
+      /* Мера в `em`, а не в `ch`: `ch` зависит от текущего шрифта — см. шапку. */
+      .hero > h1 {
+        max-width: 16em;
       }
+      /* Порог 40rem, а не 34rem: до этой ширины оттиск налезал на длинный
+         заголовок, а заголовок важнее знака. */
+      @media (max-width: 40rem) {
+        .hero__mark {
+          display: none;
+        }
+      }
+
       /* Сетка превью. ЭТО КОНТРАКТ с набором `sizes` роли `grid-tile`
          (`src/images/card-image.ts`, IMAGE_LAYOUT_SIZES): пороги там посчитаны
-         ровно для `minmax(15rem, 1fr)` и `gap: 1rem` внутри колонки контента.
-         Правка сетки без правки набора в том же коммите означает, что браузер
-         выбирает ширину файла под сетку, которой нет.
-
-         Сетка живёт в критическом CSS, а не в `<style>` компонента, по той же
-         причине, по которой у компонента изображения нет своего блока стилей:
-         это первый экран страницы подборки, и внешний запрос за CSS сдвигал бы
-         LCP и давал бы сдвиг макета. */
+         ровно для `minmax(15rem, 1fr)` и `gap: 1rem` внутри колонки контента
+         `--content-max` = 60rem с отбивкой `1rem`. Правка любого из этих
+         четырёх значений без правки набора в том же коммите означает, что
+         браузер выбирает ширину файла под сетку, которой нет. */
       .card-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
@@ -220,22 +533,63 @@ const descriptionText = description?.trim() ?? '';
         display: block;
         text-decoration: none;
       }
+      .card-grid__link picture {
+        display: block;
+        padding: 0.375rem;
+        border: 1px solid var(--rule);
+        background: var(--paper-raised);
+      }
+      .card-grid__link img {
+        display: block;
+        width: 100%;
+      }
       .card-grid__title {
         display: block;
-        margin-block-start: 0.375rem;
+        margin-block-start: 0.5rem;
         font-size: 0.9375rem;
-        text-decoration: underline;
+        font-weight: 500;
+        line-height: 1.4;
       }
+      .card-grid__link:hover picture {
+        border-color: var(--stamp);
+      }
+      .card-grid__link:hover .card-grid__title {
+        color: var(--stamp);
+      }
+      /* Единственная анимация сайта — целиком внутри `no-preference`. */
+      @media (prefers-reduced-motion: no-preference) {
+        .card-grid__link picture {
+          transition:
+            border-color 0.15s,
+            transform 0.15s;
+        }
+        .card-grid__link:hover picture {
+          transform: translateY(-2px);
+        }
+      }
+
+      /* Рамка главного изображения карточки. Почему правило здесь, а не в
+         стилях страницы, и почему `fit-content` — в шапке файла. */
+      .card__figure picture {
+        display: block;
+        width: fit-content;
+        padding: 0.5rem;
+        border: 1px solid var(--rule);
+        background: var(--paper-raised);
+      }
+      .card__figure img {
+        display: block;
+      }
+
       .page-section {
         margin-block-start: 2rem;
       }
       .page-section > h2 {
-        font-size: 1.25rem;
+        font-size: clamp(1.125rem, 1rem + 0.6vw, 1.375rem);
         margin-block: 0 0.75rem;
       }
       /* Ряды ссылок: атрибуты карточки, перелинковка, «поделиться». Списком, а
-         не абзацем: это перечисление ссылок, и вспомогательные технологии
-         обязаны знать их число. */
+         не абзацем: вспомогательные технологии обязаны знать число ссылок. */
       .link-row {
         display: flex;
         flex-wrap: wrap;
@@ -244,6 +598,16 @@ const descriptionText = description?.trim() ?? '';
         padding: 0;
         list-style: none;
       }
+      .link-row a,
+      .site-footer a {
+        text-decoration: none;
+        border-block-end: 1px solid var(--rule);
+      }
+      .link-row a:hover,
+      .site-footer a:hover {
+        color: var(--stamp);
+        border-block-end-color: var(--stamp);
+      }
     </style>
   </head>
   <body>
@@ -251,6 +615,9 @@ const descriptionText = description?.trim() ?? '';
          навигацию» — условие п. 5.1 ТЗ, и выполнять его по одному шаблону из
          пяти нельзя. Состав пунктов — src/seo/catalog-pages.ts. -->
     <header class="layout__header">
+      <a class="wordmark" href="/" aria-label="На главную">
+        <StampMark class="wordmark__mark" size={34} />
+      </a>
       <SiteNav currentPath={canonicalPath} />
     </header>
     <main class="layout__main">
