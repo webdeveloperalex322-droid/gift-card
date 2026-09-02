@@ -179,6 +179,35 @@ export async function setGeneratedStatusWithRowLock<T extends GeneratedLibraryEx
   }
 }
 
+export async function setGeneratedCollectionRelatedWithRowLock(input: {
+  readonly actor: User;
+  readonly expected: GeneratedLibraryExistingCollection;
+  readonly payload: Payload;
+  readonly relatedIds: readonly (number | string)[];
+}): Promise<GeneratedLibraryExistingCollection | null> {
+  const adapter = generatedPostgresAdapter(input.payload);
+  const req = { context: {}, payload: input.payload, user: input.actor } as PayloadRequest;
+  const started = await initTransaction(req);
+  if (!started) throw new Error('Generated-library related transaction could not be started.');
+  try {
+    await lockGeneratedReviewRow(adapter, 'collections', input.expected.id, req);
+    const locked = await input.payload.findByID({ collection: 'collections', depth: 1, id: input.expected.id,
+      overrideAccess: false, req, showHiddenFields: true, user: input.actor });
+    const current = toCollection(locked);
+    if (!isDeepStrictEqual(current, input.expected)) {
+      await commitTransaction(req);
+      return null;
+    }
+    const updated = await input.payload.update({ collection: 'collections', data: { related: input.relatedIds.map(numericId) },
+      depth: 1, id: input.expected.id, overrideAccess: false, req, showHiddenFields: true, user: input.actor });
+    await commitTransaction(req);
+    return toCollection(updated);
+  } catch (error) {
+    await killTransaction(req);
+    throw error;
+  }
+}
+
 export function createPayloadGeneratedLibraryStore(payload: Payload, actorEmail: string): GeneratedLibraryApplyStore {
   let actor: User | null = null;
   const loadActor = async (): Promise<User> => {
@@ -268,12 +297,7 @@ export function createPayloadGeneratedLibraryStore(payload: Payload, actorEmail:
     },
     async setCollectionRelated(collection, relatedIds) {
       const user = await loadActor();
-      const doc = await payload.update({
-        collection: 'collections', id: numericId(collection.id), depth: 1,
-        data: { related: relatedIds.map(numericId) },
-        overrideAccess: false, showHiddenFields: true, user,
-      });
-      return toCollection(doc);
+      return setGeneratedCollectionRelatedWithRowLock({ actor: user, expected: collection, payload, relatedIds });
     },
     async createImage(seed: GeneratedCardSeed, bytes) {
       const user = await loadActor();

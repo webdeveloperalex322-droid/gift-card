@@ -23,7 +23,7 @@ import { sourceCardImportKey, sourceCollectionImportKey, sourceImageImportKey } 
 
 export interface GeneratedLibraryApplyStore extends GeneratedLibraryReadStore {
   createCollection(seed: GeneratedCollectionSeed, parentId: number | string): Promise<GeneratedLibraryExistingCollection>;
-  setCollectionRelated(collection: GeneratedLibraryExistingCollection, relatedIds: readonly (number | string)[]): Promise<GeneratedLibraryExistingCollection>;
+  setCollectionRelated(collection: GeneratedLibraryExistingCollection, relatedIds: readonly (number | string)[]): Promise<GeneratedLibraryExistingCollection | null>;
   createImage(seed: GeneratedCardSeed, bytes: Buffer): Promise<GeneratedLibraryExistingImage>;
   createCard(seed: GeneratedCardSeed, imageId: number | string, collectionId: number | string): Promise<GeneratedLibraryExistingCard>;
   moveCollectionToReview(collection: GeneratedLibraryExistingCollection): Promise<GeneratedLibraryExistingCollection | null>;
@@ -131,7 +131,9 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
     if (related.some((value) => value === null)) throw new Error(`Related collection disappeared for ${seed.path}.`);
     if (createdCollectionPaths.has(seed.path) || isInterruptedGeneratedCollection(collection)) {
       await assertFreshActor(input);
-      collection = await input.store.setCollectionRelated(collection, related.map((value) => value!.id));
+      const updated = await input.store.setCollectionRelated(collection, related.map((value) => value!.id));
+      if (updated === null) throw new Error(`Collection ${seed.path} changed concurrently before related update.`);
+      collection = updated;
       collectionByPath.set(seed.path, collection);
     }
     if (collection.status === 'draft') {

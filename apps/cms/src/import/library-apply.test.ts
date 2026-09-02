@@ -288,6 +288,14 @@ describe('generated library apply', () => {
     expect(input.store.relatedWrites).toBe(1);
   });
 
+  it('does not overwrite related links when the locked collection snapshot changed', async () => {
+    const input = await setup(false, true);
+    input.store.setCollectionRelated = async () => null;
+    const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    await expect(applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight }))
+      .rejects.toThrow(/changed concurrently before related update/u);
+  });
+
   it('never resumes a collection found only by path after current preflight', async () => {
     const input = await setup(false, true);
     const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
