@@ -4,6 +4,7 @@ import {
   assertGeneratedLibraryActor,
   parseGeneratedLibraryCli,
   requireGeneratedLibraryEnvironment,
+  resolveGeneratedLibraryAssetPath,
 } from '../../scripts/import-generated-library';
 
 describe('generated library CLI', () => {
@@ -28,5 +29,13 @@ describe('generated library CLI', () => {
   it('rejects an actor who is not ai-editor', () => {
     expect(() => assertGeneratedLibraryActor({ id: 1, email: 'admin@example.test', role: 'admin' }))
       .toThrow(/must have role ai-editor/u);
+  });
+
+  it('rejects a symlink or junction whose real asset escapes its package', async () => {
+    const root = 'D:\\assets';
+    const escaped = 'D:\\outside\\portrait.jpg';
+    const fakeRealpath = (path: string) => Promise.resolve(path.endsWith('portrait.jpg') ? escaped : path);
+    await expect(resolveGeneratedLibraryAssetPath(root, 'popular-top10-2026-08',
+      'popular-top10-2026-08/portrait.jpg', fakeRealpath)).rejects.toThrow(/escapes package/u);
   });
 });

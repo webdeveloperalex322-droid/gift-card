@@ -1,3 +1,10 @@
+import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+
+import { computeImageRevision } from '@otkritka/images';
+import { APIError } from 'payload';
+
+import { buildCardPath } from '../seo/paths';
 import type { GeneratedCardSeed, GeneratedCollectionSeed } from './library-seeds';
 import {
   runGeneratedLibraryPreflight,
@@ -7,16 +14,17 @@ import {
   type GeneratedLibraryPreflightInput,
   type GeneratedLibraryPreflightReport,
   type GeneratedLibraryReadStore,
+  storedImageErrors,
 } from './library-preflight';
 import { sourceCardImportKey, sourceCollectionImportKey, sourceImageImportKey } from './source-import-identity';
 
 export interface GeneratedLibraryApplyStore extends GeneratedLibraryReadStore {
   createCollection(seed: GeneratedCollectionSeed, parentId: number | string): Promise<GeneratedLibraryExistingCollection>;
-  setCollectionRelated(collection: GeneratedLibraryExistingCollection, relatedIds: readonly (number | string)[]): Promise<void>;
+  setCollectionRelated(collection: GeneratedLibraryExistingCollection, relatedIds: readonly (number | string)[]): Promise<GeneratedLibraryExistingCollection>;
   createImage(seed: GeneratedCardSeed, bytes: Buffer): Promise<GeneratedLibraryExistingImage>;
   createCard(seed: GeneratedCardSeed, imageId: number | string, collectionId: number | string): Promise<GeneratedLibraryExistingCard>;
-  moveCollectionToReview(collection: GeneratedLibraryExistingCollection): Promise<GeneratedLibraryExistingCollection>;
-  moveCardToReview(card: GeneratedLibraryExistingCard): Promise<GeneratedLibraryExistingCard>;
+  moveCollectionToReview(collection: GeneratedLibraryExistingCollection): Promise<GeneratedLibraryExistingCollection | null>;
+  moveCardToReview(card: GeneratedLibraryExistingCard): Promise<GeneratedLibraryExistingCard | null>;
 }
 
 export interface GeneratedLibraryApplyInput extends Omit<GeneratedLibraryPreflightInput, 'store'> {
@@ -51,6 +59,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const REVIEW_REFUSAL_RULES = new Set([
+  'incomplete-for-review', 'meta-duplicate-unresolved', 'visual-duplicate-unresolved',
+]);
+
+export function reviewRefusalReason(error: unknown): string | null {
+  if (!(error instanceof APIError) || error.status !== 400 || error.isOperational !== true) return null;
+  const data = error.data as { rule?: unknown } | undefined;
+  return typeof data?.rule === 'string' && REVIEW_REFUSAL_RULES.has(data.rule) ? errorMessage(error) : null;
+}
+
+async function assertFreshActor(input: GeneratedLibraryApplyInput): Promise<void> {
+  const actor = await input.store.findActor(input.actorEmail.trim());
+  if (actor === null || actor.role !== 'ai-editor') throw new Error('Generated library apply requires a current ai-editor actor.');
+}
+
 function assertApplyPreflight(original: GeneratedLibraryPreflightReport, current: GeneratedLibraryPreflightReport): void {
   if (original.mode !== 'dry-run' || original.mutationCount !== 0 || original.blockingErrors.length > 0 ||
       original.fingerprint === null || current.fingerprint !== original.fingerprint) {
@@ -62,11 +85,14 @@ function pathDepth(path: string): number {
   return path.split('/').filter(Boolean).length;
 }
 
+function managedSnapshot(value: GeneratedLibraryExistingCard | GeneratedLibraryExistingCollection): unknown {
+  return { ...value, relatedPaths: 'relatedPaths' in value ? [...(value.relatedPaths ?? [])].sort() : undefined };
+}
+
 export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): Promise<GeneratedLibraryApplyReport> {
   const current = await runGeneratedLibraryPreflight(input);
   assertApplyPreflight(input.preflight, current);
-  const actor = await input.store.findActor(input.actorEmail.trim());
-  if (actor === null || actor.role !== 'ai-editor') throw new Error('Generated library apply requires an ai-editor actor.');
+  await assertFreshActor(input);
 
   let createdCollections = 0;
   let resumedCollections = 0;
@@ -78,6 +104,7 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
     if (collection === null) {
       const parent = collectionByPath.get(seed.parentPath) ?? await input.store.findCollectionByPath(seed.parentPath);
       if (parent === null) throw new Error(`Collection parent ${seed.parentPath} disappeared after preflight.`);
+      await assertFreshActor(input);
       collection = await input.store.createCollection(seed, parent.id);
       createdCollections += 1;
     } else {
@@ -90,13 +117,26 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
     const related = await Promise.all(seed.relatedPaths.map(async (path) =>
       collectionByPath.get(path) ?? input.store.findCollectionByPath(path)));
     if (related.some((value) => value === null)) throw new Error(`Related collection disappeared for ${seed.path}.`);
-    await input.store.setCollectionRelated(collection, related.map((value) => value!.id));
+    if ((collection.relatedPaths ?? []).length === 0) {
+      await assertFreshActor(input);
+      collection = await input.store.setCollectionRelated(collection, related.map((value) => value!.id));
+      collectionByPath.set(seed.path, collection);
+    }
     if (collection.status === 'draft') {
       try {
-        collection = await input.store.moveCollectionToReview(collection);
+        const currentCollection = await input.store.findCollectionBySourceKey(sourceCollectionImportKey(seed.key));
+        if (currentCollection === null || !isDeepStrictEqual(managedSnapshot(currentCollection), managedSnapshot(collection))) {
+          throw new Error(`Collection ${seed.path} changed concurrently before review.`);
+        }
+        await assertFreshActor(input);
+        const moved = await input.store.moveCollectionToReview(collection);
+        if (moved === null) throw new Error(`Collection ${seed.path} changed concurrently before review.`);
+        collection = moved;
         collectionByPath.set(seed.path, collection);
       } catch (error) {
-        collectionReviewRefusals.push({ path: seed.path, reason: errorMessage(error) });
+        const reason = reviewRefusalReason(error);
+        if (reason === null) throw error;
+        collectionReviewRefusals.push({ path: seed.path, reason });
       }
     }
   }
@@ -120,6 +160,13 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
   for (const seed of input.seeds.cards) {
     const cardKey = sourceCardImportKey(seed.sourceSha256);
     const imageKey = sourceImageImportKey(seed.sourceSha256);
+    let card = await input.store.findCardBySourceKey(cardKey);
+    if (card === null) {
+      const [claim, slugMatch] = await Promise.all([
+        input.store.findContentPathClaimByPath(buildCardPath(seed.slug)), input.store.findCardBySlug(seed.slug),
+      ]);
+      if (claim !== null || slugMatch !== null) throw new Error(`Card path ${buildCardPath(seed.slug)} became occupied before image creation.`);
+    }
     let image = await input.store.findImageBySourceKey(imageKey);
     if (image === null) {
       const prepared = preparedByHash.get(seed.sourceSha256);
@@ -132,15 +179,18 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
       if (portraitSha256 !== prepared.portraitSha256 || portraitRevision !== prepared.portraitRevision) {
         throw new Error(`Source portrait changed after preflight: ${prepared.portraitPath}.`);
       }
+      await assertFreshActor(input);
       image = await input.store.createImage(seed, portraitBytes);
+      const storageErrors = await storedImageErrors(`Image ${imageKey}`, image, prepared.portraitRevision, input.store);
+      if (storageErrors.length > 0) throw new Error(storageErrors.join(' '));
       createdImages += 1;
     } else {
       resumedImages += 1;
     }
-    let card = await input.store.findCardBySourceKey(cardKey);
     if (card === null) {
       const collection = collectionByPath.get(seed.collectionPath) ?? await input.store.findCollectionByPath(seed.collectionPath);
       if (collection === null) throw new Error(`Primary collection ${seed.collectionPath} disappeared after preflight.`);
+      await assertFreshActor(input);
       card = await input.store.createCard(seed, image.id, collection.id);
       createdCards += 1;
     } else {
@@ -148,9 +198,17 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
     }
     if (card.status === 'draft') {
       try {
-        card = await input.store.moveCardToReview(card);
+        const fresh = await input.store.findCardBySourceKey(cardKey);
+        if (fresh === null) throw new Error(`Card ${cardKey} disappeared before review.`);
+        if (!isDeepStrictEqual(managedSnapshot(fresh), managedSnapshot(card))) throw new Error(`Card ${cardKey} changed concurrently before review.`);
+        await assertFreshActor(input);
+        const moved = await input.store.moveCardToReview(card);
+        if (moved === null) throw new Error(`Card ${cardKey} changed concurrently before review.`);
+        card = moved;
       } catch (error) {
-        reviewRefusals.push({ sourceSha256: seed.sourceSha256, reason: errorMessage(error) });
+        const reason = reviewRefusalReason(error);
+        if (reason === null) throw error;
+        reviewRefusals.push({ sourceSha256: seed.sourceSha256, reason });
       }
     }
   }
@@ -164,6 +222,10 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
         String(card.imageId) !== String(image.id) || card.collectionPath !== seed.collectionPath) {
       throw new Error(`Final verification failed for source ${seed.sourceSha256}.`);
     }
+    const expectedRevision = preparedByHash.get(seed.sourceSha256)?.portraitRevision;
+    if (expectedRevision === undefined) throw new Error(`Prepared portrait is missing for ${seed.sourceSha256}.`);
+    const storageErrors = await storedImageErrors(`Image ${sourceImageImportKey(seed.sourceSha256)}`, image, expectedRevision, input.store);
+    if (storageErrors.length > 0) throw new Error(storageErrors.join(' '));
     if (card.robots !== 'noindex,follow') throw new Error(`Imported card ${String(card.id)} became indexable.`);
     if (card.status === 'review') review += 1;
     else if (card.status === 'draft') draft += 1;
@@ -193,5 +255,3 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
     reviewRefusals,
   };
 }
-import { createHash } from 'node:crypto';
-import { computeImageRevision } from '@otkritka/images';

@@ -3,11 +3,13 @@ import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import { computeImageRevision } from '@otkritka/images';
+import { APIError } from 'payload';
 
 import type { GeneratedLibraryPlan, NormalizedGeneratedManifestRow } from './library-manifest';
 import { applyGeneratedLibrary, type GeneratedLibraryApplyStore } from './library-apply';
 import { runGeneratedLibraryPreflight } from './library-preflight';
 import type { GeneratedLibrarySeeds } from './library-seeds';
+import { pilotIntroDocument } from './pilot-types';
 import { sourceCardImportKey, sourceImageImportKey } from './source-import-identity';
 
 async function setup(refuseReview = false, includeCollection = false) {
@@ -44,11 +46,14 @@ async function setup(refuseReview = false, includeCollection = false) {
   const images = new Map<string, { id: number; sourceImportKey: string; revision: string }>();
   const collections = new Map<string, { id: number; sourceImportKey?: string; path: string; status: string; robots: string }>();
   const createdCards: Array<{ initialStatus: string }> = [];
-  const store: GeneratedLibraryApplyStore & { createdCards: typeof createdCards; imageCreates: number } = {
+  const store: GeneratedLibraryApplyStore & { createdCards: typeof createdCards; imageCreates: number; relatedWrites: number } = {
     createdCards,
     imageCreates: 0,
+    relatedWrites: 0,
+    isSchemaReady: async () => true,
     findActor: async () => ({ id: 17, email: 'ai@example.test', role: 'ai-editor' }),
     findPilotCardByKey: async () => null,
+    findPilotImageByKey: async () => null,
     findCollectionByPath: async (path) => collections.get(path) ?? (
       path === '/otkrytki/prazdniki/paskha' || path === '/otkrytki/prazdniki'
         ? { id: path.endsWith('paskha') ? 7 : 6, path, status: 'review', robots: 'noindex,follow' }
@@ -57,22 +62,42 @@ async function setup(refuseReview = false, includeCollection = false) {
     findCardBySourceKey: async (key) => cards.get(key) ?? null,
     findImageBySourceKey: async (key) => images.get(key) ?? null,
     findCardBySlug: async (slug) => [...cards.values()].find((card) => card.slug === slug) ?? null,
+    findContentPathClaimByPath: async (path) => {
+      const card = [...cards.values()].find((item) => `/otkrytki/${item.slug}` === path);
+      if (card !== undefined) return { path, ownerCollection: 'cards', ownerKey: `cards:${card.sourceImportKey}` };
+      const collection = collections.get(path);
+      return collection === undefined ? null : { path, ownerCollection: 'collections', ownerKey: `collections:${collection.sourceImportKey}` };
+    },
+    hasOriginal: async () => true,
+    hasDerivative: async () => true,
     createCollection: async (seed) => {
-      const value = { id: nextId++, sourceImportKey: `generated-library-2026-08:collection:${seed.key}`, path: seed.path, status: 'draft', robots: 'noindex,follow' };
+      const value = { id: nextId++, sourceImportKey: `generated-library-2026-08:collection:${seed.key}`,
+        pathClaimKey: `generated-library-2026-08:collection:${seed.key}`, path: seed.path, slug: seed.slug,
+        nodeKind: seed.nodeKind, parentPath: seed.parentPath, relatedPaths: [] as string[], title: seed.title,
+        h1: seed.h1, metaDescription: seed.metaDescription, intro: pilotIntroDocument(seed.intro), description: seed.description,
+        status: 'draft', robots: 'noindex,follow' };
       collections.set(seed.path, value);
       return value;
     },
-    setCollectionRelated: async () => undefined,
+    setCollectionRelated: async (collection) => {
+      store.relatedWrites += 1;
+      const value = collections.get(collection.path)!;
+      (value as typeof value & { relatedPaths: string[] }).relatedPaths =
+        seeds.collections.find(({ path }) => path === collection.path)?.relatedPaths.slice() ?? [];
+      return value;
+    },
     createImage: async (seed, bytes) => {
       store.imageCreates += 1;
-      const image = { id: nextId++, sourceImportKey: sourceImageImportKey(seed.sourceSha256), revision: await computeImageRevision(bytes) };
+      const image = { id: nextId++, sourceImportKey: sourceImageImportKey(seed.sourceSha256),
+        revision: await computeImageRevision(bytes), keyBase: 'managed/key', originalKey: 'managed/original.jpg',
+        variants: [{ key: 'managed/640.webp' }] };
       images.set(image.sourceImportKey, image);
       return image;
     },
     createCard: async (seed, imageId) => {
       createdCards.push({ initialStatus: seed.status });
       const card = {
-        id: nextId++, sourceImportKey: sourceCardImportKey(seed.sourceSha256), slug: seed.slug,
+        id: nextId++, sourceImportKey: sourceCardImportKey(seed.sourceSha256), pathClaimKey: sourceCardImportKey(seed.sourceSha256), slug: seed.slug,
         title: seed.title, h1: seed.h1, metaDescription: seed.metaDescription, alt: seed.alt,
         caption: seed.caption, description: seed.description, usageTerms: seed.usageTerms,
         status: seed.status, robots: seed.robots, imageId: Number(imageId), collectionPath: seed.collectionPath,
@@ -82,7 +107,7 @@ async function setup(refuseReview = false, includeCollection = false) {
     },
     moveCollectionToReview: async (collection) => ({ ...collection, status: 'review' }),
     moveCardToReview: async (card) => {
-      if (refuseReview) throw new Error('pHash signal requires editor judgment');
+      if (refuseReview) throw new APIError('pHash signal requires editor judgment', 400, { rule: 'visual-duplicate-unresolved' }, true);
       const reviewed = { ...card, status: 'review' };
       cards.set(card.sourceImportKey!, reviewed as never);
       return reviewed;
@@ -124,13 +149,21 @@ describe('generated library apply', () => {
 
   it('reports the exact collection review refusal instead of swallowing it', async () => {
     const input = await setup(false, true);
-    input.store.moveCollectionToReview = async () => { throw new Error('related links require editor judgment'); };
+    input.store.moveCollectionToReview = async () => { throw new APIError('related links require editor judgment', 400, { rule: 'incomplete-for-review' }, true); };
     const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
     const report = await applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight });
     expect(report.collectionReviewRefusals).toEqual([{
       path: '/otkrytki/prazdniki/den-materi',
       reason: 'related links require editor judgment',
     }]);
+  });
+
+  it('rethrows unknown persistence errors instead of reporting a moderation refusal', async () => {
+    const input = await setup(true);
+    input.store.moveCardToReview = async () => { throw new Error('database connection lost'); };
+    const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    await expect(applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight }))
+      .rejects.toThrow('database connection lost');
   });
 
   it('re-reads the portrait immediately before image create and rejects changed bytes', async () => {
@@ -157,5 +190,47 @@ describe('generated library apply', () => {
     });
     await expect(applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight }))
       .rejects.toThrow(/state changed after preflight/u);
+  });
+
+  it('does not overwrite established imported related links on resume', async () => {
+    const input = await setup(false, true);
+    const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    await applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight });
+    const writes = input.store.relatedWrites;
+    const resumedPreflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    await applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight: resumedPreflight });
+    expect(input.store.relatedWrites).toBe(writes);
+  });
+
+  it('refreshes the actor again before each mutation and stops on role revocation', async () => {
+    const input = await setup();
+    const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    let actorReads = 0;
+    input.store.findActor = async () => ({
+      id: 17, email: 'ai@example.test', role: ++actorReads >= 3 ? 'admin' : 'ai-editor',
+    });
+    await expect(applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight }))
+      .rejects.toThrow(/current ai-editor/u);
+    expect(input.store.imageCreates).toBe(0);
+  });
+
+  it('fails closed when the atomic review transition observes concurrent drift', async () => {
+    const input = await setup();
+    input.store.moveCardToReview = async () => null;
+    const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    await expect(applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight }))
+      .rejects.toThrow(/changed concurrently/u);
+  });
+
+  it('rechecks the final card path immediately before creating its image', async () => {
+    const input = await setup();
+    const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    let claimReads = 0;
+    input.store.findContentPathClaimByPath = async (path) => ++claimReads >= 2
+      ? { path, ownerCollection: 'cards', ownerKey: 'cards:concurrent-human' }
+      : null;
+    await expect(applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight }))
+      .rejects.toThrow(/became occupied before image creation/u);
+    expect(input.store.imageCreates).toBe(0);
   });
 });

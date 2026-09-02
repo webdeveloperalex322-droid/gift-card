@@ -63,6 +63,13 @@ describe('generated library seeds', () => {
       }),
     ]);
     expect(seeds.cards[0]?.title).not.toBe(seeds.cards[0]?.metaDescription);
+    expect(seeds.cards[0]?.description).not.toMatch(/На открытке размещено|Тематическая подборка/u);
+    expect(seeds.collections.find(({ path }) => path.endsWith('/paskha'))).toMatchObject({
+      title: 'Открытки на Пасху с добрыми пожеланиями',
+      h1: 'Открытки на Пасху',
+      description: 'Светлые пасхальные открытки с весенними цветами, куличами и тёплыми словами для семьи и друзей.',
+    });
+    expect(new Set(seeds.collections.map(({ intro }) => intro))).toHaveLength(11);
   });
 
   it('derives a descriptive slug only for numeric Soviet filenames', () => {

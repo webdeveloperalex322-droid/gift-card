@@ -6,6 +6,7 @@ import { computeImageRevision } from '@otkritka/images';
 
 import type { GeneratedLibraryPlan, NormalizedGeneratedManifestRow } from './library-manifest';
 import type { GeneratedLibrarySeeds } from './library-seeds';
+import { pilotIntroDocument } from './pilot-types';
 import { runGeneratedLibraryPreflight, type GeneratedLibraryReadStore } from './library-preflight';
 
 async function jpeg(): Promise<Buffer> {
@@ -41,13 +42,18 @@ function fixture(sourceSha256: string): { plan: GeneratedLibraryPlan; seeds: Gen
 function store(overrides: Partial<GeneratedLibraryReadStore> = {}): GeneratedLibraryReadStore & { mutationCount: number } {
   return {
     mutationCount: 0,
+    isSchemaReady: async () => true,
     findActor: async () => ({ id: 17, email: 'ai@example.test', role: 'ai-editor' }),
     findPilotCardByKey: async () => null,
+    findPilotImageByKey: async () => null,
     findCollectionByPath: async () => ({ id: 7, path: '/otkrytki/prazdniki/paskha', status: 'review', robots: 'noindex,follow' }),
     findCollectionBySourceKey: async () => null,
     findCardBySourceKey: async () => null,
     findImageBySourceKey: async () => null,
     findCardBySlug: async () => null,
+    findContentPathClaimByPath: async () => null,
+    hasOriginal: async () => true,
+    hasDerivative: async () => true,
     ...overrides,
   };
 }
@@ -131,7 +137,10 @@ describe('generated library preflight', () => {
       store: store({
         findCardBySourceKey: async () => existing,
         findCardBySlug: async () => existing,
-        findImageBySourceKey: async () => ({ id: 82, sourceImportKey: imageKey, revision: await computeImageRevision(image) }),
+        findImageBySourceKey: async () => ({
+          id: 82, sourceImportKey: imageKey, revision: await computeImageRevision(image),
+          keyBase: 'managed/key', originalKey: 'managed/original.jpg', variants: [{ key: 'managed/640.webp' }],
+        }),
       }),
       readBytes: async (path) => path === 'source.png' ? source : image,
     });
@@ -160,5 +169,97 @@ describe('generated library preflight', () => {
     });
     expect(report.fingerprint).toBeNull();
     expect(report.blockingErrors.join(' ')).toMatch(/occupied by a record without matching sourceImportKey/u);
+  });
+
+  it('fails before reading assets when the source-import schema was not pushed', async () => {
+    const data = fixture('a'.repeat(64));
+    let reads = 0;
+    const report = await runGeneratedLibraryPreflight({
+      ...data, actorEmail: 'ai@example.test', store: store({ isSchemaReady: async () => false }),
+      readBytes: async () => { reads += 1; return Buffer.alloc(0); },
+    });
+    expect(reads).toBe(0);
+    expect(report.blockingErrors.join(' ')).toMatch(/PAYLOAD_DB_PUSH=true/u);
+  });
+
+  it('blocks a claimed card path before an image can be created', async () => {
+    const [image, source] = await Promise.all([
+      jpeg(), sharp({ create: { width: 640, height: 800, channels: 3, background: '#eee' } }).png().toBuffer(),
+    ]);
+    const data = fixture(createHash('sha256').update(source).digest('hex'));
+    const report = await runGeneratedLibraryPreflight({
+      ...data, actorEmail: 'ai@example.test',
+      store: store({ findContentPathClaimByPath: async () => ({
+        path: '/otkrytki/otkrytka-paskha-tsvety', ownerCollection: 'cards', ownerKey: 'cards:human',
+      }) }),
+      readBytes: async (path) => path === 'source.png' ? source : image,
+    });
+    expect(report.fingerprint).toBeNull();
+    expect(report.blockingErrors.join(' ')).toMatch(/permanently claimed/u);
+  });
+
+  it('blocks an image whose physical derivative is missing', async () => {
+    const [image, source] = await Promise.all([
+      jpeg(), sharp({ create: { width: 640, height: 800, channels: 3, background: '#eee' } }).png().toBuffer(),
+    ]);
+    const data = fixture(createHash('sha256').update(source).digest('hex'));
+    const seed = data.seeds.cards[0]!;
+    const imageKey = `generated-library-2026-08:image:${seed.sourceSha256}`;
+    const report = await runGeneratedLibraryPreflight({
+      ...data, actorEmail: 'ai@example.test', store: store({
+        findImageBySourceKey: async () => ({ id: 82, sourceImportKey: imageKey,
+          revision: await computeImageRevision(image), keyBase: 'managed/key', originalKey: 'original.jpg',
+          variants: [{ key: '640.webp' }] }),
+        hasDerivative: async () => false,
+      }), readBytes: async (path) => path === 'source.png' ? source : image,
+    });
+    expect(report.blockingErrors.join(' ')).toMatch(/derivative 640.webp is missing/u);
+  });
+
+  it('blocks duplicate pilot ids and a mismatched pilot card/image relation', async () => {
+    const [image, source] = await Promise.all([
+      jpeg(), sharp({ create: { width: 640, height: 800, channels: 3, background: '#eee' } }).png().toBuffer(),
+    ]);
+    const data = fixture(createHash('sha256').update(source).digest('hex'));
+    const pilotRow = { ...data.plan.rows[0]!, package: 'pilot-2026-08' as const, id: '07' };
+    data.plan = { ...data.plan, rows: [pilotRow, { ...pilotRow, manifestOrder: 1 }], pilotRowCount: 2 };
+    data.seeds = { collections: [], cards: [] };
+    const report = await runGeneratedLibraryPreflight({
+      ...data, actorEmail: 'ai@example.test', store: store({
+        findPilotCardByKey: async () => ({ id: 7, imageId: 999 }),
+        findPilotImageByKey: async () => ({ id: 8, sourceImportKey: 'pilot-2026-08:image:07', revision: await computeImageRevision(image) }),
+      }), readBytes: async (path) => path === 'source.png' ? source : image,
+    });
+    expect(report.blockingErrors.join(' ')).toMatch(/occurs more than once/u);
+    expect(report.blockingErrors.join(' ')).toMatch(/relation does not match/u);
+  });
+
+  it('blocks nonempty related-link drift on an interrupted imported collection', async () => {
+    const [image, source] = await Promise.all([
+      jpeg(), sharp({ create: { width: 640, height: 800, channels: 3, background: '#eee' } }).png().toBuffer(),
+    ]);
+    const data = fixture(createHash('sha256').update(source).digest('hex'));
+    const seed = {
+      key: 'generated-paskha', slug: 'paskha', path: '/otkrytki/prazdniki/paskha', parentPath: '/otkrytki/prazdniki',
+      nodeKind: 'occasion' as const, title: 'Пасха', h1: 'Пасха', metaDescription: 'Открытки на Пасху.',
+      intro: 'Пасхальные открытки.', description: 'Открытки.', relatedPaths: ['/otkrytki/prazdniki'],
+      status: 'draft' as const, robots: 'noindex,follow' as const,
+    };
+    data.seeds = { ...data.seeds, collections: [seed] };
+    const key = `generated-library-2026-08:collection:${seed.key}`;
+    const existing = { id: 11, sourceImportKey: key, pathClaimKey: key, path: seed.path, slug: seed.slug,
+      nodeKind: seed.nodeKind, parentPath: seed.parentPath, relatedPaths: ['/otkrytki/prazdniki/other'],
+      title: seed.title, h1: seed.h1, metaDescription: seed.metaDescription, intro: pilotIntroDocument(seed.intro),
+      description: seed.description, status: seed.status, robots: seed.robots };
+    const report = await runGeneratedLibraryPreflight({
+      ...data, actorEmail: 'ai@example.test', store: store({
+        findCollectionBySourceKey: async () => existing,
+        findCollectionByPath: async (path) => path === seed.path ? existing : { id: 6, path, status: 'review', robots: 'noindex,follow' },
+        findContentPathClaimByPath: async (path) => path === seed.path
+          ? { path, ownerCollection: 'collections', ownerKey: `collections:${key}` }
+          : null,
+      }), readBytes: async (path) => path === 'source.png' ? source : image,
+    });
+    expect(report.blockingErrors.join(' ')).toMatch(/related paths/u);
   });
 });
