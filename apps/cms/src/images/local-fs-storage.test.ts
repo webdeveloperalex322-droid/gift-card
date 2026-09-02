@@ -97,6 +97,7 @@ describe('запись, чтение и удаление', () => {
     await storage.putDerivative(DERIVATIVE_KEY, Buffer.from('bytes'));
 
     expect(await storage.hasDerivative(DERIVATIVE_KEY)).toBe(true);
+    expect((await storage.readDerivative(DERIVATIVE_KEY)).toString()).toBe('bytes');
     const onDisk = await readFile(path.join(root, 'media', DERIVATIVE_KEY));
     expect(onDisk.toString()).toBe('bytes');
   });

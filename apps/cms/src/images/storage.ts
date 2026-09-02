@@ -95,6 +95,8 @@ export interface ImageStorage {
   putOriginal(key: string, data: Buffer): Promise<void>;
   /** Читает оригинал: нужен перегенерации производных без повторной загрузки. */
   readOriginal(key: string): Promise<Buffer>;
+  /** Читает производную для защищённых серверных потребителей (например, админки). */
+  readDerivative(key: string): Promise<Buffer>;
   deleteDerivative(key: string): Promise<void>;
   deleteOriginal(key: string): Promise<void>;
   hasDerivative(key: string): Promise<boolean>;

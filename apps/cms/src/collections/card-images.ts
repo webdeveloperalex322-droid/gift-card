@@ -8,6 +8,10 @@ import {
   systemFieldAccess,
 } from '../access/policies';
 import { imageVariantFields } from '../images/image-mirror';
+import {
+  cardImageAdminThumbnailEndpoint,
+  cardImageAdminThumbnailUrl,
+} from '../images/admin-thumbnail';
 import { cardImageUploadHooks } from '../images/upload-hooks';
 import { assignTrustedPilotImportKey } from '../import/pilot-import-identity';
 import { ACCEPTED_IMAGE_MIME_TYPES } from '../images/upload-validation';
@@ -225,6 +229,7 @@ export const CardImages: CollectionConfig = {
       'сохранённые адреса файлов, которых уже нет.',
     useAsTitle: 'title',
   },
+  endpoints: [cardImageAdminThumbnailEndpoint],
   access: {
     // Загружать изображения вправе и сервисный аккаунт (граница автоматизации из
     // CLAUDE.md): агент готовит контент, но не публикует его.
@@ -251,6 +256,9 @@ export const CardImages: CollectionConfig = {
     } satisfies NonNullable<CollectionConfig['hooks']>;
   })(),
   upload: {
+    // Штатный механизм Payload показывает безопасную минимальную производную
+    // через авторизованный same-origin endpoint. Ключ и оригинал в URL не попадают.
+    adminThumbnail: ({ doc }) => cardImageAdminThumbnailUrl(doc),
     // Payload не хранит и не отдаёт файлы: раскладку делает адаптер хранилища.
     disableLocalStorage: true,
     // Обрезка и фокальная точка выключены: они меняли бы БАЙТЫ оригинала уже

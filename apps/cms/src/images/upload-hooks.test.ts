@@ -77,6 +77,12 @@ function memoryStorage(events: string[] = []): ImageStorage & {
       events.push(`put-original:${key}`);
       return Promise.resolve(void originals.set(key, data));
     },
+    readDerivative: (key) => {
+      const data = derivatives.get(key);
+      return data === undefined
+        ? Promise.reject(new Error(`нет производной ${key}`))
+        : Promise.resolve(data);
+    },
     readOriginal: (key) => {
       const data = originals.get(key);
       return data === undefined

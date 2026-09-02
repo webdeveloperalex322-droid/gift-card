@@ -251,11 +251,12 @@ export const ACCEPTANCE_PAGES: readonly AcceptancePage[] = [
     expectedRobots: 'noindex,follow',
     images: 'none',
     structuredData: 'list',
-    description: 'absent',
+    description: 'present',
     task: 'Э3-11',
     note:
-      'Условия использования. Тот же случай, что `/o-proekte`: заглушка, Ч-23, ' +
-      '`description: absent`. Отдельная тонкость этой страницы: на неё ссылается ' +
+      'Условия использования. Человек заполнил description в глобале настроек, отсюда ' +
+      '`description: present`; страница по Ч-23 пока остаётся `noindex,follow`. ' +
+      'Отдельная тонкость этой страницы: на неё ссылается ' +
       '`acquireLicensePage` в разметке карточки, и эта ссылка доводом за индексацию НЕ ' +
       'является — она работает и на неиндексируемой странице (`CLAUDE.md`, «Sitemap и robots»).',
   },
