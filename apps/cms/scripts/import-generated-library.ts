@@ -115,7 +115,7 @@ function toCollection(doc: Collection): GeneratedLibraryExistingCollection {
   const value = doc as Collection & { sourceImportKey?: string | null };
   return {
     id: doc.id, sourceImportKey: value.sourceImportKey ?? null, path: doc.path ?? '',
-    pathClaimKey: doc.pathClaimKey ?? null, updatedAt: doc.updatedAt, slug: doc.slug,
+    pathClaimKey: doc.pathClaimKey ?? null, createdAt: doc.createdAt, updatedAt: doc.updatedAt, slug: doc.slug,
     nodeKind: doc.nodeKind, parentPath: relationshipPath(doc.parent),
     relatedPaths: doc.related?.flatMap((item) => {
       const path = relationshipPath(item);

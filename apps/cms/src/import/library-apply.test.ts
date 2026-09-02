@@ -74,6 +74,7 @@ async function setup(refuseReview = false, includeCollection = false) {
     createCollection: async (seed) => {
       const value = { id: nextId++, sourceImportKey: `generated-library-2026-08:collection:${seed.key}`,
         pathClaimKey: `generated-library-2026-08:collection:${seed.key}`, path: seed.path, slug: seed.slug,
+        createdAt: '2026-09-02T12:00:00.000Z', updatedAt: '2026-09-02T12:00:00.000Z',
         nodeKind: seed.nodeKind, parentPath: seed.parentPath, relatedPaths: [] as string[], title: seed.title,
         h1: seed.h1, metaDescription: seed.metaDescription, intro: pilotIntroDocument(seed.intro), description: seed.description,
         status: 'draft', robots: 'noindex,follow' };
@@ -252,6 +253,39 @@ describe('generated library apply', () => {
     expect(input.store.imageCreates).toBe(1);
     expect(input.orphanedImages).toEqual([expect.objectContaining({ sourceSha256: input.seeds.cards[0]!.sourceSha256,
       reason: 'Card path /otkrytki/otkrytka-paskha-tsvety became occupied after image creation.' })]);
+  });
+
+  it('records exactly one orphan when physical storage verification fails after upload', async () => {
+    const input = await setup();
+    input.store.hasDerivative = async () => false;
+    const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    await expect(applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight }))
+      .rejects.toThrow(/derivative .* is missing/u);
+    expect(input.orphanedImages).toHaveLength(1);
+    expect(input.orphanedImages[0]?.reason).toMatch(/derivative .* is missing/u);
+  });
+
+  it('records exactly one orphan when the actor role is revoked after upload', async () => {
+    const input = await setup();
+    const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    let actorReads = 0;
+    input.store.findActor = async () => ({ id: 17, email: 'ai@example.test',
+      role: ++actorReads >= 4 ? 'admin' : 'ai-editor' });
+    await expect(applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight }))
+      .rejects.toThrow(/current ai-editor/u);
+    expect(input.orphanedImages).toHaveLength(1);
+    expect(input.orphanedImages[0]?.reason).toMatch(/current ai-editor/u);
+  });
+
+  it('repairs related links only for a source-owned untouched interrupted collection', async () => {
+    const input = await setup(false, true);
+    const seed = input.seeds.collections[0]!;
+    await input.store.findActor('ai@example.test');
+    await input.store.createCollection(seed, 6);
+    const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    expect(preflight.blockingErrors).toEqual([]);
+    await applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight });
+    expect(input.store.relatedWrites).toBe(1);
   });
 
   it('never resumes a collection found only by path after current preflight', async () => {

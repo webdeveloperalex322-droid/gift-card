@@ -28,7 +28,7 @@ export interface GeneratedLibraryExistingImage {
 }
 export interface GeneratedLibraryExistingCollection {
   readonly id: number | string; readonly sourceImportKey?: string | null; readonly path: string;
-  readonly pathClaimKey?: string | null; readonly updatedAt?: string | null; readonly slug?: string | null;
+  readonly pathClaimKey?: string | null; readonly createdAt?: string | null; readonly updatedAt?: string | null; readonly slug?: string | null;
   readonly nodeKind?: string | null; readonly parentPath?: string | null; readonly relatedPaths?: readonly string[];
   readonly title?: string | null; readonly h1?: string | null; readonly metaDescription?: string | null;
   readonly intro?: unknown; readonly description?: string | null; readonly status: string; readonly robots: string;
@@ -109,6 +109,11 @@ export function generatedCollectionManagedDifferences(seed: GeneratedCollectionS
   const expected = managedCollection(seed);
   const actual = actualCollection(value);
   return Object.keys(expected).filter((field) => !isDeepStrictEqual(expected[field], actual[field]));
+}
+
+export function isInterruptedGeneratedCollection(value: GeneratedLibraryExistingCollection): boolean {
+  return value.status === 'draft' && (value.relatedPaths?.length ?? 0) === 0 &&
+    typeof value.createdAt === 'string' && value.createdAt !== '' && value.createdAt === value.updatedAt;
 }
 
 export function generatedCardManagedDifferences(seed: GeneratedCardSeed, value: GeneratedLibraryExistingCard): string[] {
@@ -222,7 +227,9 @@ export async function runGeneratedLibraryPreflight(input: GeneratedLibraryPrefli
       errors.push(...activeManagedStatus(`Collection ${key}`, byKey));
       for (const field of generatedCollectionManagedDifferences(seed, byKey)) errors.push(`Collection ${key} differs in managed field ${field}.`);
       const actualRelated = [...(byKey.relatedPaths ?? [])].sort(); const expectedRelated = [...seed.relatedPaths].sort();
-      if (!isDeepStrictEqual(actualRelated, expectedRelated)) errors.push(`Collection ${key} differs in managed field related paths.`);
+      if (!isDeepStrictEqual(actualRelated, expectedRelated) && !isInterruptedGeneratedCollection(byKey)) {
+        errors.push(`Collection ${key} differs in managed field related paths.`);
+      }
     }
     collectionState.push({ key, byKey, byPath, claim, parent, related });
   }

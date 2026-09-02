@@ -16,6 +16,7 @@ import {
   type GeneratedLibraryReadStore,
   generatedCardManagedDifferences,
   generatedCollectionManagedDifferences,
+  isInterruptedGeneratedCollection,
   storedImageErrors,
 } from './library-preflight';
 import { sourceCardImportKey, sourceCollectionImportKey, sourceImageImportKey } from './source-import-identity';
@@ -128,7 +129,7 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
     const related = await Promise.all(seed.relatedPaths.map(async (path) =>
       collectionByPath.get(path) ?? input.store.findCollectionByPath(path)));
     if (related.some((value) => value === null)) throw new Error(`Related collection disappeared for ${seed.path}.`);
-    if (createdCollectionPaths.has(seed.path)) {
+    if (createdCollectionPaths.has(seed.path) || isInterruptedGeneratedCollection(collection)) {
       await assertFreshActor(input);
       collection = await input.store.setCollectionRelated(collection, related.map((value) => value!.id));
       collectionByPath.set(seed.path, collection);
@@ -170,47 +171,39 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
     }
     let image = await input.store.findImageBySourceKey(imageKey);
     let imageCreated = false;
-    if (image === null) {
-      const prepared = preparedByHash.get(seed.sourceSha256);
-      if (prepared === undefined) throw new Error(`Prepared portrait is missing for ${seed.sourceSha256}.`);
-      const portraitBytes = await input.readBytes(prepared.portraitPath);
-      const [portraitSha256, portraitRevision] = await Promise.all([
-        Promise.resolve(createHash('sha256').update(portraitBytes).digest('hex')),
-        computeImageRevision(portraitBytes),
-      ]);
-      if (portraitSha256 !== prepared.portraitSha256 || portraitRevision !== prepared.portraitRevision) {
-        throw new Error(`Source portrait changed after preflight: ${prepared.portraitPath}.`);
-      }
-      await assertFreshActor(input);
-      image = await input.store.createImage(seed, portraitBytes);
-      const storageErrors = await storedImageErrors(`Image ${imageKey}`, image, prepared.portraitRevision, input.store);
-      if (storageErrors.length > 0) throw new Error(storageErrors.join(' '));
-      createdImages += 1;
-      imageCreated = true;
-    } else {
-      resumedImages += 1;
-    }
-    if (card === null) {
-      const collection = collectionByPath.get(seed.collectionPath) ?? await input.store.findCollectionByPath(seed.collectionPath);
-      if (collection === null) throw new Error(`Primary collection ${seed.collectionPath} disappeared after preflight.`);
-      const [claim, slugMatch] = await Promise.all([
-        input.store.findContentPathClaimByPath(buildCardPath(seed.slug)), input.store.findCardBySlug(seed.slug),
-      ]);
-      if (claim !== null || slugMatch !== null) {
-        const reason = `Card path ${buildCardPath(seed.slug)} became occupied after image creation.`;
-        if (imageCreated) await input.recordOrphanedImage({ sourceSha256: seed.sourceSha256, image, reason });
-        throw new Error(reason);
-      }
-      await assertFreshActor(input);
-      try {
+    try {
+      if (image === null) {
+        const prepared = preparedByHash.get(seed.sourceSha256);
+        if (prepared === undefined) throw new Error(`Prepared portrait is missing for ${seed.sourceSha256}.`);
+        const portraitBytes = await input.readBytes(prepared.portraitPath);
+        const [portraitSha256, portraitRevision] = await Promise.all([
+          Promise.resolve(createHash('sha256').update(portraitBytes).digest('hex')),
+          computeImageRevision(portraitBytes),
+        ]);
+        if (portraitSha256 !== prepared.portraitSha256 || portraitRevision !== prepared.portraitRevision) {
+          throw new Error(`Source portrait changed after preflight: ${prepared.portraitPath}.`);
+        }
+        await assertFreshActor(input);
+        image = await input.store.createImage(seed, portraitBytes);
+        imageCreated = true;
+        const storageErrors = await storedImageErrors(`Image ${imageKey}`, image, prepared.portraitRevision, input.store);
+        if (storageErrors.length > 0) throw new Error(storageErrors.join(' '));
+        createdImages += 1;
+      } else resumedImages += 1;
+      if (card === null) {
+        const collection = collectionByPath.get(seed.collectionPath) ?? await input.store.findCollectionByPath(seed.collectionPath);
+        if (collection === null) throw new Error(`Primary collection ${seed.collectionPath} disappeared after preflight.`);
+        const [claim, slugMatch] = await Promise.all([
+          input.store.findContentPathClaimByPath(buildCardPath(seed.slug)), input.store.findCardBySlug(seed.slug),
+        ]);
+        if (claim !== null || slugMatch !== null) throw new Error(`Card path ${buildCardPath(seed.slug)} became occupied after image creation.`);
+        await assertFreshActor(input);
         card = await input.store.createCard(seed, image.id, collection.id);
-      } catch (error) {
-        if (imageCreated) await input.recordOrphanedImage({ sourceSha256: seed.sourceSha256, image, reason: errorMessage(error) });
-        throw error;
-      }
-      createdCards += 1;
-    } else {
-      resumedCards += 1;
+        createdCards += 1;
+      } else resumedCards += 1;
+    } catch (error) {
+      if (imageCreated && image !== null) await input.recordOrphanedImage({ sourceSha256: seed.sourceSha256, image, reason: errorMessage(error) });
+      throw error;
     }
     if (card.status === 'draft') {
       try {

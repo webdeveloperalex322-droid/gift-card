@@ -275,6 +275,7 @@ describe('generated library preflight', () => {
     data.seeds = { ...data.seeds, collections: [seed] };
     const key = `generated-library-2026-08:collection:${seed.key}`;
     const existing = { id: 11, sourceImportKey: key, pathClaimKey: key, path: seed.path, slug: seed.slug,
+      createdAt: '2026-09-02T10:00:00.000Z', updatedAt: '2026-09-02T10:05:00.000Z',
       nodeKind: seed.nodeKind, parentPath: seed.parentPath, relatedPaths: [], title: seed.title, h1: seed.h1,
       metaDescription: seed.metaDescription, intro: pilotIntroDocument(seed.intro), description: seed.description,
       status: seed.status, robots: seed.robots };
