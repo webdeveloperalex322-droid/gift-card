@@ -154,6 +154,7 @@ export interface UserAuthOperations {
 export interface Card {
   id: number;
   pilotImportKey?: string | null;
+  sourceImportKey?: string | null;
   /**
    * Заголовок страницы (title). Уникален в пределах каталога — совпадения проверяются при сохранении (задача Э5-01). Смена заголовка URL не меняет.
    */
@@ -401,6 +402,7 @@ export interface Card {
 export interface CardImage {
   id: number;
   pilotImportKey?: string | null;
+  sourceImportKey?: string | null;
   /**
    * Описательное название изображения — из него один раз строится ИМЯ ФАЙЛА на транслите (например «Открытка маме на 8 марта с тюльпанами» → otkrytka-mame-na-8-marta-s-tyulpanami). После первой загрузки правка этого поля имя файла и пути производных НЕ меняет: URL файла постоянен (ТЗ §6.3).
    */
@@ -489,6 +491,7 @@ export interface CardImage {
 export interface Collection {
   id: number;
   pilotImportKey?: string | null;
+  sourceImportKey?: string | null;
   /**
    * Заголовок страницы (title). Уникален в пределах каталога — совпадения проверяются при сохранении (задача Э5-01). Смена заголовка URL не меняет.
    */
@@ -1047,6 +1050,7 @@ export interface PayloadMigration {
  */
 export interface CardsSelect<T extends boolean = true> {
   pilotImportKey?: T;
+  sourceImportKey?: T;
   title?: T;
   h1?: T;
   slug?: T;
@@ -1145,6 +1149,7 @@ export interface CardsSelect<T extends boolean = true> {
  */
 export interface CollectionsSelect<T extends boolean = true> {
   pilotImportKey?: T;
+  sourceImportKey?: T;
   title?: T;
   h1?: T;
   slug?: T;
@@ -1216,6 +1221,7 @@ export interface CollectionsSelect<T extends boolean = true> {
  */
 export interface CardImagesSelect<T extends boolean = true> {
   pilotImportKey?: T;
+  sourceImportKey?: T;
   title?: T;
   pHash?: T;
   nameStem?: T;

@@ -17,6 +17,8 @@
     "content:pilot:validate": "tsc -b --force packages/images && node scripts/content-pilot/validate.mjs",
     "content:import:dry-run": "pnpm --filter @otkritka/cms exec payload run ./scripts/import-pilot-content.ts -- --dry-run",
     "content:import:apply": "pnpm --filter @otkritka/cms exec payload run ./scripts/import-pilot-content.ts -- --apply",
+    "content:library:dry-run": "pnpm --filter @otkritka/cms run content:library:dry-run",
+    "content:library:apply": "pnpm --filter @otkritka/cms run content:library:apply",
     "verify": "pnpm run check && pnpm run test && pnpm run test:seo"
   },
   "devDependencies": {

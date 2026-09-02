@@ -36,4 +36,17 @@ describe('монорепозиторий', () => {
     expect(cmsPackage.scripts?.dev).toContain('--port 3011');
     expect(cmsPackage.scripts?.start).toContain('--port 3011');
   });
+
+  it('разделяет dry-run и apply массового импорта библиотеки', () => {
+    const rootPackage = JSON.parse(
+      readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+    ) as { scripts?: Record<string, string> };
+
+    expect(rootPackage.scripts?.['content:library:dry-run']).toBe(
+      'pnpm --filter @otkritka/cms run content:library:dry-run',
+    );
+    expect(rootPackage.scripts?.['content:library:apply']).toBe(
+      'pnpm --filter @otkritka/cms run content:library:apply',
+    );
+  });
 });

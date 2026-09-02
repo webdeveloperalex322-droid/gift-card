@@ -15,6 +15,8 @@
     "check": "tsc --noEmit && tsc --noEmit -p ../../tests/api/tsconfig.json",
     "content:import:apply": "payload run ./scripts/import-pilot-content.ts -- --apply",
     "content:import:dry-run": "payload run ./scripts/import-pilot-content.ts -- --dry-run",
+    "content:library:apply": "payload run ./scripts/import-generated-library.ts -- --apply",
+    "content:library:dry-run": "payload run ./scripts/import-generated-library.ts -- --dry-run",
     "dev": "next dev --port 3011",
     "ensure-db": "node scripts/ensure-database.mjs",
     "generate:importmap": "payload generate:importmap",

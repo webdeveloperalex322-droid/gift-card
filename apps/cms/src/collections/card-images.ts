@@ -14,6 +14,7 @@ import {
 } from '../images/admin-thumbnail';
 import { cardImageUploadHooks } from '../images/upload-hooks';
 import { assignTrustedPilotImportKey } from '../import/pilot-import-identity';
+import { assignTrustedSourceImportKey } from '../import/source-import-identity';
 import { ACCEPTED_IMAGE_MIME_TYPES } from '../images/upload-validation';
 
 /**
@@ -77,6 +78,14 @@ const cardImageFields: Field[] = [
     unique: true,
     index: true,
     access: systemAccess,
+    admin: { hidden: true },
+  },
+  {
+    name: 'sourceImportKey',
+    type: 'text',
+    unique: true,
+    index: true,
+    access: { create: systemFieldAccess, update: systemFieldAccess },
     admin: { hidden: true },
   },
   {
@@ -252,7 +261,7 @@ export const CardImages: CollectionConfig = {
     const hooks = cardImageUploadHooks();
     return {
       ...hooks,
-      beforeValidate: [assignTrustedPilotImportKey()],
+      beforeValidate: [assignTrustedPilotImportKey(), assignTrustedSourceImportKey()],
     } satisfies NonNullable<CollectionConfig['hooks']>;
   })(),
   upload: {

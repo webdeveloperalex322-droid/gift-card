@@ -10,6 +10,7 @@ import {
 } from '../access/policies';
 import { cardImageHooks } from '../images/card-image-hooks';
 import { assignTrustedPilotImportKey } from '../import/pilot-import-identity';
+import { assignTrustedSourceImportKey } from '../import/source-import-identity';
 import { imageVariantFields } from '../images/image-mirror';
 import { CARD_PATH_PREFIX, contentDocumentPath } from '../seo/paths';
 import { attachCollectionsInBulk } from './card-collections';
@@ -87,6 +88,14 @@ import { CARD_REVIEW_REQUIREMENTS } from './status-model';
 const cardFields: Field[] = [
   {
     name: 'pilotImportKey',
+    type: 'text',
+    unique: true,
+    index: true,
+    access: { create: systemFieldAccess, update: systemFieldAccess },
+    admin: { hidden: true },
+  },
+  {
+    name: 'sourceImportKey',
     type: 'text',
     unique: true,
     index: true,
@@ -483,6 +492,7 @@ function cardHooks(): NonNullable<CollectionConfig['hooks']> {
     // которую прислал пакет (задача Э5-06).
     beforeValidate: [
       assignTrustedPilotImportKey(),
+      assignTrustedSourceImportKey(),
       assignContentPathClaimKey,
       attachCollectionsInBulk(),
       ...base.beforeValidate,

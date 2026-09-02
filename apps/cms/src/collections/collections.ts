@@ -24,6 +24,7 @@ import { ROLES, type RoledUser } from '../access/roles';
 import type { Collection } from '../payload-types';
 import { publicRichTextEditor, publicRichTextHooks } from '../editor/public-rich-text';
 import { assignTrustedPilotImportKey } from '../import/pilot-import-identity';
+import { assignTrustedSourceImportKey } from '../import/source-import-identity';
 import { COLLECTION_PATH_PREFIX, contentDocumentPath } from '../seo/paths';
 import { isIndexableRobots, isRobotsDirective } from '../seo/robots';
 import {
@@ -605,6 +606,14 @@ const collectionFields: Field[] = [
     admin: { hidden: true },
   },
   {
+    name: 'sourceImportKey',
+    type: 'text',
+    unique: true,
+    index: true,
+    access: { create: systemFieldAccess, update: systemFieldAccess },
+    admin: { hidden: true },
+  },
+  {
     name: 'title',
     type: 'text',
     required: true,
@@ -881,6 +890,7 @@ export const Collections: CollectionConfig = {
     // открыток.
     beforeValidate: [
       assignTrustedPilotImportKey(),
+      assignTrustedSourceImportKey(),
       assignContentPathClaimKey,
       ...collectionContentHooks.beforeValidate,
       assertPublishableVolume,
