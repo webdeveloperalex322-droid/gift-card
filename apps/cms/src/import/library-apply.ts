@@ -14,6 +14,8 @@ import {
   type GeneratedLibraryPreflightInput,
   type GeneratedLibraryPreflightReport,
   type GeneratedLibraryReadStore,
+  generatedCardManagedDifferences,
+  generatedCollectionManagedDifferences,
   storedImageErrors,
 } from './library-preflight';
 import { sourceCardImportKey, sourceCollectionImportKey, sourceImageImportKey } from './source-import-identity';
@@ -30,6 +32,11 @@ export interface GeneratedLibraryApplyStore extends GeneratedLibraryReadStore {
 export interface GeneratedLibraryApplyInput extends Omit<GeneratedLibraryPreflightInput, 'store'> {
   readonly preflight: GeneratedLibraryPreflightReport;
   readonly store: GeneratedLibraryApplyStore;
+  readonly recordOrphanedImage: (value: {
+    readonly sourceSha256: string;
+    readonly image: GeneratedLibraryExistingImage;
+    readonly reason: string;
+  }) => Promise<void>;
 }
 
 export interface GeneratedLibraryApplyReport {
@@ -49,8 +56,8 @@ export interface GeneratedLibraryApplyReport {
   readonly resumedCards: number;
   readonly review: number;
   readonly draft: number;
-  readonly published: 0;
-  readonly indexed: 0;
+  readonly published: number;
+  readonly indexed: number;
   readonly sitemapUrlsAdded: 0;
   readonly reviewRefusals: readonly { readonly sourceSha256: string; readonly reason: string }[];
 }
@@ -98,15 +105,19 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
   let resumedCollections = 0;
   const collectionReviewRefusals: Array<{ path: string; reason: string }> = [];
   const collectionByPath = new Map<string, GeneratedLibraryExistingCollection>();
+  const createdCollectionPaths = new Set<string>();
   for (const seed of [...input.seeds.collections].sort((left, right) => pathDepth(left.path) - pathDepth(right.path) || left.path.localeCompare(right.path))) {
     const key = sourceCollectionImportKey(seed.key);
-    let collection = await input.store.findCollectionBySourceKey(key) ?? await input.store.findCollectionByPath(seed.path);
+    let collection = await input.store.findCollectionBySourceKey(key);
     if (collection === null) {
+      const occupied = await input.store.findCollectionByPath(seed.path);
+      if (occupied !== null) throw new Error(`Collection path ${seed.path} is occupied without exact source identity ${key}.`);
       const parent = collectionByPath.get(seed.parentPath) ?? await input.store.findCollectionByPath(seed.parentPath);
       if (parent === null) throw new Error(`Collection parent ${seed.parentPath} disappeared after preflight.`);
       await assertFreshActor(input);
       collection = await input.store.createCollection(seed, parent.id);
       createdCollections += 1;
+      createdCollectionPaths.add(seed.path);
     } else {
       resumedCollections += 1;
     }
@@ -117,7 +128,7 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
     const related = await Promise.all(seed.relatedPaths.map(async (path) =>
       collectionByPath.get(path) ?? input.store.findCollectionByPath(path)));
     if (related.some((value) => value === null)) throw new Error(`Related collection disappeared for ${seed.path}.`);
-    if ((collection.relatedPaths ?? []).length === 0) {
+    if (createdCollectionPaths.has(seed.path)) {
       await assertFreshActor(input);
       collection = await input.store.setCollectionRelated(collection, related.map((value) => value!.id));
       collectionByPath.set(seed.path, collection);
@@ -141,16 +152,6 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
     }
   }
 
-  let collectionReview = 0;
-  let collectionDraft = 0;
-  for (const seed of input.seeds.collections) {
-    const collection = collectionByPath.get(seed.path);
-    if (collection?.status === 'review') collectionReview += 1;
-    else if (collection?.status === 'draft') collectionDraft += 1;
-    else throw new Error(`Imported collection ${seed.path} has a forbidden or missing status.`);
-    if (collection.robots !== 'noindex,follow') throw new Error(`Imported collection ${seed.path} became indexable.`);
-  }
-
   let createdImages = 0;
   let resumedImages = 0;
   let createdCards = 0;
@@ -168,6 +169,7 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
       if (claim !== null || slugMatch !== null) throw new Error(`Card path ${buildCardPath(seed.slug)} became occupied before image creation.`);
     }
     let image = await input.store.findImageBySourceKey(imageKey);
+    let imageCreated = false;
     if (image === null) {
       const prepared = preparedByHash.get(seed.sourceSha256);
       if (prepared === undefined) throw new Error(`Prepared portrait is missing for ${seed.sourceSha256}.`);
@@ -184,14 +186,28 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
       const storageErrors = await storedImageErrors(`Image ${imageKey}`, image, prepared.portraitRevision, input.store);
       if (storageErrors.length > 0) throw new Error(storageErrors.join(' '));
       createdImages += 1;
+      imageCreated = true;
     } else {
       resumedImages += 1;
     }
     if (card === null) {
       const collection = collectionByPath.get(seed.collectionPath) ?? await input.store.findCollectionByPath(seed.collectionPath);
       if (collection === null) throw new Error(`Primary collection ${seed.collectionPath} disappeared after preflight.`);
+      const [claim, slugMatch] = await Promise.all([
+        input.store.findContentPathClaimByPath(buildCardPath(seed.slug)), input.store.findCardBySlug(seed.slug),
+      ]);
+      if (claim !== null || slugMatch !== null) {
+        const reason = `Card path ${buildCardPath(seed.slug)} became occupied after image creation.`;
+        if (imageCreated) await input.recordOrphanedImage({ sourceSha256: seed.sourceSha256, image, reason });
+        throw new Error(reason);
+      }
       await assertFreshActor(input);
-      card = await input.store.createCard(seed, image.id, collection.id);
+      try {
+        card = await input.store.createCard(seed, image.id, collection.id);
+      } catch (error) {
+        if (imageCreated) await input.recordOrphanedImage({ sourceSha256: seed.sourceSha256, image, reason: errorMessage(error) });
+        throw error;
+      }
       createdCards += 1;
     } else {
       resumedCards += 1;
@@ -215,6 +231,8 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
 
   let review = 0;
   let draft = 0;
+  let published = 0;
+  let indexed = 0;
   for (const seed of input.seeds.cards) {
     const card = await input.store.findCardBySourceKey(sourceCardImportKey(seed.sourceSha256));
     const image = await input.store.findImageBySourceKey(sourceImageImportKey(seed.sourceSha256));
@@ -222,15 +240,48 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
         String(card.imageId) !== String(image.id) || card.collectionPath !== seed.collectionPath) {
       throw new Error(`Final verification failed for source ${seed.sourceSha256}.`);
     }
+    const cardKey = sourceCardImportKey(seed.sourceSha256);
+    if (card.sourceImportKey !== cardKey) throw new Error(`Final card identity failed for source ${seed.sourceSha256}.`);
+    const differences = generatedCardManagedDifferences(seed, card);
+    if (differences.length > 0) throw new Error(`Final card ${cardKey} differs in managed fields: ${differences.join(', ')}.`);
+    const path = buildCardPath(seed.slug);
+    const claim = await input.store.findContentPathClaimByPath(path);
+    if (typeof card.pathClaimKey !== 'string' || claim === null || claim.ownerCollection !== 'cards' ||
+        claim.ownerKey !== `cards:${card.pathClaimKey}`) throw new Error(`Final card path claim failed for ${path}.`);
     const expectedRevision = preparedByHash.get(seed.sourceSha256)?.portraitRevision;
     if (expectedRevision === undefined) throw new Error(`Prepared portrait is missing for ${seed.sourceSha256}.`);
     const storageErrors = await storedImageErrors(`Image ${sourceImageImportKey(seed.sourceSha256)}`, image, expectedRevision, input.store);
     if (storageErrors.length > 0) throw new Error(storageErrors.join(' '));
-    if (card.robots !== 'noindex,follow') throw new Error(`Imported card ${String(card.id)} became indexable.`);
+    if (card.robots !== 'noindex,follow') indexed += 1;
     if (card.status === 'review') review += 1;
     else if (card.status === 'draft') draft += 1;
+    else if (card.status === 'published') published += 1;
     else throw new Error(`Imported card ${String(card.id)} has forbidden status ${card.status}.`);
   }
+
+  let collectionReview = 0;
+  let collectionDraft = 0;
+  for (const seed of input.seeds.collections) {
+    const key = sourceCollectionImportKey(seed.key);
+    const collection = await input.store.findCollectionBySourceKey(key);
+    if (collection === null || collection.sourceImportKey !== key || collection.path !== seed.path) {
+      throw new Error(`Final collection identity failed for ${seed.path}.`);
+    }
+    const differences = generatedCollectionManagedDifferences(seed, collection);
+    const actualRelated = [...(collection.relatedPaths ?? [])].sort();
+    const expectedRelated = [...seed.relatedPaths].sort();
+    if (!isDeepStrictEqual(actualRelated, expectedRelated)) differences.push('related paths');
+    if (differences.length > 0) throw new Error(`Final collection ${key} differs in managed fields: ${differences.join(', ')}.`);
+    const claim = await input.store.findContentPathClaimByPath(seed.path);
+    if (typeof collection.pathClaimKey !== 'string' || claim === null || claim.ownerCollection !== 'collections' ||
+        claim.ownerKey !== `collections:${collection.pathClaimKey}`) throw new Error(`Final collection path claim failed for ${seed.path}.`);
+    if (collection.robots !== 'noindex,follow') indexed += 1;
+    if (collection.status === 'review') collectionReview += 1;
+    else if (collection.status === 'draft') collectionDraft += 1;
+    else if (collection.status === 'published') published += 1;
+    else throw new Error(`Imported collection ${seed.path} has forbidden status ${collection.status}.`);
+  }
+  if (published > 0 || indexed > 0) throw new Error(`Final audit found forbidden published/indexed content: ${String(published)}/${String(indexed)}.`);
 
   return {
     mode: 'apply',
@@ -249,8 +300,8 @@ export async function applyGeneratedLibrary(input: GeneratedLibraryApplyInput): 
     resumedCards,
     review,
     draft,
-    published: 0,
-    indexed: 0,
+    published,
+    indexed,
     sitemapUrlsAdded: 0,
     reviewRefusals,
   };

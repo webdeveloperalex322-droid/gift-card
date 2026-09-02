@@ -262,4 +262,29 @@ describe('generated library preflight', () => {
     });
     expect(report.blockingErrors.join(' ')).toMatch(/related paths/u);
   });
+
+  it('treats empty related links on an existing imported collection as manual drift', async () => {
+    const [image, source] = await Promise.all([
+      jpeg(), sharp({ create: { width: 640, height: 800, channels: 3, background: '#eee' } }).png().toBuffer(),
+    ]);
+    const data = fixture(createHash('sha256').update(source).digest('hex'));
+    const seed = { key: 'generated-paskha', slug: 'paskha', path: '/otkrytki/prazdniki/paskha',
+      parentPath: '/otkrytki/prazdniki', nodeKind: 'occasion' as const, title: 'Пасха', h1: 'Пасха',
+      metaDescription: 'Открытки на Пасху.', intro: 'Пасхальные открытки.', description: 'Открытки.',
+      relatedPaths: ['/otkrytki/prazdniki'], status: 'draft' as const, robots: 'noindex,follow' as const };
+    data.seeds = { ...data.seeds, collections: [seed] };
+    const key = `generated-library-2026-08:collection:${seed.key}`;
+    const existing = { id: 11, sourceImportKey: key, pathClaimKey: key, path: seed.path, slug: seed.slug,
+      nodeKind: seed.nodeKind, parentPath: seed.parentPath, relatedPaths: [], title: seed.title, h1: seed.h1,
+      metaDescription: seed.metaDescription, intro: pilotIntroDocument(seed.intro), description: seed.description,
+      status: seed.status, robots: seed.robots };
+    const report = await runGeneratedLibraryPreflight({ ...data, actorEmail: 'ai@example.test', store: store({
+      findCollectionBySourceKey: async () => existing,
+      findCollectionByPath: async (path) => path === seed.path ? existing : { id: 6, path, status: 'review', robots: 'noindex,follow' },
+      findContentPathClaimByPath: async (path) => path === seed.path
+        ? { path, ownerCollection: 'collections', ownerKey: `collections:${key}` } : null,
+    }), readBytes: async (path) => path === 'source.png' ? source : image });
+    expect(report.fingerprint).toBeNull();
+    expect(report.blockingErrors.join(' ')).toMatch(/related paths/u);
+  });
 });

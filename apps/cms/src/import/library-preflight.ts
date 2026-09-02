@@ -104,6 +104,22 @@ function actualCollection(value: GeneratedLibraryExistingCollection): Readonly<R
     title: value.title ?? null, h1: value.h1 ?? null, metaDescription: value.metaDescription ?? null,
     intro: normalizePilotRichText(value.intro), description: value.description ?? null, robots: value.robots };
 }
+
+export function generatedCollectionManagedDifferences(seed: GeneratedCollectionSeed, value: GeneratedLibraryExistingCollection): string[] {
+  const expected = managedCollection(seed);
+  const actual = actualCollection(value);
+  return Object.keys(expected).filter((field) => !isDeepStrictEqual(expected[field], actual[field]));
+}
+
+export function generatedCardManagedDifferences(seed: GeneratedCardSeed, value: GeneratedLibraryExistingCard): string[] {
+  const expected: Readonly<Record<string, unknown>> = {
+    slug: seed.slug, title: seed.title, h1: seed.h1, metaDescription: seed.metaDescription,
+    alt: seed.alt, caption: seed.caption, description: seed.description, usageTerms: seed.usageTerms,
+    collectionPath: seed.collectionPath, robots: seed.robots,
+  };
+  const actual = value as unknown as Readonly<Record<string, unknown>>;
+  return Object.keys(expected).filter((field) => !isDeepStrictEqual(expected[field], actual[field]));
+}
 function claimError(label: string, path: string, kind: 'cards' | 'collections', existing: { pathClaimKey?: string | null } | null, claim: GeneratedLibraryPathClaim | null): string | null {
   if (claim === null) return existing === null ? null : `${label} final path ${path} has no permanent content-path claim.`;
   const claimKey = existing?.pathClaimKey;
@@ -196,6 +212,7 @@ export async function runGeneratedLibraryPreflight(input: GeneratedLibraryPrefli
     if (parent === null && !plannedPaths.has(seed.parentPath)) errors.push(`Collection ${key} references missing parent ${seed.parentPath}.`);
     seed.relatedPaths.forEach((path, index) => { if (related[index] === null && !plannedPaths.has(path)) errors.push(`Collection ${key} references missing related path ${path}.`); });
     if (byKey !== null && byKey.path !== seed.path) errors.push(`Collection ${key} changed path from ${byKey.path} to ${seed.path}.`);
+    if (byKey !== null && byKey.sourceImportKey !== key) errors.push(`Collection identity mismatch for ${key}.`);
     if (byKey !== null && byPath !== null && String(byKey.id) !== String(byPath.id)) errors.push(`Collection path ${seed.path} is occupied by another record.`);
     if (byKey === null && byPath !== null) errors.push(`Collection path ${seed.path} is occupied by a record without matching sourceImportKey ${key}.`);
     const claimProblem = claimError(`Collection ${key}`, seed.path, 'collections', byKey, claim);
@@ -203,10 +220,9 @@ export async function runGeneratedLibraryPreflight(input: GeneratedLibraryPrefli
     if (byKey === null && byPath === null) collectionsToCreate += 1;
     else if (byKey !== null) {
       errors.push(...activeManagedStatus(`Collection ${key}`, byKey));
-      const expected = managedCollection(seed); const actual = actualCollection(byKey);
-      for (const field of Object.keys(expected)) if (!isDeepStrictEqual(expected[field], actual[field])) errors.push(`Collection ${key} differs in managed field ${field}.`);
+      for (const field of generatedCollectionManagedDifferences(seed, byKey)) errors.push(`Collection ${key} differs in managed field ${field}.`);
       const actualRelated = [...(byKey.relatedPaths ?? [])].sort(); const expectedRelated = [...seed.relatedPaths].sort();
-      if (actualRelated.length > 0 && !isDeepStrictEqual(actualRelated, expectedRelated)) errors.push(`Collection ${key} differs in managed field related paths.`);
+      if (!isDeepStrictEqual(actualRelated, expectedRelated)) errors.push(`Collection ${key} differs in managed field related paths.`);
     }
     collectionState.push({ key, byKey, byPath, claim, parent, related });
   }
@@ -226,11 +242,8 @@ export async function runGeneratedLibraryPreflight(input: GeneratedLibraryPrefli
     if (card === null) cardsToCreate += 1;
     else {
       cardsToResume += 1;
-      const expectedManaged: Readonly<Record<string, unknown>> = { slug: seed.slug, title: seed.title, h1: seed.h1,
-        metaDescription: seed.metaDescription, alt: seed.alt, caption: seed.caption, description: seed.description,
-        usageTerms: seed.usageTerms, collectionPath: seed.collectionPath, status: seed.status, robots: seed.robots };
-      const actualManaged = card as unknown as Readonly<Record<string, unknown>>;
-      for (const [field, expected] of Object.entries(expectedManaged)) if (!isDeepStrictEqual(actualManaged[field], expected) && !(field === 'status' && actualManaged[field] === 'review')) errors.push(`Card ${cardKey} differs in managed field ${field}.`);
+      if (card.sourceImportKey !== cardKey) errors.push(`Card identity mismatch for ${cardKey}.`);
+      for (const field of generatedCardManagedDifferences(seed, card)) errors.push(`Card ${cardKey} differs in managed field ${field}.`);
       errors.push(...activeManagedStatus(`Card ${cardKey}`, card));
       if (image === null) errors.push(`Card ${cardKey} exists without managed image ${imageKey}.`);
       else if (card.imageId === null || card.imageId === undefined || String(card.imageId) !== String(image.id)) errors.push(`Card ${cardKey} differs in managed field image relation.`);

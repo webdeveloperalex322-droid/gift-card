@@ -46,6 +46,7 @@ async function setup(refuseReview = false, includeCollection = false) {
   const images = new Map<string, { id: number; sourceImportKey: string; revision: string }>();
   const collections = new Map<string, { id: number; sourceImportKey?: string; path: string; status: string; robots: string }>();
   const createdCards: Array<{ initialStatus: string }> = [];
+  const orphanedImages: Array<{ sourceSha256: string; reason: string }> = [];
   const store: GeneratedLibraryApplyStore & { createdCards: typeof createdCards; imageCreates: number; relatedWrites: number } = {
     createdCards,
     imageCreates: 0,
@@ -105,7 +106,11 @@ async function setup(refuseReview = false, includeCollection = false) {
       cards.set(card.sourceImportKey, card);
       return card;
     },
-    moveCollectionToReview: async (collection) => ({ ...collection, status: 'review' }),
+    moveCollectionToReview: async (collection) => {
+      const stored = collections.get(collection.path)!;
+      collections.set(collection.path, { ...stored, status: 'review' });
+      return { ...collection, status: 'review' };
+    },
     moveCardToReview: async (card) => {
       if (refuseReview) throw new APIError('pHash signal requires editor judgment', 400, { rule: 'visual-duplicate-unresolved' }, true);
       const reviewed = { ...card, status: 'review' };
@@ -114,7 +119,8 @@ async function setup(refuseReview = false, includeCollection = false) {
     },
   };
   const readBytes = async (path: string) => path === 'source.png' ? source : portrait;
-  return { plan, seeds, store, readBytes };
+  const recordOrphanedImage = async (value: { sourceSha256: string; reason: string }) => { orphanedImages.push(value); };
+  return { plan, seeds, store, readBytes, recordOrphanedImage, orphanedImages };
 }
 
 describe('generated library apply', () => {
@@ -232,5 +238,52 @@ describe('generated library apply', () => {
     await expect(applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight }))
       .rejects.toThrow(/became occupied before image creation/u);
     expect(input.store.imageCreates).toBe(0);
+  });
+
+  it('durably reports an uploaded orphan if the card path is claimed before card create', async () => {
+    const input = await setup();
+    const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    let claimReads = 0;
+    input.store.findContentPathClaimByPath = async (path) => ++claimReads >= 3
+      ? { path, ownerCollection: 'cards', ownerKey: 'cards:concurrent-human' }
+      : null;
+    await expect(applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight }))
+      .rejects.toThrow(/became occupied after image creation/u);
+    expect(input.store.imageCreates).toBe(1);
+    expect(input.orphanedImages).toEqual([expect.objectContaining({ sourceSha256: input.seeds.cards[0]!.sourceSha256,
+      reason: 'Card path /otkrytki/otkrytka-paskha-tsvety became occupied after image creation.' })]);
+  });
+
+  it('never resumes a collection found only by path after current preflight', async () => {
+    const input = await setup(false, true);
+    const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    const sourceLookup = input.store.findCollectionBySourceKey.bind(input.store);
+    const pathLookup = input.store.findCollectionByPath.bind(input.store);
+    let sourceReads = 0;
+    let raced = false;
+    input.store.findCollectionBySourceKey = async (key) => {
+      sourceReads += 1;
+      if (sourceReads >= 2) raced = true;
+      return sourceLookup(key);
+    };
+    input.store.findCollectionByPath = async (path) => raced && path === input.seeds.collections[0]!.path
+      ? { id: 999, path, status: 'draft', robots: 'noindex,follow' }
+      : pathLookup(path);
+    await expect(applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight }))
+      .rejects.toThrow(/without exact source identity/u);
+    expect(input.store.relatedWrites).toBe(0);
+  });
+
+  it('fails final audit when a managed card field drifts after review', async () => {
+    const input = await setup();
+    const move = input.store.moveCardToReview.bind(input.store);
+    input.store.moveCardToReview = async (card) => {
+      const reviewed = await move(card);
+      if (reviewed !== null) (reviewed as { title?: string }).title = 'Concurrent manual title';
+      return reviewed;
+    };
+    const preflight = await runGeneratedLibraryPreflight({ ...input, actorEmail: 'ai@example.test' });
+    await expect(applyGeneratedLibrary({ ...input, actorEmail: 'ai@example.test', preflight }))
+      .rejects.toThrow(/differs in managed fields: title/u);
   });
 });

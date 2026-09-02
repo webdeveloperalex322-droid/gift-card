@@ -1,8 +1,11 @@
 import { readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
-import type { Payload, Where } from 'payload';
+import type { PostgresAdapter } from '@payloadcms/db-postgres';
+import { sql } from '@payloadcms/db-postgres';
+import { commitTransaction, initTransaction, killTransaction, type Payload, type PayloadRequest, type Where } from 'payload';
 
 import { applyGeneratedLibrary, type GeneratedLibraryApplyStore } from '../src/import/library-apply';
 import { approveGeneratedLibraryDryRun, assertGeneratedLibraryDryRunApproved } from '../src/import/library-approval';
@@ -128,6 +131,54 @@ function numericId(id: number | string): number {
   return id;
 }
 
+type GeneratedReviewCollection = 'cards' | 'collections';
+
+function generatedPostgresAdapter(payload: Payload): PostgresAdapter {
+  if (payload.db.name !== 'postgres') throw new Error('Generated-library review promotion requires PostgreSQL.');
+  return payload.db as unknown as PostgresAdapter;
+}
+
+async function lockGeneratedReviewRow(adapter: PostgresAdapter, collection: GeneratedReviewCollection,
+  id: number | string, req: PayloadRequest): Promise<void> {
+  const transactionID = await req.transactionID;
+  if (transactionID === undefined || transactionID === null) throw new Error('Generated-library review transaction was not started.');
+  const session = adapter.sessions[String(transactionID)];
+  const tableName = adapter.tableNameMap.get(collection);
+  const table: unknown = tableName === undefined ? undefined : adapter.tables[tableName];
+  if (session === undefined || tableName === undefined || typeof table !== 'object' || table === null || !('id' in table)) {
+    throw new Error(`Generated-library review cannot lock ${collection} row.`);
+  }
+  const database = session.db as { execute(query: unknown): Promise<unknown> };
+  await database.execute(sql`select ${table.id} from ${table} where ${table.id} = ${id} for update`);
+}
+
+export async function setGeneratedStatusWithRowLock<T extends GeneratedLibraryExistingCard | GeneratedLibraryExistingCollection>(input: {
+  readonly actor: User; readonly collection: GeneratedReviewCollection; readonly expected: T; readonly payload: Payload;
+  readonly toExisting: (doc: Card | Collection) => T;
+}): Promise<T | null> {
+  const adapter = generatedPostgresAdapter(input.payload);
+  const req = { context: {}, payload: input.payload, user: input.actor } as PayloadRequest;
+  const started = await initTransaction(req);
+  if (!started) throw new Error('Generated-library review transaction could not be started.');
+  try {
+    await lockGeneratedReviewRow(adapter, input.collection, input.expected.id, req);
+    const locked = await input.payload.findByID({ collection: input.collection, depth: 1, id: input.expected.id,
+      overrideAccess: false, req, showHiddenFields: true, user: input.actor });
+    const current = input.toExisting(locked);
+    if (!isDeepStrictEqual(current, input.expected)) {
+      await commitTransaction(req);
+      return null;
+    }
+    const updated = await input.payload.update({ collection: input.collection, data: { status: 'review' }, depth: 1,
+      id: input.expected.id, overrideAccess: false, req, showHiddenFields: true, user: input.actor });
+    await commitTransaction(req);
+    return input.toExisting(updated);
+  } catch (error) {
+    await killTransaction(req);
+    throw error;
+  }
+}
+
 export function createPayloadGeneratedLibraryStore(payload: Payload, actorEmail: string): GeneratedLibraryApplyStore {
   let actor: User | null = null;
   const loadActor = async (): Promise<User> => {
@@ -250,25 +301,17 @@ export function createPayloadGeneratedLibraryStore(payload: Payload, actorEmail:
     },
     async moveCollectionToReview(collection) {
       const user = await loadActor();
-      const current = toCollection(await payload.findByID({ collection: 'collections', id: numericId(collection.id), depth: 1,
-        overrideAccess: false, showHiddenFields: true, user }));
-      if (JSON.stringify(current) !== JSON.stringify(collection)) return null;
-      const doc = await payload.update({
-        collection: 'collections', id: numericId(collection.id), depth: 1, data: { status: 'review' },
-        overrideAccess: false, showHiddenFields: true, user,
+      return setGeneratedStatusWithRowLock({
+        actor: user, collection: 'collections', expected: collection, payload,
+        toExisting: (doc) => toCollection(doc as Collection),
       });
-      return toCollection(doc);
     },
     async moveCardToReview(card) {
       const user = await loadActor();
-      const current = toCard(await payload.findByID({ collection: 'cards', id: numericId(card.id), depth: 1,
-        overrideAccess: false, showHiddenFields: true, user }));
-      if (JSON.stringify(current) !== JSON.stringify(card)) return null;
-      const doc = await payload.update({
-        collection: 'cards', id: numericId(card.id), depth: 1, data: { status: 'review' },
-        overrideAccess: false, showHiddenFields: true, user,
+      return setGeneratedStatusWithRowLock({
+        actor: user, collection: 'cards', expected: card, payload,
+        toExisting: (doc) => toCard(doc as Card),
       });
-      return toCard(doc);
     },
   };
 }
@@ -304,12 +347,13 @@ async function loadPackage(assetRoot: string, name: GeneratedLibraryPackageName)
       ? cards
       : null;
   if (rows === null) throw new Error(`Manifest ${name}/manifest.json must contain an array or cards array.`);
-  const normalized = await Promise.all(rows.map(async (value, index) => {
+  const normalized: GeneratedManifestRowInput[] = [];
+  for (const [index, value] of rows.entries()) {
     if (typeof value !== 'object' || value === null) throw new Error(`Manifest ${name} row ${String(index + 1)} must be an object.`);
     const row = value as Partial<GeneratedManifestRowInput>;
     const required = ['id', 'theme', 'backgroundPath', 'finalPath', 'headline', 'wish', 'alt'] as const;
     for (const field of required) if (typeof row[field] !== 'string' || row[field].trim() === '') throw new Error(`Manifest ${name} row ${String(index + 1)} has invalid ${field}.`);
-    return {
+    normalized.push({
       ...row,
       id: row.id!, theme: row.theme!, headline: row.headline!, wish: row.wish!, alt: row.alt!,
       backgroundPath: await resolveGeneratedLibraryAssetPath(assetRoot, name, row.backgroundPath!),
@@ -317,8 +361,8 @@ async function loadPackage(assetRoot: string, name: GeneratedLibraryPackageName)
       ...(typeof row.squarePath === 'string'
         ? { squarePath: await resolveGeneratedLibraryAssetPath(assetRoot, name, row.squarePath) }
         : {}),
-    } satisfies GeneratedManifestRowInput;
-  }));
+    } satisfies GeneratedManifestRowInput);
+  }
   return { name, rows: normalized };
 }
 
@@ -346,6 +390,22 @@ async function writeReport(path: string, value: unknown): Promise<void> {
   }
 }
 
+export async function recordOrphanedImage(assetRoot: string, value: {
+  readonly sourceSha256: string;
+  readonly image: GeneratedLibraryExistingImage;
+  readonly reason: string;
+}): Promise<void> {
+  const path = resolve(assetRoot, 'generated-library-orphan-cleanup.json');
+  let records: unknown[] = [];
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
+    if (Array.isArray(parsed)) records = parsed;
+  } catch (error) {
+    if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
+  await writeReport(path, [...records, { ...value, recordedAt: new Date().toISOString() }]);
+}
+
 async function main(): Promise<void> {
   loadEnvFiles();
   const mode = parseGeneratedLibraryCli(process.argv.slice(2));
@@ -368,7 +428,10 @@ async function main(): Promise<void> {
     return;
   }
   await assertGeneratedLibraryDryRunApproved(environment.assetRoot, environment.actorEmail, preflight.fingerprint);
-  const applied = await applyGeneratedLibrary({ ...preflightInput, preflight });
+  const applied = await applyGeneratedLibrary({
+    ...preflightInput, preflight,
+    recordOrphanedImage: (value) => recordOrphanedImage(environment.assetRoot, value),
+  });
   const report = {
     ...applied,
     duplicateGroups: plan.groups.filter(({ rows }) => rows.length > 1).length,
