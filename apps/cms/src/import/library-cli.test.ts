@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import {
   assertGeneratedLibraryActor,
+  createPayloadGeneratedLibraryStore,
   parseGeneratedLibraryCli,
   requireGeneratedLibraryEnvironment,
   recordOrphanedImage,
@@ -13,6 +14,7 @@ import {
   setGeneratedCollectionRelatedWithRowLock,
   setGeneratedStatusWithRowLock,
 } from '../../scripts/import-generated-library';
+import type { GeneratedCardSeed } from './library-seeds';
 import type { User } from '../payload-types';
 
 describe('generated library CLI', () => {
@@ -45,6 +47,63 @@ describe('generated library CLI', () => {
     const fakeRealpath = (path: string) => Promise.resolve(path.endsWith('portrait.jpg') ? escaped : path);
     await expect(resolveGeneratedLibraryAssetPath(root, 'popular-top10-2026-08',
       'popular-top10-2026-08/portrait.jpg', fakeRealpath)).rejects.toThrow(/escapes package/u);
+  });
+
+  it('reads protected image storage fields internally without bypassing the ai-editor upload mutation', async () => {
+    const sourceSha256 = 'a'.repeat(64);
+    const image = {
+      id: 42,
+      sourceImportKey: `generated-library-2026-08:image:${sourceSha256}`,
+      revision: 'abcd1234',
+      keyBase: 'cards/abcd1234/test-image',
+      originalKey: 'originals/0123456789abcdef0123456789abcdef.jpg',
+      variants: [{ key: 'cards/abcd1234/test-image-640.webp' }],
+    };
+    const actor = { id: 9, email: 'ai@example.test', role: 'ai-editor' } as User;
+    const creates: Array<Record<string, unknown>> = [];
+    const payload = {
+      find(input: Record<string, unknown>) {
+        if (input.collection === 'users') return Promise.resolve({ docs: [actor] });
+        if (input.collection === 'card-images') {
+          return Promise.resolve({ docs: [input.overrideAccess === true ? image : { ...image, originalKey: undefined }] });
+        }
+        return Promise.resolve({ docs: [] });
+      },
+      findByID(input: Record<string, unknown>) {
+        return Promise.resolve(input.overrideAccess === true ? image : { ...image, originalKey: undefined });
+      },
+      create(input: Record<string, unknown>) {
+        creates.push(input);
+        return Promise.resolve({ ...image, originalKey: undefined });
+      },
+    } as unknown as Payload;
+    const store = createPayloadGeneratedLibraryStore(payload, actor.email);
+    await store.findActor(actor.email);
+
+    const existing = await store.findImageBySourceKey(image.sourceImportKey);
+    expect(existing?.originalKey).toBe(image.originalKey);
+
+    const seed: GeneratedCardSeed = {
+      sourceSha256,
+      sourceFile: 'portrait.jpg',
+      sourcePng: 'source.png',
+      squareFile: 'square.jpg',
+      slug: 'test-card',
+      title: 'Test card',
+      h1: 'Test card',
+      metaDescription: 'Test card meta description',
+      alt: 'Test image',
+      caption: 'Test caption',
+      description: 'Test description',
+      usageTerms: '',
+      collectionPath: '/otkrytki/prazdniki/test',
+      status: 'draft',
+      robots: 'noindex,follow',
+    };
+    const created = await store.createImage(seed, Buffer.from('jpeg'));
+    expect(created.originalKey).toBe(image.originalKey);
+    expect(creates).toHaveLength(1);
+    expect(creates[0]?.overrideAccess).toBe(false);
   });
 
   it('locks a review row and uses one transaction request for locked read and update', async () => {

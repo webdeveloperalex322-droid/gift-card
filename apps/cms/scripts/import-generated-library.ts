@@ -225,6 +225,14 @@ export function createPayloadGeneratedLibraryStore(payload: Payload, actorEmail:
     });
     return result.docs[0];
   };
+  const findInternalImage = async (where: Where) => {
+    if (actor === null) throw new Error('Import actor must be refreshed before image reads.');
+    const result = await payload.find({
+      collection: 'card-images', where, depth: 0, limit: 1, pagination: false,
+      overrideAccess: true, showHiddenFields: true,
+    });
+    return result.docs[0];
+  };
   return {
     async isSchemaReady() {
       try {
@@ -263,7 +271,7 @@ export function createPayloadGeneratedLibraryStore(payload: Payload, actorEmail:
       return doc === undefined ? null : toCard(doc);
     },
     findImageBySourceKey: async (key) => {
-      const doc = await findOne('card-images', { sourceImportKey: { equals: key } }, 0);
+      const doc = await findInternalImage({ sourceImportKey: { equals: key } });
       return doc === undefined ? null : toImage(doc);
     },
     findCardBySlug: async (slug) => {
@@ -301,11 +309,15 @@ export function createPayloadGeneratedLibraryStore(payload: Payload, actorEmail:
     },
     async createImage(seed: GeneratedCardSeed, bytes) {
       const user = await loadActor();
-      const doc = await payload.create({
+      const created = await payload.create({
         collection: 'card-images', data: { title: seed.alt },
         file: { data: bytes, mimetype: 'image/jpeg', name: basename(seed.sourceFile), size: bytes.byteLength },
         overrideAccess: false, showHiddenFields: true, user,
         context: trustedSourceImportContext(sourceImageImportKey(seed.sourceSha256), user.id),
+      });
+      const doc = await payload.findByID({
+        collection: 'card-images', id: created.id, depth: 0,
+        overrideAccess: true, showHiddenFields: true,
       });
       return toImage(doc);
     },
