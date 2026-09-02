@@ -25,7 +25,7 @@ const target = resolveAcceptanceTarget();
 
 const CASES: readonly { readonly path: string; readonly note: string }[] = [
   { path: '/otkrytki//8-marta', note: 'пустой сегмент в середине пути карточки' },
-  { path: '/podborki//prazdniki///8-marta/', note: 'несколько пустых сегментов и слеш в хвосте' },
+  { path: '/otkrytki//prazdniki///8-marta/', note: 'несколько пустых сегментов и слеш в хвосте' },
 ];
 
 for (const emptySegment of CASES) {

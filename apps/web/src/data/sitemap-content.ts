@@ -24,7 +24,7 @@
  *        - подборка: предикат «опубликован И непуст» (`nodesWithContent`), тот
  *          же, которым отбираются ссылки в списках (условие Э3-13-A);
  *        - каталог `/otkrytki`: есть хотя бы одна опубликованная карточка;
- *          каталог `/podborki`: есть хотя бы один непустой корневой узел. Оба —
+ *          единый каталог `/otkrytki`: есть карточка или непустой корневой узел. Это —
  *          дословно условия из `./catalog.ts`, где пустой каталог отдаёт 404;
  *        - главная и служебные страницы отвечают 200 всегда (заглушка служебной
  *          страницы — это ответ, обоснование в `../seo/info-pages.ts`).
@@ -262,7 +262,6 @@ export async function collectSitemapFacts(env?: SharedEnv): Promise<SitemapFacts
   // Голова документа берётся у той же функции, что у маршрута, поэтому и
   // canonical, и директива здесь ровно те, что уйдут в разметку.
   const cardsCatalog = catalogPageView('cards', 1);
-  const nodesCatalog = catalogPageView('collections', 1);
 
   return {
     cards: cards.map((card) => cardFacts(card, env)),
@@ -277,14 +276,8 @@ export async function collectSitemapFacts(env?: SharedEnv): Promise<SitemapFacts
         canonicalPath: cardsCatalog.canonicalPath,
         pagePath: CATALOGS.cards.path,
         // Пустой каталог отдаёт 404, а не 200 с пустой сеткой (`./catalog.ts`).
-        respondsOk: cards.length > 0,
+        respondsOk: cards.length > 0 || rootsWithContent.length > 0,
         robots: cardsCatalog.robots,
-      },
-      {
-        canonicalPath: nodesCatalog.canonicalPath,
-        pagePath: CATALOGS.collections.path,
-        respondsOk: rootsWithContent.length > 0,
-        robots: nodesCatalog.robots,
       },
       ...infoPageFactsForSitemap(settings),
       ...nodes.map((node) => collectionFacts(node, filled.has(String(node.id)))),

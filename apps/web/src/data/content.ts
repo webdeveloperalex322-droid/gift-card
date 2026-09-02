@@ -238,7 +238,7 @@ async function computeHasContent(
  *
  * @param memo мемоизатор на один рендер. Не передан — создаётся свой; передавать
  *   стоит там, где на одной странице отбираются пересекающиеся наборы (каталог
- *   `/podborki` и главная считают и корни, и их детей).
+ *   каталог `/otkrytki` и главная считают и корни, и их детей).
  */
 export async function nodesWithContent(
   nodes: readonly Collection[],
@@ -334,6 +334,19 @@ export async function findCollectionByPath(path: string): Promise<Collection | n
   return node === undefined ? null : assertPublicallyReadable(node, 'подборку');
 }
 
+/** Чтение единого пространства `/otkrytki` для чистого диспетчера маршрута. */
+export async function readOtkrytkiPathQuery(
+  query: PublicFindQuery<'cards' | 'collections'>,
+): Promise<{ readonly docs: readonly (Card | Collection)[] }> {
+  const { docs } = await findMany(query);
+  const label = query.collection === 'cards' ? 'карточку' : 'подборку';
+  return {
+    docs: docs.map((record) =>
+      assertPublicallyReadable(record as Card | Collection, label),
+    ),
+  };
+}
+
 /** Страница карточек подборки. Первая страница — по базовому URL (решение Ч-05). */
 export async function listCollectionCards(input: {
   readonly collectionId: RecordId;
@@ -378,7 +391,7 @@ export async function listCatalogCards(input: {
 }
 
 /**
- * Узлы верхнего уровня таксономии — содержание каталога `/podborki` (Э3-08).
+ * Узлы верхнего уровня таксономии — серверные входы единого каталога `/otkrytki` (Э3-08).
  *
  * Неопубликованные не приходят, поэтому ссылок на черновик каталог не выводит. А
  * с условия Э3-13-A не приходят и опубликованные ПУСТЫЕ узлы: отбор идёт

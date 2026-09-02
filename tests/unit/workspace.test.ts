@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   CONTENT_STATUSES,
   isIndexableStatus,
@@ -25,5 +26,14 @@ describe('монорепозиторий', () => {
     expect(isIndexableStatus('draft')).toBe(false);
     expect(isIndexableStatus('review')).toBe(false);
     expect(isIndexableStatus('published')).toBe(true);
+  });
+
+  it('запускает Payload CMS на выделенном порту 3011', () => {
+    const cmsPackage = JSON.parse(
+      readFileSync(new URL('../../apps/cms/package.json', import.meta.url), 'utf8'),
+    ) as { scripts?: Record<string, string> };
+
+    expect(cmsPackage.scripts?.dev).toContain('--port 3011');
+    expect(cmsPackage.scripts?.start).toContain('--port 3011');
   });
 });

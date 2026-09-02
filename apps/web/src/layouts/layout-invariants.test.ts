@@ -19,7 +19,7 @@
  *     навигацию» — условие п. 5.1 ТЗ, а меню печатает `BaseLayout`. Значит,
  *     каждый шаблон страницы обязан рендерить именно этот layout: шаблон со
  *     своей разметкой `<html>` выпал бы из навигации молча;
- *   - **меню ведёт на оба каталога** — `/otkrytki` и `/podborki` (задача Э3-08);
+ *   - **меню ведёт на единый каталог** — `/otkrytki` (задача Э3-08);
  *   - **клиентского JS в шаблонах нет.** Ни одной директивы `client:*`: острова
  *     добавляются точечно и осознанно, а не появляются в шаблоне списка.
  *
@@ -165,7 +165,7 @@ describe('инварианты всех шаблонов страниц', () => 
     expect(markupOf(readFileSync(file, 'utf8'))).not.toMatch(/\bclient:[a-z]+/);
   });
 
-  it('BaseLayout печатает меню, а меню ведёт на оба каталога', () => {
+  it('BaseLayout печатает меню, а меню ведёт на единый каталог', () => {
     const layout = readFileSync(join(WEB_SRC, 'layouts', 'BaseLayout.astro'), 'utf8');
     const nav = readFileSync(join(WEB_SRC, 'components', 'SiteNav.astro'), 'utf8');
     const paths = SITE_NAV.map((link) => link.path);
@@ -178,8 +178,18 @@ describe('инварианты всех шаблонов страниц', () => 
     expect(nav).toMatch(/<a\b[^>]*href=\{link\.path\}/);
     expect(markupOf(nav)).not.toContain('href="#"');
     expect(markupOf(nav)).not.toMatch(/<button\b/);
-    expect(paths).toContain('/otkrytki');
-    expect(paths).toContain('/podborki');
+    expect(paths.filter((path) => path === '/otkrytki')).toHaveLength(1);
+    expect(paths).not.toContain('/podborki');
+  });
+
+  it('единый маршрут каталога не сериализует независимые чтения настроек и крошек', () => {
+    const route = readFileSync(
+      join(WEB_SRC, 'pages', 'otkrytki', '[...path].astro'),
+      'utf8',
+    );
+
+    expect(route).not.toMatch(/const settings = await readSiteSettings\(\)/u);
+    expect(route).not.toMatch(/trail: await (?:card|collection)BreadcrumbTrail/u);
   });
 
   it('BaseLayout печатает подвал, а подвал ведёт на все три служебные страницы', () => {

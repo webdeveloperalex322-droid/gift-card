@@ -59,7 +59,7 @@ const port = Number((externalUrl?.port ?? '') || process.env.PORT || '4321');
  * Ожидания по классам путей. `expect` — обязательный статус, `location` —
  * обязательное значение заголовка (только у 3xx).
  *
- * Про 404 у целей редиректа: маршруты `/otkrytki` и `/podborki` с этапа 3
+ * Про 404 у целей редиректа: маршруты под `/otkrytki` с этапа 3
  * существуют, но отвечают 404, пока в них нет опубликованного содержимого —
  * пустая страница не отдаёт 200 как посадочная (п. 5.1 ТЗ), а массовое создание
  * URL до готовности контента запрещено п. 23. Поэтому проверяется здесь не 200,
@@ -78,9 +78,9 @@ const CASES = [
     note: 'маршрут страницы со слешем',
   },
   {
-    path: '/podborki/prazdniki/8-marta/page/2/',
+    path: '/otkrytki/prazdniki/8-marta/page/2/',
     expect: 301,
-    location: '/podborki/prazdniki/8-marta/page/2',
+    location: '/otkrytki/prazdniki/8-marta/page/2',
     note: 'пагинация со слешем',
   },
   {
@@ -176,7 +176,7 @@ const CASES = [
     note: 'пустой сегмент внутри пути — 404, а не второй редирект',
   },
   {
-    path: '/podborki//prazdniki/',
+    path: '/otkrytki//prazdniki/',
     expect: 404,
     note: 'пустой сегмент проверяется ДО снятия хвостового слеша: без 301 в никуда',
   },

@@ -21,7 +21,7 @@ import {
 } from '../../apps/web/src/seo/collection-page.js';
 import { jsonLdScriptText } from '../../apps/web/src/seo/json-ld.js';
 
-const ENV = { SITE_URL: 'https://podborki.test' } as const;
+const ENV = { SITE_URL: 'https://otkrytki.test' } as const;
 
 const ITEMS: readonly ListItemFacts[] = [
   { name: 'Открытка маме на 8 Марта с тюльпанами', path: '/otkrytki/otkrytka-mame-tyulpany' },
@@ -30,7 +30,7 @@ const ITEMS: readonly ListItemFacts[] = [
 ];
 
 const INPUT: CollectionPageJsonLdInput = {
-  canonicalPath: '/podborki/prazdniki/8-marta',
+  canonicalPath: '/otkrytki/prazdniki/8-marta',
   heading: 'Открытки на 8 Марта',
   description: 'Открытки к 8 Марта: маме, бабушке, коллеге.',
   dateModified: '2026-02-14T10:00:00.000Z',
@@ -43,7 +43,7 @@ describe('разметка страницы подборки', () => {
 
     expect(jsonLd['@context']).toBe('https://schema.org');
     expect(jsonLd['@type']).toBe('CollectionPage');
-    expect(jsonLd.url).toBe(`${ENV.SITE_URL}/podborki/prazdniki/8-marta`);
+    expect(jsonLd.url).toBe(`${ENV.SITE_URL}/otkrytki/prazdniki/8-marta`);
     expect(jsonLd.name).toBe('Открытки на 8 Марта');
   });
 
@@ -95,12 +95,12 @@ describe('разметка страницы подборки', () => {
 
   it('пути элементов приводятся к канонической форме — без завершающего слеша', () => {
     const list = collectionPageJsonLd(
-      { ...INPUT, items: [{ name: 'Дочерняя подборка', path: '/podborki/prazdniki/8-marta/mame/' }] },
+      { ...INPUT, items: [{ name: 'Дочерняя подборка', path: '/otkrytki/prazdniki/8-marta/mame/' }] },
       ENV,
     ).mainEntity;
 
     expect(list.itemListElement[0]?.url).toBe(
-      `${ENV.SITE_URL}/podborki/prazdniki/8-marta/mame`,
+      `${ENV.SITE_URL}/otkrytki/prazdniki/8-marta/mame`,
     );
   });
 

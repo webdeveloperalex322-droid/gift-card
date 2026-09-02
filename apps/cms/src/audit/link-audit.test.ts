@@ -56,16 +56,16 @@ describe('разбор ссылок в HTML', () => {
 });
 
 describe('какой адрес принадлежит обходу', () => {
-  const from = `${ORIGIN}/podborki/prazdniki/8-marta`;
+  const from = `${ORIGIN}/otkrytki/prazdniki/8-marta`;
 
   it('относительный и абсолютный адреса своего хоста приводятся к одной форме', () => {
     expect(resolveInternalTarget('/otkrytki/roza', from, ORIGIN)).toBe(`${ORIGIN}/otkrytki/roza`);
     // Относительная ссылка разрешается по правилам URL, а не по вкусу: при
     // канонической форме БЕЗ завершающего слеша (Ч-21) `mame` со страницы
-    // `/podborki/prazdniki/8-marta` — это СОСЕД, а не потомок. Обход обязан
+    // `/otkrytki/prazdniki/8-marta` — это СОСЕД, а не потомок. Обход обязан
     // видеть тот же адрес, что браузер и краулер, иначе он проверял бы
     // выдуманную ссылку.
-    expect(resolveInternalTarget('mame', from, ORIGIN)).toBe(`${ORIGIN}/podborki/prazdniki/mame`);
+    expect(resolveInternalTarget('mame', from, ORIGIN)).toBe(`${ORIGIN}/otkrytki/prazdniki/mame`);
     expect(resolveInternalTarget(`${ORIGIN}/otkrytki/roza`, from, ORIGIN)).toBe(
       `${ORIGIN}/otkrytki/roza`,
     );

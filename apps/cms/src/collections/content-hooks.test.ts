@@ -27,6 +27,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ROLES } from '../access/roles';
 import { Cards } from './cards';
 import { Collections } from './collections';
+import { ContentPathClaims } from './content-path-claims';
 import {
   metaConflictFingerprint,
   normalizeMetaValue,
@@ -44,6 +45,7 @@ type LooseHook = (args: HookArgs) => unknown;
 const CONFIGS: Readonly<Record<string, CollectionConfig>> = {
   cards: Cards,
   collections: Collections,
+  'content-path-claims': ContentPathClaims,
   redirects: Redirects,
   'seo-history': SeoHistory,
 };
@@ -228,9 +230,15 @@ function createHarness(): Harness {
     info: () => undefined,
     warn: (message: unknown) => warnings.push(String(message)),
   };
+  const transactionDB = { transaction: 'content-hooks-harness' };
 
   const requestFor = (user: unknown): PayloadRequest =>
-    ({ context: {}, payload, user } as unknown as PayloadRequest);
+    ({
+      context: {},
+      payload,
+      transactionID: 'content-hooks-transaction',
+      user,
+    }) as unknown as PayloadRequest;
 
   async function runPipeline(args: {
     readonly data: Doc;
@@ -308,8 +316,33 @@ function createHarness(): Harness {
       );
       return Promise.resolve({ totalDocs: docs.length });
     },
-    create: ({ collection, data }: { collection: string; data: Doc }) =>
-      runPipeline({ data, id: null, slug: collection, user: null }),
+    db: {
+      drizzle: transactionDB,
+      insert: ({ values }: { values: Doc }) => {
+        const claims = collectionStore('content-path-claims');
+        const existing = [...claims.values()].find((doc) => doc.path === values.path);
+        if (existing !== undefined) {
+          return Promise.resolve([{ ...existing }]);
+        }
+        const id = nextId++;
+        const stored = { ...values, id };
+        claims.set(id, stored);
+        return Promise.resolve([{ ...stored }]);
+      },
+      name: 'postgres',
+      sessions: {
+        'content-hooks-transaction': {
+          db: transactionDB,
+          reject: () => Promise.resolve(),
+          resolve: () => Promise.resolve(),
+        },
+      },
+      tableNameMap: new Map([['content_path_claims', 'content_path_claims']]),
+      tables: { content_path_claims: { path: { name: 'path' } } },
+    },
+    create: ({ collection, data }: { collection: string; data: Doc }) => {
+      return runPipeline({ data, id: null, slug: collection, user: null });
+    },
     delete: ({ collection, id }: { collection: string; id: number }) => {
       collectionStore(collection).delete(id);
       return Promise.resolve({ id });
@@ -619,7 +652,7 @@ describe('Э1-08: draft → review с валидацией полноты', () =
     const node = harness.seed('collections', {
       nodeKind: 'group',
       parent: null,
-      path: '/podborki/prazdniki',
+      path: '/otkrytki/prazdniki',
       robots: 'noindex,follow',
       slug: 'prazdniki',
       status: 'draft',
@@ -1115,7 +1148,7 @@ describe('условие C3: год не попадает в адрес карт
     const harness = createHarness();
     const group = harness.seed('collections', {
       nodeKind: 'group',
-      path: '/podborki/prazdniki',
+      path: '/otkrytki/prazdniki',
       robots: 'noindex,follow',
       slug: 'prazdniki',
       status: 'draft',
@@ -1141,7 +1174,7 @@ describe('условие C3: год не попадает в адрес карт
 
     const occasion = harness.seed('collections', {
       nodeKind: 'occasion',
-      path: '/podborki/prazdniki/novyy-god',
+      path: '/otkrytki/prazdniki/novyy-god',
       robots: 'noindex,follow',
       slug: 'novyy-god',
       status: 'draft',
@@ -1189,7 +1222,7 @@ describe('условие C3: год не попадает в адрес карт
 
     const group = harness.seed('collections', {
       nodeKind: 'group',
-      path: '/podborki/prazdniki',
+      path: '/otkrytki/prazdniki',
       robots: 'noindex,follow',
       slug: 'prazdniki',
       status: 'draft',
@@ -1339,6 +1372,7 @@ describe('Э1-09: перенос поддерева подборок', () => {
   /** Опубликованное дерево: группа → повод → адресат. */
   function seedTree(harness: Harness): { readonly child: Doc; readonly grandChild: Doc; readonly root: Doc } {
     const common = {
+      description: 'Краткое описание',
       intro: { root: { children: [{ children: [{ text: 'Текст', type: 'text' }], type: 'paragraph' }], type: 'root' } },
       metaDescription: 'Описание',
       publishedAt: '2026-01-10T00:00:00.000Z',
@@ -1354,7 +1388,7 @@ describe('Э1-09: перенос поддерева подборок', () => {
       id: 100,
       nodeKind: 'group',
       parent: null,
-      path: '/podborki/prazdniki',
+      path: '/otkrytki/prazdniki',
       slug: 'prazdniki',
       title: 'Праздники',
     });
@@ -1363,7 +1397,7 @@ describe('Э1-09: перенос поддерева подборок', () => {
       id: 101,
       nodeKind: 'occasion',
       parent: 100,
-      path: '/podborki/prazdniki/8-marta',
+      path: '/otkrytki/prazdniki/8-marta',
       slug: '8-marta',
       title: '8 Марта',
     });
@@ -1372,7 +1406,7 @@ describe('Э1-09: перенос поддерева подборок', () => {
       id: 102,
       nodeKind: 'recipient',
       parent: 101,
-      path: '/podborki/prazdniki/8-marta/mame',
+      path: '/otkrytki/prazdniki/8-marta/mame',
       slug: 'mame',
       title: 'Маме на 8 Марта',
     });
@@ -1396,9 +1430,9 @@ describe('Э1-09: перенос поддерева подборок', () => {
 
     expect(redirects).toEqual(
       expect.arrayContaining([
-        ['/podborki/prazdniki/8-marta', '/podborki/prazdnichnye/8-marta', '301'],
-        ['/podborki/prazdniki/8-marta/mame', '/podborki/prazdnichnye/8-marta/mame', '301'],
-        ['/podborki/prazdniki', '/podborki/prazdnichnye', '301'],
+        ['/otkrytki/prazdniki/8-marta', '/otkrytki/prazdnichnye/8-marta', '301'],
+        ['/otkrytki/prazdniki/8-marta/mame', '/otkrytki/prazdnichnye/8-marta/mame', '301'],
+        ['/otkrytki/prazdniki', '/otkrytki/prazdnichnye', '301'],
       ]),
     );
     expect(redirects).toHaveLength(3);
@@ -1436,9 +1470,9 @@ describe('Э1-09: перенос поддерева подборок', () => {
     const paths = harness.docs('collections').map((doc) => doc.path);
     expect(paths).toEqual(
       expect.arrayContaining([
-        '/podborki/prazdnichnye',
-        '/podborki/prazdnichnye/8-marta',
-        '/podborki/prazdnichnye/8-marta/mame',
+        '/otkrytki/prazdnichnye',
+        '/otkrytki/prazdnichnye/8-marta',
+        '/otkrytki/prazdnichnye/8-marta/mame',
       ]),
     );
     expect(historyFor(harness, 'path')).toHaveLength(3);
@@ -1454,9 +1488,9 @@ describe('Э1-09: перенос поддерева подборок', () => {
     );
     expect(harness.docs('redirects')).toEqual([]);
     expect(harness.docs('collections').map((doc) => doc.path)).toEqual([
-      '/podborki/prazdniki',
-      '/podborki/prazdniki/8-marta',
-      '/podborki/prazdniki/8-marta/mame',
+      '/otkrytki/prazdniki',
+      '/otkrytki/prazdniki/8-marta',
+      '/otkrytki/prazdniki/8-marta/mame',
     ]);
   });
 });
@@ -1503,7 +1537,7 @@ describe('наполненность подборки: публикация и �
       id: 100,
       nodeKind: 'group',
       parent: null,
-      path: '/podborki/prazdniki',
+      path: '/otkrytki/prazdniki',
       robots: 'noindex,follow',
       slug: 'prazdniki',
       status: 'draft',
@@ -1511,6 +1545,7 @@ describe('наполненность подборки: публикация и �
     });
     return harness.seed('collections', {
       id: 200,
+      description: 'Краткое описание подборки',
       intro: {
         root: {
           children: [{ children: [{ text: 'Вводный текст', type: 'text' }], type: 'paragraph' }],
@@ -1520,7 +1555,7 @@ describe('наполненность подборки: публикация и �
       metaDescription: 'Описание подборки',
       nodeKind: 'occasion',
       parent: 100,
-      path: '/podborki/prazdniki/8-marta',
+      path: '/otkrytki/prazdniki/8-marta',
       related: [999],
       responsibleEditor: 1,
       robots: 'noindex,follow',
@@ -1590,7 +1625,7 @@ describe('наполненность подборки: публикация и �
       id: 300,
       nodeKind: 'group',
       parent: null,
-      path: '/podborki/prazdniki',
+      path: '/otkrytki/prazdniki',
       slug: 'prazdniki',
       title: 'Праздники',
     });
@@ -1598,7 +1633,7 @@ describe('наполненность подборки: публикация и �
       id: 301,
       nodeKind: 'occasion',
       parent: 300,
-      path: '/podborki/prazdniki/8-marta',
+      path: '/otkrytki/prazdniki/8-marta',
       robots: 'noindex,follow',
       slug: '8-marta',
       status: 'published',
@@ -1829,7 +1864,7 @@ describe('Э5-01: дубли метатегов', () => {
       metaDescription: 'Описание подборки',
       metaDescriptionKey: 'описание подборки',
       nodeKind: 'occasion',
-      path: '/podborki/prazdniki/8-marta',
+      path: '/otkrytki/prazdniki/8-marta',
       robots: 'noindex,follow',
       slug: '8-marta',
       status: 'review',
@@ -1864,7 +1899,7 @@ describe('Э5-01: дубли метатегов', () => {
         documentCollection: 'collections',
         documentId: '90',
         field: 'title',
-        path: '/podborki/prazdniki/8-marta',
+        path: '/otkrytki/prazdniki/8-marta',
         status: 'review',
         title: CONFLICTING_TITLE,
       },
@@ -1883,7 +1918,7 @@ describe('Э5-01: дубли метатегов', () => {
     expect(saved.status).toBe('draft');
     expect(typeof gateOf(saved).checkedAt).toBe('string');
     // Журнал тоже пишется — но как дополнение, а не как единственный канал.
-    expect(harness.warnings.some((line) => line.includes('/podborki/prazdniki/8-marta'))).toBe(true);
+    expect(harness.warnings.some((line) => line.includes('/otkrytki/prazdniki/8-marta'))).toBe(true);
   });
 
   it('перевод в review при неразрешённом конфликте отклоняется', async () => {
@@ -1934,7 +1969,7 @@ describe('Э5-01: дубли метатегов', () => {
     harness.seed('collections', {
       id: 91,
       nodeKind: 'occasion',
-      path: '/podborki/prazdniki/9-maya',
+      path: '/otkrytki/prazdniki/9-maya',
       slug: '9-maya',
       status: 'published',
       title: 'Открытки на 9 Мая',
@@ -2020,7 +2055,7 @@ describe('Э5-01: дубли метатегов', () => {
       metaDescription: '',
       metaDescriptionKey: null,
       nodeKind: 'occasion',
-      path: '/podborki/prazdniki/8-marta',
+      path: '/otkrytki/prazdniki/8-marta',
       status: 'review',
       title: 'Своя подборка',
       titleKey: 'своя подборка',
@@ -2037,7 +2072,7 @@ describe('Э5-01: дубли метатегов', () => {
     harness.seed('collections', {
       id: 90,
       nodeKind: 'occasion',
-      path: '/podborki/prazdniki/8-marta',
+      path: '/otkrytki/prazdniki/8-marta',
       status: 'draft',
       title: CONFLICTING_TITLE,
       titleKey: CONFLICTING_TITLE.toLowerCase(),
@@ -2115,7 +2150,7 @@ describe('Э5-01: дубли метатегов', () => {
 
     expect(result.updated.map((doc) => doc.id)).toEqual([5]);
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain('/podborki/prazdniki/8-marta');
+    expect(result.errors[0]).toContain('/otkrytki/prazdniki/8-marta');
   });
 
   it('нормализованные ключи пишутся всегда — на них живёт дашборд (Э5-04)', async () => {
@@ -2250,7 +2285,7 @@ describe('удаление выборки: опубликованные запи
     harness.seed('collections', {
       id: 90,
       nodeKind: 'occasion',
-      path: '/podborki/prazdniki/8-marta',
+      path: '/otkrytki/prazdniki/8-marta',
       publishedAt: '2026-01-10T00:00:00.000Z',
       robots: 'noindex,follow',
       slug: '8-marta',

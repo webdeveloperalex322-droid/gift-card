@@ -89,7 +89,7 @@ describe('условие 1: разрешение на индексацию', () 
     // Директива страницы 2+ закрыта разрешателем (решение Ч-01b), поэтому карте
     // сайта не нужно знать про `/page/N` вовсе.
     const decision = decideSitemapUrl(
-      page({ canonicalPath: '/podborki/prazdniki/8-marta/page/2', pagePath: '/podborki/prazdniki/8-marta/page/2', robots: PAGE_TWO }),
+      page({ canonicalPath: '/otkrytki/prazdniki/8-marta/page/2', pagePath: '/otkrytki/prazdniki/8-marta/page/2', robots: PAGE_TWO }),
       ENV,
     );
 
@@ -104,7 +104,7 @@ describe('условие 2: адрес канонический', () => {
     // отвечает 200 и открыта, но склеена с другим адресом. В карте ей не место, и
     // по директиве это не видно.
     const decision = decideSitemapUrl(
-      page({ canonicalPath: '/podborki/prazdniki/8-marta' }),
+      page({ canonicalPath: '/otkrytki/prazdniki/8-marta' }),
       ENV,
     );
 

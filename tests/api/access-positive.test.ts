@@ -117,6 +117,7 @@ describe.each(TRANSPORTS)('Э6-02 положительное (%s): путь аг
       actor: aiEditor,
       collection: 'collections',
       data: {
+        description: `Краткое описание подборки ${suffix} для видимой части страницы.`,
         intro: lexical(`Вводный текст подборки ${suffix}: написан под эту тему, а не по шаблону.`),
         metaDescription: `Э6-02 положительное: описание подборки ${suffix}`,
         nodeKind: 'occasion',

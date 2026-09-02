@@ -1,7 +1,7 @@
 /**
- * Каталоги разделов `/otkrytki` и `/podborki` и навигация сайта (задача Э3-08).
+ * Единый каталог разделов `/otkrytki` и навигация сайта (задача Э3-08).
  *
- * Норма: `CLAUDE.md` — «Правила URL» (`/otkrytki` и `/podborki` — контейнеры
+ * Норма: `CLAUDE.md` — «Правила URL» (`/otkrytki` — контейнер
  * реестра зарезервированных маршрутов, пути под ними — норма), «Рендеринг»
  * (навигация только `<a href>`, всё в HTML-ответе сервера), «Правила индексации»
  * (открыть страницу в `index,follow` может только человек), ТЗ §7.6 (крошки), а
@@ -26,22 +26,17 @@ import {
 } from '../../apps/web/src/seo/catalog-pages.js';
 
 describe('факты каталогов раздела', () => {
-  it('пути каталогов — контейнеры реестра зарезервированных маршрутов', () => {
-    for (const key of CATALOG_KEYS) {
-      const availability = checkReservedPath(CATALOGS[key].path, {
-        PAYLOAD_ADMIN_PATH: '/admin',
-      });
+  it('единственный каталог /otkrytki — контейнер реестра зарезервированных маршрутов', () => {
+    expect(CATALOG_KEYS).toEqual(['cards']);
+    const availability = checkReservedPath(CATALOGS.cards.path, {
+      PAYLOAD_ADMIN_PATH: '/admin',
+    });
 
-      // Запись CMS с таким итоговым путём создать нельзя, а пути под ним — норма.
-      // Правило живёт в `packages/shared` и здесь только проверяется: второй его
-      // копии в apps/web быть не должно.
-      expect(availability).toMatchObject({ available: false, rule: 'container-path' });
-    }
+    expect(availability).toMatchObject({ available: false, rule: 'container-path' });
   });
 
-  it('каталоги живут в канонической форме: без завершающего слеша', () => {
+  it('каталог живёт в канонической форме: без завершающего слеша', () => {
     expect(CATALOGS.cards.path).toBe('/otkrytki');
-    expect(CATALOGS.collections.path).toBe('/podborki');
   });
 
   it('у каждого каталога свои непустые title, H1 и описание', () => {
@@ -111,13 +106,6 @@ describe('крошки каталога', () => {
     }
   });
 
-  it('цепочка начинается главной и состоит из двух звеньев: каталог лежит на первом уровне', () => {
-    const trail = catalogBreadcrumbTrail('collections', 1);
-
-    expect(trail.map((item) => item.path)).toEqual(['/', '/podborki']);
-    expect(trail[0]?.linked).toBe(true);
-  });
-
   it('на странице пагинации каталог становится ссылкой, текущая крошка — номер', () => {
     const trail = catalogBreadcrumbTrail('cards', 2);
 
@@ -133,11 +121,11 @@ describe('крошки каталога', () => {
 });
 
 describe('навигация сайта', () => {
-  it('в меню есть оба каталога — ссылками на канонические пути', () => {
+  it('в меню есть ровно один каталог — /otkrytki', () => {
     const paths = SITE_NAV.map((link) => link.path);
 
-    expect(paths).toContain('/otkrytki');
-    expect(paths).toContain('/podborki');
+    expect(paths.filter((path) => path === '/otkrytki')).toHaveLength(1);
+    expect(paths).not.toContain('/podborki');
   });
 
   it('первым звеном меню идёт главная', () => {

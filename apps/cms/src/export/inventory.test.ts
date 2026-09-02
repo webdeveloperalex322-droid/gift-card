@@ -131,7 +131,7 @@ describe('чтение карты сайта', () => {
   it('собирает адреса из всех файлов индекса', async () => {
     const probe = respond({
       'https://primer.test/sitemap-sections.xml': {
-        body: '<urlset><url><loc>https://primer.test/podborki/prazdniki/8-marta</loc></url></urlset>',
+        body: '<urlset><url><loc>https://primer.test/otkrytki/prazdniki/8-marta</loc></url></urlset>',
         status: 200,
       },
       'https://primer.test/sitemap.xml': {
@@ -142,14 +142,14 @@ describe('чтение карты сайта', () => {
       },
     });
     const reading = await readSitemapUrls({ origin: 'https://primer.test', probe });
-    expect([...(reading.urls ?? [])]).toEqual(['https://primer.test/podborki/prazdniki/8-marta']);
+    expect([...(reading.urls ?? [])]).toEqual(['https://primer.test/otkrytki/prazdniki/8-marta']);
     expect(reading.warnings).toEqual([]);
   });
 
   it('недоступный файл карты не отменяет уже прочитанные адреса, но назван', async () => {
     const probe = respond({
       'https://primer.test/sitemap-sections.xml': {
-        body: '<urlset><url><loc>https://primer.test/podborki</loc></url></urlset>',
+        body: '<urlset><url><loc>https://primer.test/otkrytki</loc></url></urlset>',
         status: 200,
       },
       'https://primer.test/sitemap.xml': {
@@ -160,7 +160,7 @@ describe('чтение карты сайта', () => {
       },
     });
     const reading = await readSitemapUrls({ origin: 'https://primer.test', probe });
-    expect([...(reading.urls ?? [])]).toEqual(['https://primer.test/podborki']);
+    expect([...(reading.urls ?? [])]).toEqual(['https://primer.test/otkrytki']);
     expect(reading.warnings.join(' ')).toContain('sitemap-cards-1.xml');
   });
 
@@ -201,7 +201,7 @@ describe('чтение карты сайта', () => {
       }
       if (url === 'https://primer.test/sitemap-sections.xml') {
         return Promise.resolve({
-          body: '<urlset><url><loc>https://primer.test/podborki</loc></url></urlset>',
+          body: '<urlset><url><loc>https://primer.test/otkrytki</loc></url></urlset>',
           status: 200,
         });
       }
@@ -213,7 +213,7 @@ describe('чтение карты сайта', () => {
     expect(asked).not.toContain('https://chuzhoy.test/sitemap-cards-1.xml');
     expect(reading.warnings.join(' ')).toContain('chuzhoy.test');
     // Свой файл при этом прочитан: отказ точечный, а не «карта не прочитана».
-    expect([...(reading.urls ?? [])]).toEqual(['https://primer.test/podborki']);
+    expect([...(reading.urls ?? [])]).toEqual(['https://primer.test/otkrytki']);
   });
 
   it('относительный <loc> разрешается ОТ индекса и остаётся своим', async () => {

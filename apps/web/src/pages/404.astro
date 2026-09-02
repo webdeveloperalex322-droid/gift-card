@@ -71,7 +71,7 @@ const robots = errorPageRobots().robots;
 
 <BaseLayout
   title="Страница не найдена"
-  description="Такого адреса на сайте нет. Перейдите в каталог открыток или в подборки."
+  description="Такого адреса на сайте нет. Перейдите в каталог открыток или воспользуйтесь поиском."
   canonicalPath={null}
   robots={robots}
 >
@@ -87,10 +87,6 @@ const robots = errorPageRobots().robots;
   <ul>
     <li><a href="/">Главная страница</a></li>
     <li><a href={CATALOGS.cards.path}>{CATALOGS.cards.heading}</a> — все открытки сайта</li>
-    <li>
-      <a href={CATALOGS.collections.path}>{CATALOGS.collections.heading}</a> — праздники и
-      адресаты
-    </li>
     <li>
       <a href={SEARCH_PATH}>{SEARCH_PAGE.heading}</a> — если помните слово из названия
     </li>

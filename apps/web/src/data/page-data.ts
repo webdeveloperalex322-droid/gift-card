@@ -48,11 +48,18 @@
  */
 
 import type { Card, Collection, SiteSetting } from '@otkritka/cms/types';
-import { buildCardPath } from '@otkritka/cms/seo/paths';
+import {
+  buildCardPath,
+  CARD_PATH_PREFIX,
+  COLLECTION_PATH_PREFIX,
+} from '@otkritka/cms/seo/paths';
 import {
   aiDisclosureText,
+  canonicalizePath,
   imageCreatorJsonLd,
   imageLicenseJsonLd,
+  looksLikeAbsoluteUrl,
+  pathSegments,
   type SharedEnv,
 } from '@otkritka/shared';
 
@@ -68,9 +75,11 @@ import {
 } from '../routing/view-params.js';
 import {
   type PaginationModel,
+  decidePageParam,
   paginationModel,
   paginationPathFor,
   paginationTitle,
+  splitPaginatedPath,
 } from '../routing/pagination.js';
 import { type PageRobots, resolvePageRobots } from '../seo/robots-directive.js';
 import { type CardPageJsonLd, cardPageJsonLd } from '../seo/card-page.js';
@@ -82,6 +91,126 @@ import {
 import { recordHeading } from '../seo/headings.js';
 import { seasonalWindowContains } from '../seo/home-page.js';
 import { type CardImageSource, cardImageAlt, cardImageVariants } from './card-image.js';
+import {
+  cardBySlugQuery,
+  collectionByPathQuery,
+  type PublicCollectionSlug,
+  type PublicFindQuery,
+} from './queries.js';
+import { assertPublicallyReadable } from './read-scope.js';
+
+export type OtkrytkiPathRead = (
+  query: PublicFindQuery<PublicCollectionSlug>,
+) => Promise<{ readonly docs: readonly unknown[] }>;
+
+export interface CardPageData {
+  readonly kind: 'card';
+  readonly card: Card;
+}
+
+export interface CollectionPageData {
+  readonly kind: 'collection';
+  readonly node: Collection;
+  readonly page: number;
+}
+
+export interface OtkrytkiPathRedirect {
+  readonly kind: 'redirect';
+  readonly location: string;
+  /**
+   * Публичная запись базового URL. Route обязан проверить её
+   * содержимое тем же способом, что и базовую страницу: пустая
+   * подборка сама отвечает 404, и 301 на неё запрещён.
+   */
+  readonly node: Collection;
+}
+
+export type OtkrytkiPathResolution =
+  | CardPageData
+  | CollectionPageData
+  | OtkrytkiPathRedirect;
+
+export async function loadOtkrytkiPathPage(input: {
+  readonly path: string;
+  readonly read: OtkrytkiPathRead;
+}): Promise<OtkrytkiPathResolution | null> {
+  if (!input.path.startsWith('/') || looksLikeAbsoluteUrl(input.path)) {
+    return null;
+  }
+
+  let canonical: string;
+  try {
+    canonical = canonicalizePath(input.path);
+    pathSegments(canonical);
+  } catch {
+    return null;
+  }
+  if (
+    canonical === CARD_PATH_PREFIX ||
+    !canonical.startsWith(`${CARD_PATH_PREFIX}/`) ||
+    COLLECTION_PATH_PREFIX !== CARD_PATH_PREFIX
+  ) {
+    return null;
+  }
+
+  const split = splitPaginatedPath(canonical);
+  let page = 1;
+  let redirectToBase = false;
+  if (split.pageParam !== null) {
+    const decision = decidePageParam(split.pageParam);
+    if (decision.action === 'not-found') {
+      return null;
+    }
+    if (decision.action === 'redirect-to-base') {
+      redirectToBase = true;
+    } else {
+      page = decision.page;
+    }
+  }
+
+  const relativeSegments = pathSegments(split.basePath).slice(
+    pathSegments(CARD_PATH_PREFIX).length,
+  );
+  if (relativeSegments.length === 0) {
+    return null;
+  }
+
+  const collectionResult = async (): Promise<Collection | null> => {
+    const result = await input.read(collectionByPathQuery(split.basePath));
+    const node = result.docs.at(0) as Collection | undefined;
+    return node === undefined ? null : assertPublicallyReadable(node, 'подборку');
+  };
+
+  if (split.pageParam !== null || relativeSegments.length > 1) {
+    const node = await collectionResult();
+    if (node === null) {
+      return null;
+    }
+    return redirectToBase
+      ? { kind: 'redirect', location: split.basePath, node }
+      : { kind: 'collection', node, page };
+  }
+
+  const [cardResult, node] = await Promise.all([
+    input.read(cardBySlugQuery(relativeSegments[0] ?? '')),
+    collectionResult(),
+  ]);
+  const rawCard = cardResult.docs.at(0) as Card | undefined;
+  const card =
+    rawCard === undefined ? null : assertPublicallyReadable(rawCard, 'карточку');
+
+  if (card !== null && node !== null) {
+    throw new Error(
+      `Путь «${canonical}» одновременно занят карточкой и подборкой. Публичный маршрут не ` +
+        'может выбрать один из двух материалов: межколлекционная защита итогового пути CMS ' +
+        'была обойдена.',
+    );
+  }
+  if (card !== null) {
+    return { card, kind: 'card' };
+  }
+  return node === null ? null : { kind: 'collection', node, page };
+}
 
 /**
  * Путь карточки собирается ЕДИНСТВЕННОЙ функцией проекта. Взята она напрямую из
@@ -402,6 +531,8 @@ export interface CollectionPageContent {
   readonly heading: string;
   readonly title: string;
   readonly metaDescription: string | null;
+  /** Видимое краткое описание записи; только на первой странице списка. */
+  readonly description: string | null;
   /** Директива робота, посчитанная единственным разрешателем (задача Э4-01). */
   readonly robots: PageRobots;
   /**
@@ -558,6 +689,7 @@ export function collectionPageContent(input: CollectionPageInput): CollectionPag
   // одинаковый description на разных адресах, а дописать номер — сочинить
   // шаблонный текст (запрет п. 23.4). Пусто → тега нет вовсе.
   const metaDescription = isFirstPage ? filled(input.node.metaDescription) : null;
+  const description = isFirstPage ? filled(input.node.description) : null;
   const updatedContentAt = filled(input.node.updatedContentAt);
   const parent = collectionLinks([input.parent]).at(0) ?? null;
   // Видимый список страницы: сетка открыток, а у узла без своих открыток — список
@@ -570,6 +702,7 @@ export function collectionPageContent(input: CollectionPageInput): CollectionPag
   return {
     canonicalPath,
     children,
+    description,
     filter: view,
     // Ряд ссылок строится от АДРЕСА этой страницы: на второй странице списка
     // фильтр остаётся на второй странице, а сброс ведёт на её чистый адрес. Тот
@@ -650,16 +783,16 @@ export function seasonalLinks(
 }
 
 /* ------------------------------------------------------------------ */
-/* Каталоги разделов /otkrytki и /podborki (задача Э3-08)             */
+/* Навигационные разделы единого каталога /otkrytki (задача Э3-08)   */
 /* ------------------------------------------------------------------ */
 
 /**
- * Раздел каталога `/podborki`: узел верхнего уровня и его прямые дети.
+ * Раздел каталога `/otkrytki`: узел верхнего уровня и его прямые дети.
  *
  * Двух уровней достаточно и больше не нужно: глубже лежат пары «праздник ×
  * адресат», и они достижимы со страницы своего праздничного узла. Отсюда и
- * глубина от главной: главная → `/podborki` → узел верхнего уровня → пара →
- * карточка, то есть ровно четыре перехода (следствие Ч-04-5).
+ * Корневой узел выводится прямой ссылкой из каталога, поэтому вложенные страницы
+ * остаются достижимыми без отдельного контейнера подборок.
  */
 export interface CatalogSection {
   readonly node: ListItemFacts;

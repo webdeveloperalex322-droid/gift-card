@@ -34,7 +34,7 @@ describe('isPageRoute: маршрут страницы против URL файл
     '/otkrytki/8-marta',
     '/otkrytki/prazdniki/8-marta/mame',
     '/otkrytki/prazdniki/8-marta/page/2',
-    '/podborki',
+    '/otkrytki/adresaty/mame',
     '/o-proekte',
     '/search',
   ];

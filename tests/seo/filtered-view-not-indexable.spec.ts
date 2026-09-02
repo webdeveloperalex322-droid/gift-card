@@ -101,7 +101,7 @@ for (const page of ACCEPTANCE_PAGES) {
  * страниц (`apps/web/src/components/Pagination.astro`, проп `query`), и эти
  * ссылки `rel="nofollow"` НЕ получают, хотя ряд самого фильтра получает. Замер
  * 2026-08-27 на локальной базе:
- * `/podborki/.../page/2?format=vertical` печатает `<a href=".../?format=vertical">`
+ * `/otkrytki/.../page/2?format=vertical` печатает `<a href=".../?format=vertical">`
  * без `rel`. Пока страниц списка нет в инвентаре (они существуют только у
  * опубликованной записи), это утверждение здесь молчит; в момент, когда список
  * войдёт в выборку на Э3-13, оно назовёт нарушение — и исправлять его будет

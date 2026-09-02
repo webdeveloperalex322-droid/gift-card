@@ -24,6 +24,9 @@ export default tseslint.config(
       '**/.next/**',
       '**/next-env.d.ts',
       '**/*.tsbuildinfo',
+      // Declaration-only pilot interfaces are consumed by editors/TypeScript;
+      // they are not standalone project-service inputs for ESLint.
+      '**/scripts/content-pilot/*.d.mts',
     ],
   },
   js.configs.recommended,

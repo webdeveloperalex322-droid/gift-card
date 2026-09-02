@@ -681,7 +681,7 @@ describe('год в slug (условие C3)', () => {
   });
 
   it('принимает на вход и целый путь: проверять надо ИТОГОВЫЙ адрес', () => {
-    expect(findYearInSlug('/podborki/prazdniki/novyy-god-2027')).toBe('2027');
+    expect(findYearInSlug('/otkrytki/prazdniki/novyy-god-2027')).toBe('2027');
     expect(findYearInSlug('/otkrytki/8-marta')).toBeNull();
   });
 

@@ -13,11 +13,13 @@
     "audit:links:scheduled": "payload jobs:run --handle-schedules --queue seo-audit",
     "build": "next build",
     "check": "tsc --noEmit && tsc --noEmit -p ../../tests/api/tsconfig.json",
-    "dev": "next dev --port 3010",
+    "content:import:apply": "payload run ./scripts/import-pilot-content.ts -- --apply",
+    "content:import:dry-run": "payload run ./scripts/import-pilot-content.ts -- --dry-run",
+    "dev": "next dev --port 3011",
     "ensure-db": "node scripts/ensure-database.mjs",
     "generate:importmap": "payload generate:importmap",
     "generate:types": "payload generate:types",
-    "start": "next start --port 3010"
+    "start": "next start --port 3011"
   },
   "dependencies": {
     "@otkritka/images": "workspace:*",
@@ -30,7 +32,8 @@
     "payload": "3.88.0",
     "pg": "8.20.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "sharp": "catalog:"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",

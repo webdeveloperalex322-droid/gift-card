@@ -1,0 +1,141 @@
+---
+import type { Card } from '@otkritka/cms/types';
+
+import type { CardPageContent } from '../data';
+import type { BreadcrumbTrail } from '../seo/breadcrumbs';
+import { canonicalUrlFor } from '../routing/canonical';
+import { jsonLdScriptText } from '../seo/json-ld';
+import { shareTargets } from '../seo/share';
+import { serverEnv } from '../server-env';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Breadcrumbs from './Breadcrumbs.astro';
+import CardGrid from './CardGrid.astro';
+import CardImage from './CardImage.astro';
+
+interface Props {
+  card: Card;
+  content: CardPageContent;
+  trail: BreadcrumbTrail;
+}
+
+const { card, content, trail } = Astro.props;
+const shares = shareTargets({
+  title: content.heading,
+  url: canonicalUrlFor(content.canonicalPath, serverEnv()),
+});
+const jsonLd = jsonLdScriptText(content.jsonLd);
+---
+
+<BaseLayout
+  title={content.title}
+  description={content.metaDescription}
+  canonicalPath={content.canonicalPath}
+  robots={content.robots}
+>
+  <Breadcrumbs trail={trail} />
+  <h1>{content.heading}</h1>
+
+  <figure class="card__figure">
+    <CardImage card={card} layout="content-width" priority />
+    {content.caption === null ? null : <figcaption>{content.caption}</figcaption>}
+  </figure>
+
+  {content.description === null ? null : <p>{content.description}</p>}
+
+  <p class="card__download">
+    <a href={content.downloadPath} download>Скачать открытку</a>
+    <span class="card__download-note"> JPEG, {content.downloadWidth}×{content.downloadHeight} пикселей</span>
+  </p>
+
+  {content.attributes.length === 0 ? null : (
+    <section class="page-section">
+      <h2>Открытка входит в подборки</h2>
+      <ul class="link-row">
+        {content.attributes.map((attribute) => (
+          <li><span class="card__attribute-kind">{attribute.kindLabel}:</span>{' '}<a href={attribute.path}>{attribute.name}</a></li>
+        ))}
+      </ul>
+    </section>
+  )}
+
+  <section class="page-section">
+    <h2>Поделиться</h2>
+    <ul class="link-row">
+      {shares.map((share) => (
+        <li><a href={share.href} rel="nofollow noopener" target="_blank">{share.label}</a></li>
+      ))}
+    </ul>
+  </section>
+
+  {content.aiDisclosure === null && content.usageTerms === null ? null : (
+    <section class="page-section">
+      <h2>Об изображении</h2>
+      {content.aiDisclosure === null ? null : <p>{content.aiDisclosure}</p>}
+      {content.usageTerms === null ? null : <p>{content.usageTerms}</p>}
+    </section>
+  )}
+
+  {content.similar.length === 0 ? null : (
+    <section class="page-section">
+      <h2>Похожие открытки</h2>
+      <CardGrid tiles={content.similar} ariaLabel="Похожие открытки" />
+    </section>
+  )}
+
+  <script type="application/ld+json" is:inline set:html={jsonLd} />
+</BaseLayout>
+
+<style>
+  .card__figure {
+    margin: 0;
+  }
+
+  /* Рамка изображения живёт в критическом CSS `../layouts/BaseLayout.astro`,
+     а не здесь: scoped-стиль компонента до элементов picture и img не достаёт —
+     их печатает `CardImage.astro`, и атрибута области видимости этого компонента
+     они не несут. */
+
+  .card__figure figcaption {
+    max-width: 28em;
+    margin-block-start: 0.75rem;
+    font-size: 0.9375rem;
+    color: var(--ink-soft);
+  }
+
+  .card__download {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem 0.875rem;
+    margin-block: 1.25rem 0;
+  }
+
+  .card__download > a {
+    padding: 0.5rem 1.125rem;
+    background: var(--stamp);
+    color: var(--paper-raised);
+    font-weight: 500;
+    text-decoration: none;
+  }
+
+  .card__download > a:hover {
+    background: var(--ink);
+  }
+
+  .card__download > a:focus-visible {
+    outline-color: var(--ink);
+  }
+
+  .card__download-note {
+    font-size: 0.875rem;
+    color: var(--ink-soft);
+  }
+
+  .card__attribute-kind {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+</style>

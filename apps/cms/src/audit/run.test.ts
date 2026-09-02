@@ -120,7 +120,7 @@ describe('прогон проверки внутренних ссылок', () =
       }
       if (url === `${ORIGIN}/sitemap-sections.xml`) {
         return Promise.resolve({
-          body: `<urlset><url><loc>${ORIGIN}/podborki</loc></url></urlset>`,
+          body: `<urlset><url><loc>${ORIGIN}/otkrytki</loc></url></urlset>`,
           status: 200,
         });
       }

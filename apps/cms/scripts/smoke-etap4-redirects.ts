@@ -136,7 +136,6 @@ async function main(): Promise<void> {
 
     const reservedSources = [
       ['контейнер /otkrytki', '/otkrytki'],
-      ['контейнер /podborki', '/podborki'],
       ['главная', '/'],
       ['занят целиком /search', '/search'],
       ['путь ПОД занятым целиком /search/istoriya', '/search/istoriya'],
@@ -144,7 +143,7 @@ async function main(): Promise<void> {
       ['файловый маршрут /sitemap.xml', '/sitemap.xml'],
       ['имя файлового маршрута без расширения /sitemap', '/sitemap'],
       ['путь админки (вычислен из PAYLOAD_ADMIN_PATH)', '/admin'],
-      ['сегмент пагинации', '/podborki/prazdniki/8-marta/page/2'],
+      ['сегмент пагинации', '/otkrytki/prazdniki/8-marta/page/2'],
     ] as const;
 
     for (const [label, from] of reservedSources) {
@@ -194,7 +193,7 @@ async function main(): Promise<void> {
       data: {
         code: '301',
         comment: 'смоук Э4-06',
-        from: '/podborki/smouk-prazdnik/smouk-adresat',
+        from: '/otkrytki/smouk-prazdnik/smouk-adresat',
         to: '/o-proekte',
       },
       overrideAccess: false,

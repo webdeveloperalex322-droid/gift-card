@@ -185,17 +185,14 @@ describe('запросы к коллекциям', () => {
     // Путь подборки считает и хранит CMS (поле `path` с уникальным индексом).
     // Пересчитывать его в web запрещено, поэтому запрос идёт по значению как
     // есть — но каноническая форма у пути одна (решение Ч-21).
-    expect(collectionByPathQuery('/podborki/prazdniki/8-marta/').where).toEqual({
-      path: { equals: '/podborki/prazdniki/8-marta' },
+    expect(collectionByPathQuery('/otkrytki/prazdniki/8-marta/').where).toEqual({
+      path: { equals: '/otkrytki/prazdniki/8-marta' },
     });
   });
 
-  it('подборка вне пространства /podborki не запрашивается вовсе', () => {
-    // Пространства имён разведены (решение человека от 2026-08-22): подборки
-    // живут под /podborki, карточки под /otkrytki. Запрос по чужому пути — это
-    // ошибка вызывающего, а не пустой результат.
-    expect(() => collectionByPathQuery('/otkrytki/8-marta')).toThrow(/podborki/);
-    expect(() => collectionByPathQuery('otkrytki')).toThrow(/podborki/);
+  it('подборка вне общего пространства /otkrytki не запрашивается вовсе', () => {
+    expect(() => collectionByPathQuery('/drugoe/8-marta')).toThrow(/otkrytki/);
+    expect(() => collectionByPathQuery('drugoe')).toThrow(/otkrytki/);
   });
 
   it('список карточек подборки: постраничный, с устойчивым порядком', () => {
@@ -376,7 +373,7 @@ describe('запросы к коллекциям', () => {
   it('каждый запрос уходит с областью чтения публичного рендера', () => {
     const queries = [
       cardBySlugQuery('x'),
-      collectionByPathQuery('/podborki/prazdniki/8-marta'),
+      collectionByPathQuery('/otkrytki/prazdniki/8-marta'),
       collectionCardsQuery({ collectionId: 1, page: 1 }),
       required(childCollectionsQuery(1)),
       required(collectionByIdQuery(1)),

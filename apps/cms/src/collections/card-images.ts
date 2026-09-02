@@ -9,6 +9,7 @@ import {
 } from '../access/policies';
 import { imageVariantFields } from '../images/image-mirror';
 import { cardImageUploadHooks } from '../images/upload-hooks';
+import { assignTrustedPilotImportKey } from '../import/pilot-import-identity';
 import { ACCEPTED_IMAGE_MIME_TYPES } from '../images/upload-validation';
 
 /**
@@ -66,6 +67,14 @@ function refuseFileRoute(): Response {
 }
 
 const cardImageFields: Field[] = [
+  {
+    name: 'pilotImportKey',
+    type: 'text',
+    unique: true,
+    index: true,
+    access: systemAccess,
+    admin: { hidden: true },
+  },
   {
     name: 'title',
     type: 'text',
@@ -234,7 +243,13 @@ export const CardImages: CollectionConfig = {
     read: authenticatedAccess,
     update: contentWriteAccess,
   },
-  hooks: cardImageUploadHooks(),
+  hooks: (() => {
+    const hooks = cardImageUploadHooks();
+    return {
+      ...hooks,
+      beforeValidate: [assignTrustedPilotImportKey()],
+    } satisfies NonNullable<CollectionConfig['hooks']>;
+  })(),
   upload: {
     // Payload не хранит и не отдаёт файлы: раскладку делает адаптер хранилища.
     disableLocalStorage: true,

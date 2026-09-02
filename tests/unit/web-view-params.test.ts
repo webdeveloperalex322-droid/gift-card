@@ -70,7 +70,7 @@ describe('разбор параметров представления', () => {
 });
 
 describe('ссылки фильтра: второго адреса у страницы не появляется', () => {
-  const BASE = '/podborki/prazdniki/8-marta';
+  const BASE = '/otkrytki/prazdniki/8-marta';
 
   it('сброс фильтра ведёт на ЧИСТЫЙ путь, без пустого параметра', () => {
     expect(withViewParams(BASE, NO_VIEW_PARAMS)).toBe(BASE);

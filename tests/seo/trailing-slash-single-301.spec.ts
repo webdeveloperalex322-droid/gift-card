@@ -12,7 +12,8 @@
  *   3. переход ровно один — цель редиректа сама не отвечает 3xx.
  *
  * Про статус ЦЕЛИ: 200 здесь не проверяется и проверяться не может.
- * Контентных маршрутов ещё нет (`/otkrytki`, `/podborki` — задачи Э3-05…Э3-11,
+ * Контентные страницы зависят от опубликованных записей (`/otkrytki` и пути
+ * карточек/подборок под ним — задачи Э3-05…Э3-11,
  * массовое создание URL до готовности контента запрещено п. 23 ТЗ), поэтому по
  * каноническому адресу сервер честно отвечает 404. Проверяемое здесь требование
  * — отсутствие ВТОРОГО перехода; статус 200 на этих адресах проверит spec тех
@@ -41,18 +42,18 @@ const CASES: readonly SlashCase[] = [
     note: 'маршрут карточки',
   },
   {
-    requested: '/podborki/prazdniki/8-marta/',
-    expectedTarget: '/podborki/prazdniki/8-marta',
-    note: 'праздничная посадочная в контейнере /podborki',
+    requested: '/otkrytki/prazdniki/8-marta/',
+    expectedTarget: '/otkrytki/prazdniki/8-marta',
+    note: 'праздничная посадочная в контейнере /otkrytki',
   },
   {
-    requested: '/podborki/prazdniki/8-marta/mame/',
-    expectedTarget: '/podborki/prazdniki/8-marta/mame',
+    requested: '/otkrytki/prazdniki/8-marta/mame/',
+    expectedTarget: '/otkrytki/prazdniki/8-marta/mame',
     note: 'пара «праздник × адресат» (порядок сегментов «повод → уточнение»)',
   },
   {
-    requested: '/podborki/adresaty/mame/page/2/',
-    expectedTarget: '/podborki/adresaty/mame/page/2',
+    requested: '/otkrytki/adresaty/mame/page/2/',
+    expectedTarget: '/otkrytki/adresaty/mame/page/2',
     note: 'пагинация сегментом пути',
   },
   {

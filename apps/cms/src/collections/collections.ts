@@ -23,6 +23,7 @@ import {
 import { ROLES, type RoledUser } from '../access/roles';
 import type { Collection } from '../payload-types';
 import { publicRichTextEditor, publicRichTextHooks } from '../editor/public-rich-text';
+import { assignTrustedPilotImportKey } from '../import/pilot-import-identity';
 import { COLLECTION_PATH_PREFIX, contentDocumentPath } from '../seo/paths';
 import { isIndexableRobots, isRobotsDirective } from '../seo/robots';
 import {
@@ -42,6 +43,11 @@ import {
   resolveMinPublishedCards,
 } from './collection-volume';
 import { collectFieldNames, contentHooks, rethrow } from './content-hooks';
+import {
+  assignContentPathClaimKey,
+  contentPathClaimKeyField,
+  reserveContentDocumentPath,
+} from './content-path-claims';
 import {
   canonicalField,
   headingField,
@@ -64,11 +70,10 @@ import { DEFAULT_READINESS_LEAD_DAYS, readinessDeadline } from './seasonal';
  *
  * Форма путей задана решением человека от 2026-08-22 (Ч-04-9):
  *
- *   /podborki                        каталог подборок
- *   /podborki/prazdniki              группирующий узел
- *   /podborki/prazdniki/8-marta      праздничная посадочная
- *   /podborki/prazdniki/8-marta/mame пара «праздник × адресат»
- *   /podborki/adresaty/mame          адресат без праздника
+ *   /otkrytki/prazdniki              группирующий узел
+ *   /otkrytki/prazdniki/8-marta      праздничная посадочная
+ *   /otkrytki/prazdniki/8-marta/mame пара «праздник × адресат»
+ *   /otkrytki/adresaty/mame          адресат без праздника
  *
  * Три решения этой коллекции стоят дороже остальных и объясняются здесь, а не в
  * коммите:
@@ -83,7 +88,7 @@ import { DEFAULT_READINESS_LEAD_DAYS, readinessDeadline } from './seasonal';
  *      сохранении.
  *   2. **Порядок сегментов — правило, а не соглашение** (решение Ч-04-7).
  *      Матрица `ALLOWED_PARENT_KINDS` в `collection-path.ts` не содержит
- *      сочетания «повод под уточнением», поэтому `/podborki/adresaty/mame/8-marta`
+ *      сочетания «повод под уточнением», поэтому `/otkrytki/adresaty/mame/8-marta`
  *      не собирается ни в админке, ни через REST, ни через GraphQL.
  *   3. **Стили и настроения подборками не создаются** (решение Ч-04-3): в
  *      закрытом наборе видов узла для них нет вида, а URL появляется только у
@@ -257,7 +262,7 @@ const syncDescendantPaths: CollectionAfterChangeHook<Collection> = async ({
  *
  * Причина та же, по которой пути пересобираются при переносе: `path` хранится.
  * Удаление родителя оставило бы потомков с путями, ссылающимися на исчезнувший
- * узел (`/podborki/prazdniki/8-marta` без `prazdniki`), — то есть с URL, которых
+ * узел (`/otkrytki/prazdniki/8-marta` без `prazdniki`), — то есть с URL, которых
  * в иерархии больше нет. Такие записи попали бы в sitemap и canonical, а
  * заметить их можно было бы только по 404 в поиске.
  *
@@ -592,6 +597,14 @@ function relatedFilterOptions({ id }: FilterOptionsProps<Collection>): Where | b
  */
 const collectionFields: Field[] = [
   {
+    name: 'pilotImportKey',
+    type: 'text',
+    unique: true,
+    index: true,
+    access: { create: systemFieldAccess, update: systemFieldAccess },
+    admin: { hidden: true },
+  },
+  {
     name: 'title',
     type: 'text',
     required: true,
@@ -608,15 +621,15 @@ const collectionFields: Field[] = [
     // под праздником, и в ветке адресатов. Индекс стоит на поле `path`.
     unique: false,
     // Валидатор поля проверяет форму сегмента и путь ВЕРХНЕГО уровня
-    // (`/podborki/<slug>`) — это подсказка в форме, а решает всё равно хук,
+    // (`/otkrytki/<slug>`) — это подсказка в форме, а решает всё равно хук,
     // который знает родителя. Известное следствие: если PAYLOAD_ADMIN_PATH
-    // настроен ВНУТРЬ /podborki, валидатор отклонит совпадающий slug и на
+    // настроен ВНУТРЬ /otkrytki, валидатор отклонит совпадающий slug и на
     // вложенном узле, где путь фактически свободен. Отказ в пользу
     // осторожности выбран сознательно: путь админки занимать нельзя, а
     // конфигурация эта пограничная.
     description:
       'Один сегмент URL. Итоговый путь собирается из пути родителя и этого ' +
-      'сегмента, например /podborki/prazdniki/8-marta/mame. Slug праздника с ' +
+      'сегмента, например /otkrytki/prazdniki/8-marta/mame. Slug праздника с ' +
       'фиксированной датой — <число>-<месяц> (8-marta, 9-maya); без фиксированной ' +
       'даты — короткое название (paskha, novyy-god), решение Ч-04-4. Год в URL ' +
       'ежегодного праздника не добавляется. Неизменяем после первой публикации ' +
@@ -641,6 +654,7 @@ const collectionFields: Field[] = [
       readOnly: true,
     },
   },
+  contentPathClaimKeyField(),
   {
     name: 'nodeKind',
     type: 'select',
@@ -656,7 +670,7 @@ const collectionFields: Field[] = [
     },
     admin: {
       description:
-        'Определяет, куда узел можно вложить: группа — только в корень /podborki, ' +
+        'Определяет, куда узел можно вложить: группа — только в корень /otkrytki, ' +
         'повод — под группу, уточнение — под группу или под повод. Порядок только ' +
         '«повод → уточнение» (решение Ч-04-7): праздник под адресатом не создаётся ' +
         'никогда. Вида под стиль и настроение нет намеренно — по решению Ч-04-3 это ' +
@@ -676,10 +690,19 @@ const collectionFields: Field[] = [
     },
     admin: {
       description:
-        'Родительский узел. Пусто — узел верхнего уровня (прямо под /podborki). ' +
+        'Родительский узел. Пусто — узел верхнего уровня (прямо под /otkrytki). ' +
         'Смена родителя меняет URL этой подборки и всех вложенных, поэтому после ' +
         'первой публикации она возможна только вместе с одиночным 301 (задача Э1-09).',
       position: 'sidebar',
+    },
+  },
+  {
+    name: 'description',
+    type: 'textarea',
+    admin: {
+      description:
+        'Краткое видимое описание подборки. Это отдельный текст страницы, не meta ' +
+        'description и не развёрнутый вводный rich-text блок.',
     },
   },
   {
@@ -702,7 +725,7 @@ const collectionFields: Field[] = [
         'index,follow (п. 5.1). Набор возможностей редактора сужен до того, что ' +
         'печатает публичный шаблон: изображения, ссылки-записи, разделители и ' +
         'выравнивание недоступны намеренно — они исчезали бы на странице молча. ' +
-        'Ссылка внутрь сайта задаётся путём от корня, например /podborki/prazdniki/8-marta.',
+        'Ссылка внутрь сайта задаётся путём от корня, например /otkrytki/prazdniki/8-marta.',
     },
   },
   metaDescriptionField(),
@@ -827,7 +850,7 @@ export const Collections: CollectionConfig = {
   admin: {
     defaultColumns: ['title', 'path', 'nodeKind', 'status', 'robots', 'updatedContentAt'],
     description:
-      'Подборки и посадочные. URL собирается из цепочки родителей: /podborki/<группа>/' +
+      'Подборки и посадочные. URL собирается из цепочки родителей: /otkrytki/<группа>/' +
       '<повод>/<уточнение>. Порядок только «повод → уточнение». Новая запись — draft с ' +
       'noindex; публикует и открывает в индекс только человек.',
     useAsTitle: 'title',
@@ -845,14 +868,23 @@ export const Collections: CollectionConfig = {
     // свой одиночный 301 и свою запись в истории. Хуки общей фабрики идут после,
     // когда поддерево уже переехало.
     afterChange: [syncDescendantPaths, ...collectionContentHooks.afterChange],
-    beforeChange: [assignCollectionPath, ...collectionContentHooks.beforeChange],
+    beforeChange: [
+      assignCollectionPath,
+      reserveContentDocumentPath('collections'),
+      ...collectionContentHooks.beforeChange,
+    ],
     beforeDelete: [rejectDeleteWithChildren],
     beforeOperation: [...collectionContentHooks.beforeOperation],
     // Порог содержания идёт ПОСЛЕ общих правил статусной модели: сначала должно
     // отказать более грубое нарушение (публикует не admin, переход не из
     // review, полнота полей), и только потом тратится запрос к базе на подсчёт
     // открыток.
-    beforeValidate: [...collectionContentHooks.beforeValidate, assertPublishableVolume],
+    beforeValidate: [
+      assignTrustedPilotImportKey(),
+      assignContentPathClaimKey,
+      ...collectionContentHooks.beforeValidate,
+      assertPublishableVolume,
+    ],
   },
   fields: collectionFields,
 };

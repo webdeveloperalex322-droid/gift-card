@@ -220,9 +220,9 @@ describe('ссылки внутри вводного текста', () => {
   }
 
   it('путь от корня становится внутренней ссылкой', () => {
-    expect(firstRun(linkDoc({ linkType: 'custom', url: '/podborki/prazdniki/8-marta' }))).toEqual({
+    expect(firstRun(linkDoc({ linkType: 'custom', url: '/otkrytki/prazdniki/8-marta' }))).toEqual({
       external: false,
-      href: '/podborki/prazdniki/8-marta',
+      href: '/otkrytki/prazdniki/8-marta',
       text: 'ссылка',
     });
   });
@@ -263,7 +263,7 @@ describe('ссылки внутри вводного текста', () => {
       doc(
         paragraph({
           type: 'link',
-          fields: { linkType: 'custom', url: '/podborki/adresaty/mame' },
+          fields: { linkType: 'custom', url: '/otkrytki/adresaty/mame' },
           children: [text('маме', 1)],
           version: 1,
         }),
@@ -271,7 +271,7 @@ describe('ссылки внутри вводного текста', () => {
     );
     const run = blocks[0]?.kind === 'paragraph' ? blocks[0].runs[0] : undefined;
 
-    expect(run?.href).toBe('/podborki/adresaty/mame');
+    expect(run?.href).toBe('/otkrytki/adresaty/mame');
     expect(run?.tags).toEqual(['strong']);
   });
 
@@ -292,7 +292,7 @@ describe('ссылки внутри вводного текста', () => {
    */
   it('решение «ссылка или текст» приходит из предиката @otkritka/shared', () => {
     const corpus: readonly string[] = [
-      '/podborki/prazdniki/8-marta',
+      '/otkrytki/prazdniki/8-marta',
       '/otkrytki/otkrytka-mame-na-8-marta',
       '/',
       'https://example.test/a',
@@ -305,7 +305,7 @@ describe('ссылки внутри вводного текста', () => {
       'tel:+70000000000',
       'ftp://example.test/file',
       'otnositelnyy/put',
-      '  /podborki/adresaty/mame  ',
+      '  /otkrytki/adresaty/mame  ',
       '   ',
       '',
     ];
@@ -330,7 +330,7 @@ describe('ссылки внутри вводного текста', () => {
     const run = firstRun(
       linkDoc({
         linkType: 'internal',
-        url: '/podborki/prazdniki/8-marta',
+        url: '/otkrytki/prazdniki/8-marta',
         doc: { relationTo: 'collections', value: 7 },
       }),
     );

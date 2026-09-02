@@ -412,7 +412,6 @@ async function main(): Promise<void> {
       record(
         `${target}: навигация и подвал в ответе, ни одного href="#"`,
         anchors(html).includes('/otkrytki') &&
-          anchors(html).includes('/podborki') &&
           anchors(html).includes('/o-proekte') &&
           !html.includes('href="#"'),
       );
@@ -542,7 +541,6 @@ async function main(): Promise<void> {
       'страница 404: настоящая навигация — меню, подвал и каталоги',
       anchors(first).includes('/') &&
         anchors(first).includes('/otkrytki') &&
-        anchors(first).includes('/podborki') &&
         anchors(first).includes('/o-proekte'),
     );
     record('страница 404: ровно один <h1>', headings(first).length === 1);

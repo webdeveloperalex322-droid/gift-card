@@ -163,6 +163,7 @@ export async function createPublishedFixture(args: {
   const node = await payload.create({
     collection: 'collections',
     data: {
+      description: `Краткое видимое описание подборки Э6-02 ${run}`,
       intro: lexical(`Вводный текст подборки Э6-02 ${run}: своим текстом и без шаблона.`),
       metaDescription: `Э6-02: описание подборки ${run}`,
       nodeKind: 'occasion',
@@ -305,6 +306,7 @@ export async function createPublishedFixture(args: {
   const reviewNode = await payload.create({
     collection: 'collections',
     data: {
+      description: `Краткое видимое описание подборки на проверке Э6-02 ${run}`,
       intro: lexical(`Вводный текст подборки на проверке Э6-02 ${run}: свой, не шаблонный.`),
       metaDescription: `Э6-02: описание подборки на проверке ${run}`,
       nodeKind: 'group',

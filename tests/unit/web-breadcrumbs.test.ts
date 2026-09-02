@@ -35,10 +35,10 @@ import {
 /** Синтетический хост фикстуры. Дефолта у `SITE_URL` в коде нет и быть не может. */
 const ENV = { SITE_URL: 'https://kroshki.test' } as const;
 
-/** Крошки праздничной посадочной под группирующим узлом: /podborki/prazdniki/8-marta. */
+/** Крошки праздничной посадочной под группирующим узлом: /otkrytki/prazdniki/8-marta. */
 const HOLIDAY_TRAIL = {
-  ancestors: [{ label: 'Праздники', path: '/podborki/prazdniki' }],
-  current: { label: '8 марта', path: '/podborki/prazdniki/8-marta' },
+  ancestors: [{ label: 'Праздники', path: '/otkrytki/prazdniki' }],
+  current: { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' },
 } as const;
 
 describe('цепочка крошек', () => {
@@ -47,18 +47,18 @@ describe('цепочка крошек', () => {
 
     expect(trail.map((item) => [item.label, item.path, item.linked])).toEqual([
       ['Главная', '/', true],
-      ['Праздники', '/podborki/prazdniki', true],
-      ['8 марта', '/podborki/prazdniki/8-marta', false],
+      ['Праздники', '/otkrytki/prazdniki', true],
+      ['8 марта', '/otkrytki/prazdniki/8-marta', false],
     ]);
   });
 
   it('без ссылки ровно одно звено — последнее (ТЗ §7.6)', () => {
     const trail = buildBreadcrumbTrail({
       ancestors: [
-        { label: 'Праздники', path: '/podborki/prazdniki' },
-        { label: '8 марта', path: '/podborki/prazdniki/8-marta' },
+        { label: 'Праздники', path: '/otkrytki/prazdniki' },
+        { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' },
       ],
-      current: { label: 'Маме', path: '/podborki/prazdniki/8-marta/mame' },
+      current: { label: 'Маме', path: '/otkrytki/prazdniki/8-marta/mame' },
     });
 
     expect(trail.filter((item) => !item.linked).map((item) => item.position)).toEqual([
@@ -82,52 +82,52 @@ describe('цепочка крошек', () => {
   it('узел верхнего уровня даёт две крошки: главная и он сам', () => {
     const trail = buildBreadcrumbTrail({
       ancestors: [],
-      current: { label: 'Праздники', path: '/podborki/prazdniki' },
+      current: { label: 'Праздники', path: '/otkrytki/prazdniki' },
     });
 
-    expect(trail.map((item) => item.path)).toEqual(['/', '/podborki/prazdniki']);
+    expect(trail.map((item) => item.path)).toEqual(['/', '/otkrytki/prazdniki']);
   });
 
   it('цепочка карточки идёт по основной подборке, а не по контейнеру /otkrytki', () => {
     // ТЗ §5.4: «Хлебные крошки от главной по основной подборке». Пространства
-    // имён разведены (карточка — /otkrytki/<slug>, подборка — /podborki/...),
+    // имён разведены (карточка — /otkrytki/<slug>, подборка — /otkrytki/...),
     // поэтому предпоследнее звено НЕ является префиксом пути карточки: иерархия
     // крошек отражает достижимость страницы, а не вложенность URL.
     const trail = buildBreadcrumbTrail({
       ancestors: [
-        { label: 'Праздники', path: '/podborki/prazdniki' },
-        { label: '8 марта', path: '/podborki/prazdniki/8-marta' },
-        { label: 'Маме', path: '/podborki/prazdniki/8-marta/mame' },
+        { label: 'Праздники', path: '/otkrytki/prazdniki' },
+        { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' },
+        { label: 'Маме', path: '/otkrytki/prazdniki/8-marta/mame' },
       ],
       current: { label: 'Открытка маме на 8 марта с тюльпанами', path: '/otkrytki/mame-tyulpany' },
     });
 
     expect(trail.map((item) => item.path)).toEqual([
       '/',
-      '/podborki/prazdniki',
-      '/podborki/prazdniki/8-marta',
-      '/podborki/prazdniki/8-marta/mame',
+      '/otkrytki/prazdniki',
+      '/otkrytki/prazdniki/8-marta',
+      '/otkrytki/prazdniki/8-marta/mame',
       '/otkrytki/mame-tyulpany',
     ]);
   });
 
   it('приводит пути к канонической форме — без завершающего слеша (решение Ч-21)', () => {
     const trail = buildBreadcrumbTrail({
-      ancestors: [{ label: 'Праздники', path: '/podborki//prazdniki/' }],
-      current: { label: '8 марта', path: '/podborki/prazdniki/8-marta/' },
+      ancestors: [{ label: 'Праздники', path: '/otkrytki//prazdniki/' }],
+      current: { label: '8 марта', path: '/otkrytki/prazdniki/8-marta/' },
     });
 
     expect(trail.map((item) => item.path)).toEqual([
       '/',
-      '/podborki/prazdniki',
-      '/podborki/prazdniki/8-marta',
+      '/otkrytki/prazdniki',
+      '/otkrytki/prazdniki/8-marta',
     ]);
   });
 
   it('обрезает пробелы в тексте звена', () => {
     const trail = buildBreadcrumbTrail({
-      ancestors: [{ label: '  Праздники \n', path: '/podborki/prazdniki' }],
-      current: { label: ' 8 марта ', path: '/podborki/prazdniki/8-marta' },
+      ancestors: [{ label: '  Праздники \n', path: '/otkrytki/prazdniki' }],
+      current: { label: ' 8 марта ', path: '/otkrytki/prazdniki/8-marta' },
     });
 
     expect(trail.map((item) => item.label)).toEqual(['Главная', 'Праздники', '8 марта']);
@@ -142,14 +142,14 @@ describe('обрыв цепочки на недоступном звене', () 
 
   it('пропускает недоступное звено и НЕ подставляет вместо него выдуманное', () => {
     const trail = buildBreadcrumbTrail({
-      ancestors: [null, { label: '8 марта', path: '/podborki/prazdniki/8-marta' }],
-      current: { label: 'Маме', path: '/podborki/prazdniki/8-marta/mame' },
+      ancestors: [null, { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' }],
+      current: { label: 'Маме', path: '/otkrytki/prazdniki/8-marta/mame' },
     });
 
     expect(trail.map((item) => item.path)).toEqual([
       '/',
-      '/podborki/prazdniki/8-marta',
-      '/podborki/prazdniki/8-marta/mame',
+      '/otkrytki/prazdniki/8-marta',
+      '/otkrytki/prazdniki/8-marta/mame',
     ]);
   });
 
@@ -167,8 +167,8 @@ describe('обрыв цепочки на недоступном звене', () 
 
   it('позиции после обрыва остаются подряд — в разметке не появляется дыра', () => {
     const trail = buildBreadcrumbTrail({
-      ancestors: [null, { label: '8 марта', path: '/podborki/prazdniki/8-marta' }],
-      current: { label: 'Маме', path: '/podborki/prazdniki/8-marta/mame' },
+      ancestors: [null, { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' }],
+      current: { label: 'Маме', path: '/otkrytki/prazdniki/8-marta/mame' },
     });
 
     expect(trail.map((item) => item.position)).toEqual([1, 2, 3]);
@@ -185,8 +185,8 @@ describe('отказы сборки цепочки', () => {
   it('звено без текста отклоняется, а не выводится пустым', () => {
     expect(() =>
       buildBreadcrumbTrail({
-        ancestors: [{ label: '   ', path: '/podborki/prazdniki' }],
-        current: { label: '8 марта', path: '/podborki/prazdniki/8-marta' },
+        ancestors: [{ label: '   ', path: '/otkrytki/prazdniki' }],
+        current: { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' },
       }),
     ).toThrow(/текст/iu);
   });
@@ -194,8 +194,8 @@ describe('отказы сборки цепочки', () => {
   it('предок с путём текущей страницы отклоняется: это ссылка на саму себя', () => {
     expect(() =>
       buildBreadcrumbTrail({
-        ancestors: [{ label: '8 марта', path: '/podborki/prazdniki/8-marta/' }],
-        current: { label: '8 марта', path: '/podborki/prazdniki/8-marta' },
+        ancestors: [{ label: '8 марта', path: '/otkrytki/prazdniki/8-marta/' }],
+        current: { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' },
       }),
     ).toThrow(/повтор/iu);
   });
@@ -204,10 +204,10 @@ describe('отказы сборки цепочки', () => {
     expect(() =>
       buildBreadcrumbTrail({
         ancestors: [
-          { label: 'Праздники', path: '/podborki/prazdniki' },
-          { label: 'Праздники ещё раз', path: '/podborki/prazdniki' },
+          { label: 'Праздники', path: '/otkrytki/prazdniki' },
+          { label: 'Праздники ещё раз', path: '/otkrytki/prazdniki' },
         ],
-        current: { label: '8 марта', path: '/podborki/prazdniki/8-marta' },
+        current: { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' },
       }),
     ).toThrow(/повтор/iu);
   });
@@ -215,8 +215,8 @@ describe('отказы сборки цепочки', () => {
   it('абсолютный адрес вместо пути отклоняется: чужой хост в крошки не попадает', () => {
     expect(() =>
       buildBreadcrumbTrail({
-        ancestors: [{ label: 'Чужой сайт', path: 'https://chuzhoy.test/podborki' }],
-        current: { label: '8 марта', path: '/podborki/prazdniki/8-marta' },
+        ancestors: [{ label: 'Чужой сайт', path: 'https://chuzhoy.test/otkrytki' }],
+        current: { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' },
       }),
     ).toThrow();
   });
@@ -248,8 +248,8 @@ describe('разметка BreadcrumbList', () => {
 
     expect(jsonLd.itemListElement.map((item) => item.item)).toEqual([
       'https://kroshki.test/',
-      'https://kroshki.test/podborki/prazdniki',
-      'https://kroshki.test/podborki/prazdniki/8-marta',
+      'https://kroshki.test/otkrytki/prazdniki',
+      'https://kroshki.test/otkrytki/prazdniki/8-marta',
     ]);
   });
 
@@ -260,13 +260,13 @@ describe('разметка BreadcrumbList', () => {
     const trail = buildBreadcrumbTrail(HOLIDAY_TRAIL);
     const last = breadcrumbListJsonLd(trail, ENV).itemListElement.at(-1);
 
-    expect(last?.item).toBe('https://kroshki.test/podborki/prazdniki/8-marta');
+    expect(last?.item).toBe('https://kroshki.test/otkrytki/prazdniki/8-marta');
   });
 
   it('обрыв цепочки не оставляет в разметке ни дыры в позициях, ни пустого `item`', () => {
     const trail = buildBreadcrumbTrail({
-      ancestors: [null, { label: '8 марта', path: '/podborki/prazdniki/8-marta' }],
-      current: { label: 'Маме', path: '/podborki/prazdniki/8-marta/mame' },
+      ancestors: [null, { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' }],
+      current: { label: 'Маме', path: '/otkrytki/prazdniki/8-marta/mame' },
     });
     const jsonLd = breadcrumbListJsonLd(trail, ENV);
 
@@ -292,8 +292,8 @@ describe('встраивание JSON-LD в HTML', () => {
 
   it('не может закрыть тег script содержимым звена', () => {
     const trail = buildBreadcrumbTrail({
-      ancestors: [{ label: '</script><script>alert(1)</script>', path: '/podborki/prazdniki' }],
-      current: { label: '8 марта', path: '/podborki/prazdniki/8-marta' },
+      ancestors: [{ label: '</script><script>alert(1)</script>', path: '/otkrytki/prazdniki' }],
+      current: { label: '8 марта', path: '/otkrytki/prazdniki/8-marta' },
     });
 
     const text = jsonLdScriptText(breadcrumbListJsonLd(trail, ENV));

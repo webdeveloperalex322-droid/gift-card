@@ -164,8 +164,8 @@ describe('право страницы попасть в sitemap (читает Э
 
   it('индексируемая страница с self-canonical входит', () => {
     const decision = sitemapEligibility({
-      canonicalPath: '/podborki/prazdniki/8-marta',
-      pagePath: '/podborki/prazdniki/8-marta',
+      canonicalPath: '/otkrytki/prazdniki/8-marta',
+      pagePath: '/otkrytki/prazdniki/8-marta',
       robots: INDEXABLE,
     });
 
@@ -186,8 +186,8 @@ describe('право страницы попасть в sitemap (читает Э
 
   it('переопределённый canonical исключает страницу: в sitemap идут только канонические URL', () => {
     const decision = sitemapEligibility({
-      canonicalPath: '/podborki/prazdniki/8-marta',
-      pagePath: '/podborki/prazdniki/8-marta-tyulpany',
+      canonicalPath: '/otkrytki/prazdniki/8-marta',
+      pagePath: '/otkrytki/prazdniki/8-marta-tyulpany',
       robots: INDEXABLE,
     });
 

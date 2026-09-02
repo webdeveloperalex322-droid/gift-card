@@ -1,0 +1,112 @@
+---
+import type { AdRows } from '../seo/ad-slots';
+import type { BreadcrumbTrail } from '../seo/breadcrumbs';
+import type { CollectionPageContent } from '../data';
+import { jsonLdScriptText } from '../seo/json-ld';
+import { richTextBlocks } from '../seo/rich-text';
+import { viewParamsQuery } from '../routing/view-params';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import AdRow from './AdRow.astro';
+import Breadcrumbs from './Breadcrumbs.astro';
+import CardGrid from './CardGrid.astro';
+import FilterRow from './FilterRow.astro';
+import Pagination from './Pagination.astro';
+import RichText from './RichText.astro';
+
+interface Props {
+  ads: AdRows;
+  content: CollectionPageContent;
+  trail: BreadcrumbTrail;
+}
+
+const { ads, content, trail } = Astro.props;
+const intro = richTextBlocks(content.intro);
+const jsonLd = content.jsonLd === null ? null : jsonLdScriptText(content.jsonLd);
+const filterQuery = viewParamsQuery(content.filter);
+const updatedAt = content.updatedContentAt === null ? null : new Date(content.updatedContentAt);
+const updatedLabel =
+  updatedAt === null || Number.isNaN(updatedAt.getTime())
+    ? null
+    : updatedAt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+---
+
+<BaseLayout
+  title={content.title}
+  description={content.metaDescription}
+  canonicalPath={content.canonicalPath}
+  robots={content.robots}
+>
+  <Breadcrumbs trail={trail} />
+  <h1>{content.heading}</h1>
+
+  {content.description === null ? null : <p class="collection__description">{content.description}</p>}
+  {intro.length === 0 ? null : <RichText blocks={intro} />}
+  {content.tilesOnPage === 0 ? null : <FilterRow options={content.filterOptions} />}
+  <AdRow slots={ads.underH1} position="under-h1" />
+
+  {content.filter.format === null || content.tilesOnPage === 0 ? null : (
+    <p class="collection__filtered">Показано открыток: {content.tiles.length} из {content.tilesOnPage} на этой странице.</p>
+  )}
+  {content.tiles.length === 0 ? null : (
+    <CardGrid tiles={content.tiles} prioritizeFirst ariaLabel="Открытки подборки" />
+  )}
+  {content.tilesOnPage > 0 && content.tiles.length === 0 ? (
+    <p class="collection__filtered">На этой странице нет открыток выбранного формата. Снимите фильтр или загляните на соседнюю страницу списка.</p>
+  ) : null}
+  {content.pagination === null ? null : (
+    <Pagination model={content.pagination} ariaLabel="Страницы подборки" query={filterQuery} />
+  )}
+
+  <AdRow slots={ads.afterPagination} position="after-pagination" />
+
+  {content.children.length === 0 ? null : (
+    <section class="page-section">
+      <h2>Разделы подборки</h2>
+      <ul class="link-row">{content.children.map((child) => <li><a href={child.path}>{child.name}</a></li>)}</ul>
+    </section>
+  )}
+  {content.parent === null && content.related.length === 0 ? null : (
+    <nav class="page-section" aria-label="Смежные подборки">
+      <h2>Смотрите также</h2>
+      <ul class="link-row">
+        {content.parent === null ? null : <li><a href={content.parent.path}>{content.parent.name}</a></li>}
+        {content.related.map((link) => <li><a href={link.path}>{link.name}</a></li>)}
+      </ul>
+    </nav>
+  )}
+  {content.updatedContentAt === null || updatedLabel === null ? null : (
+    <p class="collection__updated">Подборка обновлена{' '}<time datetime={content.updatedContentAt}>{updatedLabel}</time></p>
+  )}
+  {jsonLd === null ? null : <script type="application/ld+json" is:inline set:html={jsonLd} />}
+</BaseLayout>
+
+<style>
+  .collection__description {
+    max-width: 45rem;
+    color: var(--ink-soft);
+  }
+
+  .collection__filtered {
+    margin-block: 1rem 0;
+    font-size: 0.9375rem;
+    color: var(--ink-soft);
+  }
+
+  .collection__updated {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    margin-block-start: 2rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+    color: var(--ink-faint);
+  }
+
+  .collection__updated::before {
+    content: '';
+    flex: 0 0 1.5rem;
+    height: 1px;
+    background: var(--rule);
+  }
+</style>

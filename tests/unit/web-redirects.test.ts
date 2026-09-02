@@ -90,7 +90,7 @@ describe('перенос со структуры прежнего сайта', (
     ['/index.php', '/'],
     ['/staraya.html', '/otkrytki/novaya'],
     ['/katalog/otkrytka.htm', '/otkrytki/novaya'],
-    ['/2019/08/pozdravlenie.aspx', '/podborki/prazdniki/8-marta'],
+    ['/2019/08/pozdravlenie.aspx', '/otkrytki/prazdniki/8-marta'],
   ];
 
   for (const [from, to] of legacy) {
@@ -180,12 +180,12 @@ describe('удаление', () => {
 
   it('удалено с заменой — 301 на релевантный адрес, а не на главную', async () => {
     const decision = await decide('/otkrytki/udalennaya', [
-      moved('/otkrytki/udalennaya', '/podborki/prazdniki/8-marta'),
+      moved('/otkrytki/udalennaya', '/otkrytki/prazdniki/8-marta'),
     ]);
 
     expect(decision).toMatchObject({
       action: 'redirect',
-      location: '/podborki/prazdniki/8-marta',
+      location: '/otkrytki/prazdniki/8-marta',
     });
   });
 });
@@ -294,7 +294,7 @@ describe('чего таблица редиректов не касается', (
     // могут (реестр зарезервированных маршрутов), поэтому правило означает
     // ошибку администратора — её видно в логе, а сайт продолжает работать.
     for (const path of ['/', '/search', '/o-proekte', '/otkrytki']) {
-      const decision = await decide(path, [moved(path, '/podborki')]);
+      const decision = await decide(path, [moved(path, '/otkrytki/prazdniki')]);
 
       expect(decision.action, path).toBe('ignored');
     }
@@ -306,7 +306,7 @@ describe('чего таблица редиректов не касается', (
     // запрос дальше — с живой служебной страницы, без предупреждения.
     const decision = await decide('/otkrytki/staraya', [
       moved('/otkrytki/staraya', '/search'),
-      moved('/search', '/podborki'),
+      moved('/search', '/otkrytki/prazdniki'),
     ]);
 
     expect(decision).toMatchObject({
@@ -320,7 +320,7 @@ describe('чего таблица редиректов не касается', (
   it('перенос на каталог остаётся законным: цель — живой адрес, а не запрет', async () => {
     // Обратная половина того же правила: `/otkrytki` и `/` тоже зарезервированы,
     // и 301 НА них — обычный перенос, ради которого таблица и существует.
-    for (const target of ['/', '/otkrytki', '/podborki']) {
+    for (const target of ['/', '/otkrytki', '/otkrytki/prazdniki']) {
       const decision = await decide('/staraya.html', [moved('/staraya.html', target)]);
 
       expect(decision, target).toMatchObject({ action: 'redirect', location: target });

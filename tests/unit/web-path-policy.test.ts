@@ -64,14 +64,14 @@ describe('правило завершающего слеша: маршруты �
   });
 
   it('пагинация подборки со слешем — одиночный 301', () => {
-    const decision = decide('/podborki/prazdniki/8-marta/page/2/');
+    const decision = decide('/otkrytki/prazdniki/8-marta/page/2/');
 
-    expect(redirectLocation(decision)).toBe('/podborki/prazdniki/8-marta/page/2');
-    expect(decide('/podborki/prazdniki/8-marta/page/2').action).toBe('serve');
+    expect(redirectLocation(decision)).toBe('/otkrytki/prazdniki/8-marta/page/2');
+    expect(decide('/otkrytki/prazdniki/8-marta/page/2').action).toBe('serve');
   });
 
   it('статус редиректа ровно 301 — ни 302, ни 308', () => {
-    const decision = decide('/podborki/adresaty/mame/');
+    const decision = decide('/otkrytki/adresaty/mame/');
 
     if (decision.action !== 'redirect') {
       throw new Error('ожидался редирект');
@@ -86,10 +86,10 @@ describe('правило завершающего слеша: маршруты �
   it('канонический путь любой глубины редиректа не даёт', () => {
     for (const path of [
       '/otkrytki',
-      '/podborki',
-      '/podborki/prazdniki/8-marta',
-      '/podborki/prazdniki/8-marta/mame',
-      '/podborki/prazdniki/8-marta/mame/page/3',
+      '/otkrytki/adresaty',
+      '/otkrytki/prazdniki/8-marta',
+      '/otkrytki/prazdniki/8-marta/mame',
+      '/otkrytki/prazdniki/8-marta/mame/page/3',
     ]) {
       expect(decide(path), path).toEqual({ action: 'serve', pathname: path, search: '' });
     }
@@ -130,9 +130,9 @@ describe('повторные и ведущие слеши', () => {
 
   it('пустой сегмент внутри пути — 404 и без завершающего слеша, и с ним', () => {
     // Порядок шагов: проверка пустого сегмента ДО снятия хвостового слеша.
-    // Иначе «/podborki//prazdniki/» получал бы 301 на адрес, который сам же
+    // Иначе «/otkrytki//prazdniki/» получал бы 301 на адрес, который сам же
     // отвечает 404 — переход в никуда.
-    for (const target of ['/otkrytki//8-marta', '/podborki//prazdniki/', '/podborki//prazdniki']) {
+    for (const target of ['/otkrytki//8-marta', '/otkrytki//prazdniki/', '/otkrytki///prazdniki']) {
       const decision = decide(target);
       expect(decision.action, target).toBe('not-found');
     }
@@ -217,7 +217,7 @@ describe('у страницы нет второго адреса с расшир
   });
 
   it('файл заранее отрендеренной страницы адресом не является', () => {
-    for (const target of ['/o-proekte.html', '/OTKRYTKI.HTML', '/podborki/prazdniki/8-marta.html']) {
+    for (const target of ['/o-proekte.html', '/OTKRYTKI.HTML', '/otkrytki/prazdniki/8-marta.html']) {
       expect(decide(target).action, target).toBe('not-found-unless-moved');
     }
   });
@@ -249,7 +249,7 @@ describe('у страницы нет второго адреса с расшир
       '/index.html',
       '/staraya.html?utm_source=mail',
       '/OTKRYTKI.HTML',
-      '/podborki/prazdniki/8-marta.html?ot=vk',
+      '/otkrytki/prazdniki/8-marta.html?ot=vk',
     ]) {
       const decision = decide(target);
       expect(decision.action, target).toBe('not-found-unless-moved');
@@ -276,7 +276,7 @@ describe('у страницы нет второго адреса с расшир
       '/404.html/',
       '/o-proekte.html//',
       '/a.HTML/',
-      '/podborki//8-marta.html',
+      '/otkrytki//8-marta.html',
     ]) {
       expect(decide(target).action, target).toBe('not-found');
     }
@@ -327,7 +327,7 @@ describe('у страницы 404 нет собственного адреса',
     // касается.
     expect(decide('/404/istoriya').action).toBe('serve');
     expect(decide('/4040').action).toBe('serve');
-    expect(decide('/podborki/404').action).toBe('serve');
+    expect(decide('/otkrytki/404').action).toBe('serve');
   });
 
   it('файл 404.html как адрес по-прежнему отклонён — правило не подменило прежнее', () => {
@@ -383,9 +383,9 @@ describe('инвариант: цель редиректа никогда не р
     '/otkrytki////',
     '/otkrytki//8-marta',
     '/otkrytki//8-marta/',
-    '/podborki/prazdniki/8-marta/',
-    '/podborki/prazdniki/8-marta/mame/page/2/',
-    '/podborki//prazdniki///8-marta/',
+    '/otkrytki/prazdniki/8-marta/',
+    '/otkrytki/prazdniki/8-marta/mame/page/2/',
+    '/otkrytki//prazdniki///8-marta/',
     '//evil.example/otkrytki/',
     '/robots.txt',
     '/robots.txt/',
@@ -487,8 +487,8 @@ describe('отображение канонического пути в файл
   it('корень отдаётся index.html, страница — <путь>.html (build.format: file)', () => {
     expect(clientFileForPath('/')).toBe('index.html');
     expect(clientFileForPath('/o-proekte')).toBe('o-proekte.html');
-    expect(clientFileForPath('/podborki/prazdniki/8-marta')).toBe(
-      'podborki/prazdniki/8-marta.html',
+    expect(clientFileForPath('/otkrytki/prazdniki/8-marta')).toBe(
+      'otkrytki/prazdniki/8-marta.html',
     );
   });
 

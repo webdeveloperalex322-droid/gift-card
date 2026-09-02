@@ -14,14 +14,14 @@ Payload 3.88.0 на PostgreSQL, админка и API живут внутри Ne
 
 ```bash
 pnpm --filter @otkritka/cms run ensure-db            # создать базу из DATABASE_URL, если её нет
-pnpm dev                                             # из корня: поднимает CMS на http://localhost:3010
+pnpm dev                                             # из корня: поднимает CMS на http://localhost:3011
 pnpm generate:types                                  # из корня: src/payload-types.ts из коллекций
 pnpm --filter @otkritka/cms run generate:importmap    # после добавления кастомных компонентов админки
 pnpm --filter @otkritka/cms run build                 # production-сборка Next
 pnpm --filter @otkritka/cms run check                 # tsc --noEmit (входит в корневой pnpm check)
 ```
 
-Порт 3010, а не 3000: на машине разработки 3000 уже занят другим процессом.
+Порт 3011 закреплён за CMS; на машине разработки 3000 уже занят другим процессом.
 
 ## Структура
 
@@ -70,7 +70,7 @@ apps/cms/
     │   ├── card-image-hooks.ts         # хуки карточки: зеркало полей, права, дубли
     │   └── png-fixture.ts              # синтетический PNG для тестов и смоука (без sharp)
     ├── seo/
-    │   ├── paths.ts                    # пути записей: /otkrytki/<slug>, /podborki/…
+    │   ├── paths.ts                    # пути записей: карточки и подборки под /otkrytki
     │   └── robots.ts                   # закрытый набор robots-директив
     └── app/(payload)/                  # маршруты Next: админка, REST, GraphQL
 ```
