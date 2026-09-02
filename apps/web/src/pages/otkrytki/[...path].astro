@@ -20,6 +20,7 @@ import {
   readSiteSettings,
   relationId,
   relationIds,
+  siteCategoryNav,
 } from '../../data';
 import { parseViewParams } from '../../routing/view-params';
 import { adRows } from '../../seo/ad-slots';
@@ -40,15 +41,20 @@ let page;
 if (resolved.kind === 'card') {
   const env = serverEnv();
   const collectionIds = relationIds(resolved.card.collections);
-  const [settings, collections, similar, trail] = await Promise.all([
+  // Мемоизатор общий с рельсом категорий: подборки карточки и узлы таксономии
+  // пересекаются, и без общей памяти предикат «непуст» считался бы для одного и
+  // того же узла дважды за один ответ (то же соображение, что в ветке подборки).
+  const memo = newNodeContentMemo();
+  const [settings, collections, similar, trail, categorySections] = await Promise.all([
     readSiteSettings(),
-    listCollectionsByIds(collectionIds),
+    listCollectionsByIds(collectionIds, memo),
     listSimilarCards({
       collectionIds,
       excludeCardId: resolved.card.id,
       publishedAt: resolved.card.publishedAt ?? null,
     }),
     cardBreadcrumbTrail(resolved.card),
+    siteCategoryNav(memo),
   ]);
   const content = cardPageContent({ card: resolved.card, collections, env, settings, similar });
   if (content === null) {
@@ -56,6 +62,7 @@ if (resolved.kind === 'card') {
   }
   page = {
     card: resolved.card,
+    categorySections,
     content,
     kind: 'card' as const,
     trail,
@@ -93,12 +100,14 @@ if (resolved.kind === 'card') {
       status: 301,
     });
   }
-  const [settings, trail] = await Promise.all([
+  const [settings, trail, categorySections] = await Promise.all([
     readSiteSettings(),
     collectionBreadcrumbTrail(resolved.node, collectionPage),
+    siteCategoryNav(memo),
   ]);
   page = {
     ads: adRows(settings.adSlots),
+    categorySections,
     content,
     kind: 'collection' as const,
     trail,
@@ -107,5 +116,19 @@ if (resolved.kind === 'card') {
 ---
 
 {page.kind === 'card'
-  ? <CardDetailPage card={page.card} content={page.content} trail={page.trail} />
-  : <CollectionDetailPage ads={page.ads} content={page.content} trail={page.trail} />}
+  ? (
+      <CardDetailPage
+        card={page.card}
+        categorySections={page.categorySections}
+        content={page.content}
+        trail={page.trail}
+      />
+    )
+  : (
+      <CollectionDetailPage
+        ads={page.ads}
+        categorySections={page.categorySections}
+        content={page.content}
+        trail={page.trail}
+      />
+    )}

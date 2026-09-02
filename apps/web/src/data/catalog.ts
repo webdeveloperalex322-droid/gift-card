@@ -56,20 +56,9 @@ import {
   catalogPageView,
 } from '../seo/catalog-pages.js';
 import { type CollectionPageJsonLd, collectionPageJsonLd } from '../seo/collection-page.js';
-import {
-  listCatalogCards,
-  listChildCollections,
-  listRootCollections,
-  newNodeContentMemo,
-  readSiteSettings,
-} from './content.js';
-import {
-  type CardTile,
-  cardTiles,
-  type CatalogSection,
-  catalogSectionItems,
-  catalogSections,
-} from './page-data.js';
+import { listCatalogCards, newNodeContentMemo, readSiteSettings } from './content.js';
+import { type CardTile, cardTiles, type CatalogSection, catalogSectionItems } from './page-data.js';
+import { siteCategoryNav } from './site-nav.js';
 
 /** Что маршрут каталога обязан ответить. */
 export type CatalogPageResult<TBody> =
@@ -93,6 +82,14 @@ export interface CardCatalogBody extends CatalogPageHead {
   readonly pagination: PaginationModel | null;
   /** Корневые группы и их прямые дети; только на первой странице каталога. */
   readonly sections: readonly CatalogSection[];
+  /**
+   * То же дерево, БЕЗ ограничения первой страницей — для бокового меню категорий
+   * (`../components/SiteSidebar.astro`), которое обязано быть одинаковым на
+   * каждой странице списка, включая страницы пагинации. Ограничение `sections`
+   * первой страницей — свойство ItemList и внутристраничного блока (см. довод
+   * ниже, в `cardCatalogPage`), а не свойство меню.
+   */
+  readonly categorySections: readonly CatalogSection[];
   /**
    * Рекламные ряды из настроек сайта (задача Э3-12, решение Ч-11): под H1 над
    * сеткой и после пагинации. Пустые ряды означают, что мест не настроено, — и
@@ -122,17 +119,16 @@ export async function cardCatalogPage(
   const requested = decision.action === 'redirect-to-base' ? 1 : decision.page;
   const cardsPage = await listCatalogCards({ page: requested });
   const memo = newNodeContentMemo();
-  const sections =
-    requested === 1
-      ? catalogSections(
-          await Promise.all(
-            (await listRootCollections(memo)).map(async (node) => ({
-              children: await listChildCollections(node.id, memo),
-              node,
-            })),
-          ),
-        )
-      : [];
+  // Дерево читается на КАЖДОЙ странице, включая пагинацию, — этого требует
+  // боковое меню категорий (`categorySections`). Раньше запрос пропускался на
+  // страницах 2+, потому что был нужен только `sections`; теперь пропускать
+  // нельзя, а `sections` по-прежнему пуст на страницах 2+ — см. довод ниже.
+  const categorySections = await siteCategoryNav(memo);
+  // В ItemList и во внутристраничном блоке узлы попадают ТОЛЬКО на первой
+  // странице: на страницах 2+ они повторили бы ту же схему и тот же блок дословно
+  // по другому адресу. Боковому меню это ограничение не нужно — оно печатается на
+  // каждой странице списка (см. `categorySections` выше).
+  const sections = requested === 1 ? categorySections : [];
   const tiles = cardTiles(cardsPage.cards);
   const items = [...catalogSectionItems(sections), ...tiles];
   // Пустая страница — 404 по ЧИСЛУ ВЫДАННЫХ СТРОК, а не только по числу страниц.
@@ -158,6 +154,7 @@ export async function cardCatalogPage(
   const settings = await readSiteSettings();
   return {
     ads: adRows(settings.adSlots),
+    categorySections,
     jsonLd: collectionPageJsonLd(
       {
         canonicalPath: view.canonicalPath,

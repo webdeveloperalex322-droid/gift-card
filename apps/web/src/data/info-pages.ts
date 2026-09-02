@@ -24,6 +24,8 @@ import type { SiteSetting } from '@otkritka/cms/types';
 import type { InfoPageFacts, InfoPageKey } from '@otkritka/shared';
 
 import { readSiteSettings } from './content.js';
+import type { CatalogSection } from './page-data.js';
+import { siteCategoryNav } from './site-nav.js';
 import { type InfoPageView, infoPageView } from '../seo/info-pages.js';
 
 /**
@@ -49,7 +51,13 @@ export function infoPageFacts(settings: SiteSetting, key: InfoPageKey): InfoPage
  * страница отвечает 200 с заглушкой и `noindex` — обоснование в шапке
  * `../seo/info-pages.ts`.
  */
-export async function infoPage(key: InfoPageKey): Promise<InfoPageView> {
-  const settings = await readSiteSettings();
-  return infoPageView(key, infoPageFacts(settings, key));
+export interface InfoPageContent {
+  readonly view: InfoPageView;
+  /** Категории бокового меню (`../components/SiteSidebar.astro`) — см. `./site-nav.ts`. */
+  readonly categorySections: readonly CatalogSection[];
+}
+
+export async function infoPage(key: InfoPageKey): Promise<InfoPageContent> {
+  const [settings, categorySections] = await Promise.all([readSiteSettings(), siteCategoryNav()]);
+  return { categorySections, view: infoPageView(key, infoPageFacts(settings, key)) };
 }

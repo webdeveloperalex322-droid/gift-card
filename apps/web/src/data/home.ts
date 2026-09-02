@@ -38,20 +38,14 @@ import {
 import type { ListItemFacts } from '../seo/collection-page.js';
 import type { PageRobots } from '../seo/robots-directive.js';
 import {
-  listChildCollections,
   listRecentCards,
   listRootCollections,
   listSeasonalCollections,
   newNodeContentMemo,
   readSiteSettings,
 } from './content.js';
-import {
-  type CardTile,
-  cardTiles,
-  type CatalogSection,
-  catalogSections,
-  seasonalLinks,
-} from './page-data.js';
+import { type CardTile, cardTiles, type CatalogSection, seasonalLinks } from './page-data.js';
+import { catalogSectionsFrom } from './site-nav.js';
 
 /**
  * Сколько свежих открыток показывает главная.
@@ -95,6 +89,13 @@ export interface HomePageContent {
   readonly seasonal: readonly ListItemFacts[];
   /** Разделы верхнего уровня и их дети — прямые ссылки на праздничные узлы. */
   readonly sections: readonly CatalogSection[];
+  /**
+   * То же дерево, но БЕЗ обрезки `HOME_SECTION_CHILDREN` — для бокового меню
+   * категорий (`../components/SiteSidebar.astro`), которое обязано быть
+   * одинаковым на каждой странице, а не обрезанным под блок этой конкретной
+   * страницы (тот же довод, что у `SITE_NAV`).
+   */
+  readonly categorySections: readonly CatalogSection[];
   /** Свежие открытки плитками. Пустой массив — блока нет. */
   readonly recent: readonly CardTile[];
   readonly jsonLd: HomePageJsonLd;
@@ -119,17 +120,21 @@ export async function homePage(today: Date, env?: SharedEnv): Promise<HomePageCo
     readSiteSettings(),
   ]);
 
-  const sections = catalogSections(
-    await Promise.all(
-      roots.map(async (node) => ({
-        // Обрезка ПОКАЗА, а не выборки: см. HOME_SECTION_CHILDREN.
-        children: (await listChildCollections(node.id, memo)).slice(0, HOME_SECTION_CHILDREN),
-        node,
-      })),
-    ),
-  );
+  // Полное дерево, БЕЗ обрезки: боковому меню (`categorySections`) нужен список
+  // целиком, а блоку этой страницы — только первые `HOME_SECTION_CHILDREN`.
+  // `roots` уже прочитаны выше (общий `Promise.all`), поэтому здесь зовём
+  // `catalogSectionsFrom` с готовым списком, а не `siteCategoryNav` — та читала
+  // бы корни ВТОРОЙ раз. Обрезка ниже — срез уже прочитанного массива, а не
+  // второй запрос детей.
+  const categorySections = await catalogSectionsFrom(roots, memo);
+  // Обрезка ПОКАЗА, а не выборки: см. HOME_SECTION_CHILDREN.
+  const sections = categorySections.map((section) => ({
+    ...section,
+    children: section.children.slice(0, HOME_SECTION_CHILDREN),
+  }));
 
   return {
+    categorySections,
     jsonLd: homePageJsonLd(
       {
         // Передаются СЫРЫЕ данные глобала: из одного поля выводятся два разных

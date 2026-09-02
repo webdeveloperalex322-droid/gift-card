@@ -1,7 +1,7 @@
 ---
 import type { Card } from '@otkritka/cms/types';
 
-import type { CardPageContent } from '../data';
+import type { CardPageContent, CatalogSection } from '../data';
 import type { BreadcrumbTrail } from '../seo/breadcrumbs';
 import { canonicalUrlFor } from '../routing/canonical';
 import { jsonLdScriptText } from '../seo/json-ld';
@@ -14,11 +14,13 @@ import CardImage from './CardImage.astro';
 
 interface Props {
   card: Card;
+  /** Категории бокового меню (`./SiteSidebar.astro`) — см. `../data/site-nav.ts`. */
+  categorySections: readonly CatalogSection[];
   content: CardPageContent;
   trail: BreadcrumbTrail;
 }
 
-const { card, content, trail } = Astro.props;
+const { card, categorySections, content, trail } = Astro.props;
 const shares = shareTargets({
   title: content.heading,
   url: canonicalUrlFor(content.canonicalPath, serverEnv()),
@@ -31,6 +33,7 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
   description={content.metaDescription}
   canonicalPath={content.canonicalPath}
   robots={content.robots}
+  categorySections={categorySections}
 >
   <Breadcrumbs trail={trail} />
   <h1>{content.heading}</h1>

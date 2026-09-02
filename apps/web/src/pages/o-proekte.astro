@@ -21,7 +21,7 @@ import { infoPage } from '../data';
 
 export const prerender = false;
 
-const view = await infoPage('about');
+const { categorySections, view } = await infoPage('about');
 ---
 
-<InfoPageView view={view} />
+<InfoPageView categorySections={categorySections} view={view} />

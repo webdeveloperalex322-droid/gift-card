@@ -196,3 +196,9 @@ export {
 } from './queries.js';
 
 export { payloadClient } from './payload-client.js';
+
+/**
+ * Категории бокового меню (задача про левое меню категорий). Обоснование состава
+ * и отбора — шапка `./site-nav.ts`.
+ */
+export { catalogSectionsFrom, siteCategoryNav } from './site-nav.js';

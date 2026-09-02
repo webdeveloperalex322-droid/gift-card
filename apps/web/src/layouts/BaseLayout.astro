@@ -108,6 +108,47 @@
  * имени файла, то есть шага сборки, а это задача Э7-04 («длительное кеширование
  * статики с контент-хешами»), а не оформления.
  *
+ * ### Боковое меню категорий: два условия и один порог
+ *
+ * Рельс категорий (`../components/SiteSidebar.astro`) печатается на каждой
+ * странице, кроме 404, и занимает вторую колонку сетки `.layout__body`. Проза
+ * про него живёт ЗДЕСЬ, а не в блоке стилей, по правилу двух абзацев ниже:
+ * комментарий внутри `is:inline` — это байты в каждом ответе.
+ *
+ * **Двухколоночной сетка становится при ДВУХ условиях сразу**, и оба обязательны:
+ *
+ *   - у страницы есть рельс — атрибут `data-sidebar` на теге body. Проп
+ *     `categorySections` бывает пустым (таксономия не опубликована) и `null`
+ *     (страница 404, у неё нет доступа к БД на сборке), и тогда рельса в разметке
+ *     нет вовсе. Без этого условия сетка с ЕДИНСТВЕННЫМ потомком отдавала бы его
+ *     в ПЕРВУЮ колонку шириной `--sidebar-width`: авто-размещение grid не
+ *     растягивает одинокого потомка на все колонки само. Замерено на собранном
+ *     сервере до правки: колонка контента 224 px вместо 928 на всех страницах
+ *     сайта, включая 404 (находка контролёров `reviewer` и `perf-guard`);
+ *   - экран шире порога — `@media (min-width: 66rem)`.
+ *
+ * **Порог 66rem — расчёт, а не круглое «настольный экран».** Он привязан к
+ * контракту `sizes` роли `grid-tile` (`../images/card-image.ts`,
+ * IMAGE_LAYOUT_SIZES): там ширина плитки заявлена как `(60rem - 4rem) / 3`, то
+ * есть исходя из ТРЁХ колонок сетки превью. Три колонки держатся, пока колонка
+ * контента ≥ 3×15rem + 2×1rem = 47rem; ниже `auto-fill` роняет их до двух, и
+ * плитка РАСТЁТ (меньше колонок — на каждую больше места). Факт, превысивший
+ * заявленное, — это опасное направление несовпадения: браузер берёт кандидата
+ * МЕЛЬЧЕ нужного, то есть мыло. Колонка контента = ширина `.layout__body` минус
+ * отбивка (2rem), минус рельс (`--sidebar-width`, 14rem), минус зазор (2rem),
+ * поэтому 47rem достигается ровно на 65rem вьюпорта. Порог взят 66rem — 65rem
+ * плюс рем запаса: на самой границе три колонки получаются ровно по 15rem, без
+ * слака, и доля пикселя от округления раскладки пересчитала бы их в две уже при
+ * показанном рельсе. Замерено после правки (синтетическая страница на живом
+ * критическом CSS): 1024–1055 px — рельса нет, плитка 298,7 px при заявленных
+ * 298,7; 1056 px — рельс есть, три колонки, плитка 245,3; 1280 px — 298,7.
+ * Набор `sizes` этой задачей НЕ правился именно потому, что порог выбран так,
+ * чтобы правка не потребовалась.
+ *
+ * Раскрытие на узком экране — нативный чекбокс и `label`, без клиентского JS;
+ * механика и её отношение к запрету «раскрывающихся панелей на JS» — в шапке
+ * `../components/SiteSidebar.astro`.
+ *
  * ### Знак в шапке
  *
  * Рисунок живёт в `../components/StampMark.astro` — он выводится и здесь, и
@@ -168,8 +209,10 @@
  * комментарий уехал бы в каждый ответ сервера.
  */
 import SiteFooter from '../components/SiteFooter.astro';
+import SiteSidebar from '../components/SiteSidebar.astro';
 import StampMark from '../components/StampMark.astro';
 import SiteNav from '../components/SiteNav.astro';
+import type { CatalogSection } from '../data';
 import { canonicalUrlFor } from '../routing/canonical';
 import type { PageRobots } from '../seo/robots-directive';
 import { serverEnv } from '../server-env';
@@ -235,9 +278,32 @@ interface Props {
    * страницы именно по этому значению.
    */
   robots: PageRobots;
+  /**
+   * Категории бокового меню (`../components/SiteSidebar.astro`) — корневые узлы
+   * таксономии и их прямые дети. Обоснование состава и отбора — шапка
+   * `../data/site-nav.ts`.
+   *
+   * `null` допустим РОВНО там же, где `canonicalPath: null`, — на странице 404
+   * (задача Э3-11). Она пререндерена на сборке, где базы может не быть вовсе
+   * (см. `../data/site-nav.ts` и тест `../layouts/layout-invariants.test.ts`:
+   * «страница 404 ПРЕРЕНДЕРЕНА» требует отсутствия обращений к `../data`), а
+   * категории — живые данные CMS. Тип не даёт забыть проставить значение ни там,
+   * ни здесь: страница со своим рельсом и страница без него — два намеренных
+   * состояния, а не забывчивость.
+   */
+  categorySections: readonly CatalogSection[] | null;
 }
 
-const { canonicalPath, description, robots, title } = Astro.props;
+const { canonicalPath, categorySections, description, robots, title } = Astro.props;
+
+// ОДНО значение решает и разметку (рендерить ли рельс), и CSS (атрибут
+// `data-sidebar` на теге body — им включается двухколоночная сетка, см.
+// критический CSS ниже). Именно значение, а не два одинаковых условия рядом:
+// разошлись бы они в трактовке ПУСТОГО массива, а последствие — контент в
+// колонке шириной с рельс, который рельсом не занят (находка контролёров
+// `reviewer` и `perf-guard`, обоснование в шапке файла).
+const sidebarSections =
+  categorySections !== null && categorySections.length > 0 ? categorySections : null;
 
 // `serverEnv()` зовётся ТОЛЬКО когда canonical нужен: страница 404 пререндерена,
 // и чтение SITE_URL на сборке запекло бы хост в артефакт.
@@ -335,6 +401,8 @@ const descriptionText = description?.trim() ?? '';
         color-scheme: light;
 
         --content-max: 60rem;
+        /* Ширина рельса категорий. Порог показа и его расчёт — в шапке файла. */
+        --sidebar-width: 14rem;
 
         --paper: #f1f0f4;
         --paper-raised: #fbfafc;
@@ -466,12 +534,37 @@ const descriptionText = description?.trim() ?? '';
       .site-nav__link[aria-current='page'] {
         border-block-end-color: var(--ink);
       }
-      .layout__main {
+      /* Тело страницы: рельс категорий слева плюс контент. Один столбец по
+         умолчанию; два — только при `data-sidebar` И ширине от 66rem. Оба
+         условия и расчёт порога — в шапке файла. */
+      .layout__body {
         flex: 1 0 auto;
         width: 100%;
         max-width: var(--content-max);
         margin-inline: auto;
-        padding: 1rem;
+        padding-inline: 1rem;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 1.5rem;
+      }
+      .layout__main {
+        min-width: 0;
+        padding-block: 1rem;
+      }
+      /* Порог 66rem — расчёт под контракт `sizes` у `.card-grid`, а не круглое
+         число. Вывод — в шапке файла; менять его в отрыве от
+         `../images/card-image.ts` нельзя. */
+      @media (min-width: 66rem) {
+        body[data-sidebar] .layout__header,
+        body[data-sidebar] .layout__body,
+        body[data-sidebar] .site-footer {
+          max-width: calc(var(--sidebar-width) + 2rem + var(--content-max));
+        }
+        body[data-sidebar] .layout__body {
+          grid-template-columns: var(--sidebar-width) minmax(0, var(--content-max));
+          gap: 2rem;
+          align-items: start;
+        }
       }
       /* Подвал — на каждой странице, поэтому тоже в критическом CSS. */
       .site-footer {
@@ -608,9 +701,125 @@ const descriptionText = description?.trim() ?? '';
         color: var(--stamp);
         border-block-end-color: var(--stamp);
       }
+
+      /* Рельс категорий (`SiteSidebar.astro`) — на каждой странице, кроме 404,
+         поэтому тоже в критическом CSS. Обоснование механики без клиентского JS —
+         шапка самого компонента. */
+      .sidebar__checkbox {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+      }
+      .sidebar__toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 0.75rem;
+        border: 1px solid var(--rule);
+        font-size: 0.9375rem;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      .sidebar__checkbox:focus-visible ~ .sidebar__toggle {
+        outline: 2px solid var(--stamp);
+        outline-offset: 2px;
+      }
+      .sidebar__burger-line {
+        stroke: currentColor;
+        stroke-width: 1.5;
+        transform-origin: 10px 10px;
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        .sidebar__burger-line {
+          transition:
+            transform 0.15s,
+            opacity 0.15s;
+        }
+      }
+      /* Раскрыто — «бургер» из трёх линий складывается в крестик: верх и низ
+         сходятся к средней и поворачиваются на 45°, средняя гаснет. */
+      .sidebar__checkbox:checked ~ .sidebar__toggle .sidebar__burger-line--top {
+        transform: translateY(5px) rotate(45deg);
+      }
+      .sidebar__checkbox:checked ~ .sidebar__toggle .sidebar__burger-line--mid {
+        opacity: 0;
+      }
+      .sidebar__checkbox:checked ~ .sidebar__toggle .sidebar__burger-line--bot {
+        transform: translateY(-5px) rotate(-45deg);
+      }
+      .sidebar__panel {
+        display: none;
+        margin-block-start: 0.75rem;
+      }
+      .sidebar__checkbox:checked ~ .sidebar__panel {
+        display: block;
+      }
+      .sidebar__groups {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .sidebar__group + .sidebar__group {
+        margin-block-start: 1.25rem;
+      }
+      .sidebar__group-link {
+        display: block;
+        padding-block-end: 2px;
+        font-weight: 500;
+        text-decoration: none;
+        border-block-end: 1px solid transparent;
+      }
+      .sidebar__group-link:hover {
+        color: var(--stamp);
+      }
+      .sidebar__children {
+        margin: 0.375rem 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .sidebar__child-link {
+        display: block;
+        padding-block: 0.25rem;
+        font-size: 0.9375rem;
+        color: var(--ink-soft);
+        text-decoration: none;
+      }
+      .sidebar__child-link:hover {
+        color: var(--stamp);
+      }
+      /* Текущий узел: линия слева + основной цвет текста — состояние кодируется
+         цветом И линией одновременно, как у `.site-nav__link[aria-current]`. */
+      .sidebar__group-link[aria-current='page'],
+      .sidebar__child-link[aria-current='page'] {
+        border-inline-start: 2px solid var(--ink);
+        margin-inline-start: -0.625rem;
+        padding-inline-start: 0.5rem;
+        color: var(--ink);
+      }
+      @media (min-width: 66rem) {
+        .sidebar {
+          position: sticky;
+          top: 1rem;
+        }
+        /* Скрыт целиком, а не визуально: иначе на широком экране в табуляции
+           остался бы переключатель без эффекта и без индикатора фокуса. */
+        .sidebar__checkbox {
+          display: none;
+        }
+        .sidebar__toggle {
+          display: none;
+        }
+        .sidebar__panel {
+          display: block;
+          margin-block-start: 0;
+        }
+      }
     </style>
   </head>
-  <body>
+  <body data-sidebar={sidebarSections === null ? undefined : ''}>
     <!-- Меню печатается сервером на КАЖДОЙ странице: «страница входит в
          навигацию» — условие п. 5.1 ТЗ, и выполнять его по одному шаблону из
          пяти нельзя. Состав пунктов — src/seo/catalog-pages.ts. -->
@@ -620,9 +829,16 @@ const descriptionText = description?.trim() ?? '';
       </a>
       <SiteNav currentPath={canonicalPath} />
     </header>
-    <main class="layout__main">
-      <slot />
-    </main>
+    <div class="layout__body">
+      {
+        sidebarSections === null ? null : (
+          <SiteSidebar categorySections={sidebarSections} currentPath={canonicalPath} />
+        )
+      }
+      <main class="layout__main">
+        <slot />
+      </main>
+    </div>
     <!-- Подвал со ссылками на служебные страницы — тоже на каждой странице, по
          той же причине, что и меню: условие «входит в навигацию» из п. 5.1.
          Состав — src/seo/info-pages.ts. -->

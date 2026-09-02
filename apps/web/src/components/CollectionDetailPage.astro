@@ -1,7 +1,7 @@
 ---
 import type { AdRows } from '../seo/ad-slots';
 import type { BreadcrumbTrail } from '../seo/breadcrumbs';
-import type { CollectionPageContent } from '../data';
+import type { CatalogSection, CollectionPageContent } from '../data';
 import { jsonLdScriptText } from '../seo/json-ld';
 import { richTextBlocks } from '../seo/rich-text';
 import { viewParamsQuery } from '../routing/view-params';
@@ -15,11 +15,13 @@ import RichText from './RichText.astro';
 
 interface Props {
   ads: AdRows;
+  /** Категории бокового меню (`./SiteSidebar.astro`) — см. `../data/site-nav.ts`. */
+  categorySections: readonly CatalogSection[];
   content: CollectionPageContent;
   trail: BreadcrumbTrail;
 }
 
-const { ads, content, trail } = Astro.props;
+const { ads, categorySections, content, trail } = Astro.props;
 const intro = richTextBlocks(content.intro);
 const jsonLd = content.jsonLd === null ? null : jsonLdScriptText(content.jsonLd);
 const filterQuery = viewParamsQuery(content.filter);
@@ -35,6 +37,7 @@ const updatedLabel =
   description={content.metaDescription}
   canonicalPath={content.canonicalPath}
   robots={content.robots}
+  categorySections={categorySections}
 >
   <Breadcrumbs trail={trail} />
   <h1>{content.heading}</h1>
