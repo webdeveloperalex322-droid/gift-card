@@ -69,6 +69,17 @@ const webServer = {
 
 export default defineConfig({
   testDir: fileURLToPath(new URL('.', import.meta.url)),
+  /**
+   * Замер присутствия объявленных страниц (задача Э4-07).
+   *
+   * Стоит здесь, а не внутри spec’ов, потому что список тестов Playwright
+   * строит СИНХРОННО при загрузке файлов, а присутствие контентной страницы —
+   * факт о стенде, который надо спросить. Порядок задач это позволяет:
+   * `webServer` (плагин конфига) → `globalSetup` → загрузка spec-файлов
+   * (`runAllTestsWithConfig`, playwright 1.62.1). Разбор механики и того, что
+   * происходит при `--list`, — в `support/discovery.ts`.
+   */
+  globalSetup: fileURLToPath(new URL('./global-setup.ts', import.meta.url)),
   outputDir: fileURLToPath(new URL('../../test-results/seo/', import.meta.url)),
   fullyParallel: true,
   // Повторов нет намеренно: SEO-проверки детерминированы (статус, заголовок,

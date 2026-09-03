@@ -11,8 +11,15 @@
  * Это половина требования «страница 404 у сайта одна»: вторую половину (что тот
  * же файл читает приложение Astro через `prerenderedErrorPageFetch` адаптера)
  * проверить юнитом нельзя, она проверена на собранном сервере.
+ *
+ * Третье (правка 2026-09-03, находка `seo-auditor`) — ПРОВАЛ чтения этого файла
+ * не становится постоянным и не остаётся молчаливым. Дефект был именно такой:
+ * одна неудачная попытка кешировалась навсегда, и до перезапуска процесса каждый
+ * 404 отдавал резервные 270 байт вместо страницы с навигацией. Снаружи это
+ * выглядит как непостоянное падение приёмки, поэтому свойство проверяется здесь,
+ * где момент провала задаётся, а не выпадает по нагрузке.
  */
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -206,5 +213,87 @@ describe('вне режима обслуживания порядок прежн
     expect(captured.status).toBe(404);
     expect(captured.body).toBe(NOT_FOUND_FILE_BODY);
     expect(captured.headers['Content-Type']).toBe('text/html; charset=utf-8');
+  });
+});
+
+describe('провал чтения тела 404 не кешируется навсегда', () => {
+  /**
+   * Сборка обработчика на СВОЁМ корне: кеш тела 404 живёт в замыкании
+   * обработчика, поэтому у этого набора он свой и от порядка тестов в файле не
+   * зависит.
+   */
+  function brokenFrontDoor(root: string, logged: string[]): ReturnType<typeof createFrontDoor> {
+    return createFrontDoor({
+      adminPath: '/admin',
+      astroHandler: () => {
+        throw new Error('До приложения Astro в этом наборе доходить не должно.');
+      },
+      clientRoot: root,
+      logError: (message) => logged.push(message),
+      maintenance: () => maintenanceMode({}),
+      mediaRoot: () => {
+        throw new Error('Корень производных в этом наборе не нужен.');
+      },
+    });
+  }
+
+  it('следующий 404 пробует прочитать файл снова и отдаёт полное тело', async () => {
+    // Так выглядит окно, в которое попал приёмочный прогон: каталог сборки есть,
+    // файла страницы 404 в нём в этот момент нет (его как раз перезаписывают).
+    const root = await mkdtemp(join(tmpdir(), 'otkritka-front-door-broken-'));
+    const logged: string[] = [];
+    const door = brokenFrontDoor(root, logged);
+
+    // Две попытки подряд, пока файла нет: обе отвечают 404 резервным телом.
+    for (const attempt of ['первая', 'вторая']) {
+      const { captured, res } = fakeResponse();
+      await door(fakeRequest('/admin/collections/cards'), res);
+
+      expect(captured.status, attempt).toBe(404);
+      expect(captured.headers['Content-Type'], attempt).toBe('text/html; charset=utf-8');
+      expect(captured.body, attempt).not.toBe(NOT_FOUND_FILE_BODY);
+      // Резерв — последняя линия, а не пустой ответ: статус настоящий и ссылка
+      // на главную в теле есть.
+      expect(captured.body, attempt).toContain('<h1>Страница не найдена</h1>');
+      expect(captured.body, attempt).toContain('<a href="/">');
+    }
+
+    // Провал попал в журнал — ровно одной записью на серию: молчаливая
+    // деградация недопустима, запись на каждый 404 утопила бы журнал.
+    const failures = logged.filter((message) => message.includes('Страница 404 не прочитана'));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('404.html');
+    // Это настоящая ошибка, поэтому пометки уровня у неё нет: пометка стоит
+    // только на штатных сообщениях (см. `INFO_LEVEL_PREFIX` во входном сервере).
+    expect(failures[0]?.startsWith('INFO: ')).toBe(false);
+
+    // Файл появился (сборка дописала артефакт). Перезапуска процесса не было.
+    await writeFile(join(root, '404.html'), NOT_FOUND_FILE_BODY, 'utf8');
+
+    const recovered = fakeResponse();
+    await door(fakeRequest('/admin/collections/cards'), recovered.res);
+    expect(recovered.captured.status).toBe(404);
+    expect(recovered.captured.body).toBe(NOT_FOUND_FILE_BODY);
+
+    // Восстановление видно в журнале, вместе с числом ответов, ушедших с
+    // резервом: иначе о деградации из журнала не узнать вовсе.
+    const recoveries = logged.filter((message) => message.includes('снова читается с диска'));
+    expect(recoveries).toHaveLength(1);
+    expect(recoveries[0]).toContain('резервным телом: 2.');
+    // Восстановление — событие штатное, а приёмник диагностики у входного сервера
+    // сегодня один (`logError`). Пока каналы не разведены, уровень помечен в
+    // тексте: иначе канал ошибок врал бы алертам площадки (находка `reviewer`
+    // 2026-09-03).
+    expect(recoveries[0]?.startsWith('INFO: ')).toBe(true);
+
+    // Успех кешируется: дальше файл не перечитывается, поэтому даже удаление
+    // каталога ответ не меняет — и штатный 404 не ходит на диск на каждый запрос.
+    await rm(join(root, '404.html'));
+    const cachedResponse = fakeResponse();
+    await door(fakeRequest('/admin/collections/cards'), cachedResponse.res);
+    expect(cachedResponse.captured.body).toBe(NOT_FOUND_FILE_BODY);
+    expect(logged.filter((message) => message.includes('Страница 404 не прочитана'))).toHaveLength(
+      1,
+    );
   });
 });

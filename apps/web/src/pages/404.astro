@@ -13,8 +13,8 @@
  * на веру:
  *
  *   - наш входной сервер читает `dist/client/404.html`
- *     (`../server/front-door.ts`, `loadNotFoundBody`) — им он отвечает на решения
- *     `not-found` и `not-served` политики пути;
+ *     (`../server/front-door.ts`, `createNotFoundBodyReader`) — им он отвечает на
+ *     решения `not-found` и `not-served` политики пути;
  *   - приложение Astro для того же файла зовёт `prerenderedErrorPageFetch`, а его
  *     подставляет адаптер `@astrojs/node`
  *     (`dist/serve-app.js`: `readErrorPageFromDisk(client, 404)`), когда маршрут

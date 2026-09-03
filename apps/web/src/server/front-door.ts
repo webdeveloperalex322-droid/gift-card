@@ -53,8 +53,8 @@ import { tryServeStaticFile } from './static-files.js';
  * Требование п. 23 ТЗ — «страница 404 отдаёт настоящий 404 и содержит
  * навигацию». С задачи Э3-11 полноценная страница есть: `src/pages/404.astro`,
  * ПРЕРЕНДЕРЕННАЯ (без `prerender = false`), поэтому в сборке появляется
- * `dist/client/404.html`. Этот файл читают ОБА пути — наш (`loadNotFoundBody`
- * ниже) и приложение Astro (адаптер `@astrojs/node` подставляет
+ * `dist/client/404.html`. Этот файл читают ОБА пути — наш
+ * (`createNotFoundBodyReader` ниже) и приложение Astro (адаптер `@astrojs/node` подставляет
  * `prerenderedErrorPageFetch`, читающий `404.html` из корня клиента), — то есть
  * страница 404 у сайта одна, а не две разные. Имя файла приходит из
  * `NOT_FOUND_PAGE_FILE`, то есть из того же места, где политика пути объявляет
@@ -130,19 +130,104 @@ export interface FrontDoorOptions {
   readonly maintenance: () => MaintenanceDecision;
 }
 
-/** Тело страницы 404 читается с диска один раз за время жизни процесса. */
-let notFoundBody: Buffer | string | undefined;
+/**
+ * Опции плюс состояние, заведённое на сборке обработчика.
+ *
+ * Шаги маршрутизации получают этот объект, а не сами опции: читатель тела 404
+ * держит собственный кеш, и кеш обязан принадлежать обработчику, для которого
+ * создан (см. `createNotFoundBodyReader`).
+ */
+interface FrontDoorContext extends FrontDoorOptions {
+  readonly readNotFoundBody: () => Promise<Buffer | string>;
+}
 
-async function loadNotFoundBody(clientRoot: string): Promise<Buffer | string> {
-  if (notFoundBody !== undefined) {
-    return notFoundBody;
-  }
-  try {
-    notFoundBody = await readFile(path.join(clientRoot, NOT_FOUND_PAGE_FILE));
-  } catch {
-    notFoundBody = FALLBACK_NOT_FOUND_HTML;
-  }
-  return notFoundBody;
+/**
+ * Пометка уровня для сообщений, которые НЕ являются ошибкой, но уходят в
+ * единственный приёмник диагностики (`logError`). Обоснование — в шапке
+ * `createNotFoundBodyReader`; сообщения об ошибках префикса не получают, иначе
+ * пометка перестала бы что-либо различать.
+ */
+const INFO_LEVEL_PREFIX = 'INFO: ';
+
+/**
+ * Читатель тела страницы 404. КЕШИРУЕТСЯ ТОЛЬКО УСПЕХ.
+ *
+ * Прежняя редакция кешировала и провал (`catch { notFoundBody = FALLBACK }`),
+ * поэтому ОДНА неудачная попытка чтения делала резервные 270 байт ответом на
+ * КАЖДЫЙ 404 до перезапуска процесса. Состояние достижимо не только на
+ * подменённом артефакте: пока сборка перезаписывает `dist/client`, файла 404 на
+ * диске нет секунду-другую, и запрос, попавший в это окно, портил ответы
+ * навсегда. Ровно это поймал `tests/seo/not-found-body-is-single.spec.ts`
+ * 2026-09-03 (270 байт у ветвей `/media` и админки против 17 569 у промаха
+ * маршрута), причём непостоянно — что для дефекта хуже, чем постоянно.
+ *
+ * Выбранное поведение и цена:
+ *
+ *   - успешно прочитанное тело держим до конца жизни процесса. Артефакт сборки
+ *     на живом процессе не меняется, поэтому при штатной работе файл читается
+ *     ровно один раз, а не на каждый 404;
+ *   - провал НЕ кешируется: следующий 404 пробует снова и, как только файл
+ *     появился, отдаёт настоящую страницу. Цена — одна неудачная `readFile` на
+ *     404, и платится она только в уже сломанном состоянии. Вариант «кешировать
+ *     провал на N секунд» отклонён: он вносит в тело ответа 404 зависимость от
+ *     часов и оставляет окно, в котором файл уже на месте, а сервер всё ещё
+ *     отдаёт резерв, — то есть тот же дефект, только короче и труднее в замере.
+ *
+ * В журнал провал попадает ОДИН раз на серию: запись на каждый 404 утопила бы
+ * журнал при обходе сканером, а отсутствие записи — это молчаливая деградация
+ * страницы 404, с которой всё и началось. Восстановление тоже пишется: иначе из
+ * журнала не видно, сколько ответов успело уйти с резервным телом.
+ *
+ * Приёмник у обоих сообщений сегодня ОДИН — `logError` (в `entry.mts` это
+ * `console.error`), и это ограничение, а не выбор: восстановление чтения —
+ * штатное событие, а не ошибка, и в канале ошибок оно наврало бы алертам
+ * площадки. Поэтому уровень помечен в САМОМ ТЕКСТЕ (`INFO_LEVEL_PREFIX`): канал
+ * один, но правило алерта умеет отличить сообщение об ошибке от сообщения о
+ * восстановлении. Разводить каналы по-настоящему (`logInfo` в `FrontDoorOptions`)
+ * здесь не стали: обязательный параметр придётся передать в каждой точке сборки
+ * обработчика, а вопрос шире одной страницы 404 — сейчас у входного сервера ВСЯ
+ * диагностика уходит в один приёмник. Когда `logInfo` появится, префикс с этого
+ * сообщения снимается, и другого места правки не будет.
+ *
+ * Состояние живёт в замыкании, а не в модуле. На процессе обработчик один,
+ * поэтому снаружи поведение то же самое; зато кеш не переживает обработчик и не
+ * отвечает телом, прочитанным для другого `clientRoot`.
+ */
+function createNotFoundBodyReader(
+  options: Pick<FrontDoorOptions, 'clientRoot' | 'logError'>,
+): () => Promise<Buffer | string> {
+  const file = path.join(options.clientRoot, NOT_FOUND_PAGE_FILE);
+  let cached: Buffer | undefined;
+  let failureLogged = false;
+  let fallbackResponses = 0;
+
+  return async function readNotFoundBody(): Promise<Buffer | string> {
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    try {
+      const body = await readFile(file);
+      if (failureLogged) {
+        options.logError(
+          `${INFO_LEVEL_PREFIX}Страница 404 «${file}» снова читается с диска. Ответов, ушедших с резервным телом: ${String(fallbackResponses)}.`,
+        );
+        failureLogged = false;
+      }
+      cached = body;
+      return body;
+    } catch (error) {
+      fallbackResponses += 1;
+      if (!failureLogged) {
+        failureLogged = true;
+        options.logError(
+          `Страница 404 не прочитана («${file}»): ${error instanceof Error ? error.message : String(error)}. ` +
+            'Отдаём резервное тело; попытка повторится на следующем 404. Повтор этой записи подавлен до восстановления чтения.',
+        );
+      }
+      return FALLBACK_NOT_FOUND_HTML;
+    }
+  };
 }
 
 /**
@@ -169,8 +254,8 @@ function respondText(res: ServerResponse, status: number, body: string): void {
   res.end(body);
 }
 
-async function respondNotFound(res: ServerResponse, clientRoot: string): Promise<void> {
-  const body = await loadNotFoundBody(clientRoot);
+async function respondNotFound(res: ServerResponse, context: FrontDoorContext): Promise<void> {
+  const body = await context.readNotFoundBody();
   res.writeHead(404, {
     'Content-Length': String(Buffer.byteLength(body)),
     'Content-Type': 'text/html; charset=utf-8',
@@ -188,9 +273,14 @@ async function respondNotFound(res: ServerResponse, clientRoot: string): Promise
 export function createFrontDoor(
   options: FrontDoorOptions,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  const context: FrontDoorContext = {
+    ...options,
+    readNotFoundBody: createNotFoundBodyReader(options),
+  };
+
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
-      await route(req, res, options);
+      await route(req, res, context);
     } catch (error) {
       options.logError(
         `Ошибка обработки «${req.url ?? '—'}»: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
@@ -222,12 +312,12 @@ export function createFrontDoor(
 async function serveMedia(
   req: IncomingMessage,
   res: ServerResponse,
-  options: FrontDoorOptions,
+  context: FrontDoorContext,
   decision: Exclude<MediaDecision, { readonly action: 'not-media' }>,
 ): Promise<void> {
   if (decision.action === 'not-found') {
-    options.logError(`404 на «${req.url ?? '—'}»: ${decision.reason}`);
-    await respondNotFound(res, options.clientRoot);
+    context.logError(`404 на «${req.url ?? '—'}»: ${decision.reason}`);
+    await respondNotFound(res, context);
     return;
   }
 
@@ -236,11 +326,11 @@ async function serveMedia(
     relativePath: decision.key,
     req,
     res,
-    root: options.mediaRoot(),
+    root: context.mediaRoot(),
   });
 
   if (!served) {
-    await respondNotFound(res, options.clientRoot);
+    await respondNotFound(res, context);
   }
 }
 
@@ -267,11 +357,11 @@ async function serveMedia(
 async function handOverToAstro(
   req: IncomingMessage,
   res: ServerResponse,
-  options: FrontDoorOptions,
+  context: FrontDoorContext,
   decision: Extract<TargetDecision, { readonly pathname: string; readonly search: string }>,
 ): Promise<void> {
   req.url = `${decision.pathname}${decision.search}`;
-  await options.astroHandler(req, res);
+  await context.astroHandler(req, res);
 }
 
 /**
@@ -297,11 +387,11 @@ function respondUnavailable(
 async function route(
   req: IncomingMessage,
   res: ServerResponse,
-  options: FrontDoorOptions,
+  context: FrontDoorContext,
 ): Promise<void> {
   // Шаг 0: режим обслуживания. Раньше политики пути, раньше `/media`, раньше
   // статики — обоснование в шапке `./maintenance.ts`.
-  const maintenance = options.maintenance();
+  const maintenance = context.maintenance();
   if (maintenance.action === 'unavailable') {
     respondUnavailable(res, maintenance);
     return;
@@ -313,7 +403,7 @@ async function route(
     return;
   }
 
-  const decision = decideRequestTarget({ adminPath: options.adminPath, target });
+  const decision = decideRequestTarget({ adminPath: context.adminPath, target });
 
   switch (decision.action) {
     case 'redirect':
@@ -324,12 +414,12 @@ async function route(
       // Причина уходит в лог, а не в тело ответа: тело обязано быть одинаковым
       // для всех отказов этого класса, иначе оно превращается в справочник по
       // внутренностям сервера для того, кто его перебирает.
-      options.logError(`400 на «${target}»: ${decision.reason}`);
+      context.logError(`400 на «${target}»: ${decision.reason}`);
       respondText(res, 400, BAD_REQUEST_TEXT);
       return;
 
     case 'not-found':
-      await respondNotFound(res, options.clientRoot);
+      await respondNotFound(res, context);
       return;
 
     case 'not-found-unless-moved':
@@ -338,7 +428,7 @@ async function route(
       // читается только в middleware Astro. Приложение вернёт 404 само, если
       // правила нет: маршрута под такой путь у него тоже нет, и до него
       // добирается перехватывающий `[...missing].astro`.
-      await handOverToAstro(req, res, options, decision);
+      await handOverToAstro(req, res, context, decision);
       return;
 
     case 'not-served':
@@ -347,13 +437,13 @@ async function route(
       // (решение Ч-22). Ответ — обычный 404, неотличимый от любого другого:
       // отдельный статус или отдельное тело подсказывали бы, что по этому
       // адресу что-то есть.
-      await respondNotFound(res, options.clientRoot);
+      await respondNotFound(res, context);
       return;
 
     case 'serve': {
       const media = decideMediaRequest(decision.pathname);
       if (media.action !== 'not-media') {
-        await serveMedia(req, res, options, media);
+        await serveMedia(req, res, context, media);
         return;
       }
 
@@ -361,12 +451,12 @@ async function route(
         pathname: decision.pathname,
         req,
         res,
-        root: options.clientRoot,
+        root: context.clientRoot,
       });
       if (served) {
         return;
       }
-      await handOverToAstro(req, res, options, decision);
+      await handOverToAstro(req, res, context, decision);
       return;
     }
   }
