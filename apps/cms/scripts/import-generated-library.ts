@@ -478,7 +478,7 @@ async function main(): Promise<void> {
   const seeds = buildGeneratedLibrarySeeds(plan, campaign);
   const payload = await initializePayload();
   const store = createPayloadGeneratedLibraryStore(payload, environment.actorEmail);
-  const preflightInput = { actorEmail: environment.actorEmail, plan, seeds, store, readBytes: (path: string) => readFile(path) };
+  const preflightInput = { actorEmail: environment.actorEmail, campaign, plan, seeds, store, readBytes: (path: string) => readFile(path) };
   const preflight = await runGeneratedLibraryPreflight(preflightInput);
   console.log(JSON.stringify({ ...preflight, preparedCards: preflight.preparedCards.length }));
   if (preflight.blockingErrors.length > 0) throw new Error(`Generated library preflight blocked by ${String(preflight.blockingErrors.length)} error(s).`);

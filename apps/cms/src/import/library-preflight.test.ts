@@ -4,7 +4,7 @@ import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import { computeImageRevision } from '@otkritka/images';
 
-import type { GeneratedLibraryPlan, NormalizedGeneratedManifestRow } from './library-manifest';
+import { UPCOMING_HOLIDAYS_2026_09_CAMPAIGN, type GeneratedLibraryPlan, type NormalizedGeneratedManifestRow } from './library-manifest';
 import type { GeneratedLibrarySeeds } from './library-seeds';
 import { pilotIntroDocument } from './pilot-types';
 import { runGeneratedLibraryPreflight, type GeneratedLibraryReadStore } from './library-preflight';
@@ -59,6 +59,21 @@ function store(overrides: Partial<GeneratedLibraryReadStore> = {}): GeneratedLib
 }
 
 describe('generated library preflight', () => {
+  it('blocks an upcoming row that has no square JPEG path', async () => {
+    const [image, source] = await Promise.all([
+      jpeg(), sharp({ create: { width: 640, height: 800, channels: 3, background: '#eeeeee' } }).png().toBuffer(),
+    ]);
+    const data = fixture(createHash('sha256').update(source).digest('hex'));
+    data.plan = { ...data.plan, rows: [{ ...data.plan.rows[0]!, package: 'upcoming-holidays-2026-09' }] };
+    const report = await runGeneratedLibraryPreflight({
+      ...data, campaign: UPCOMING_HOLIDAYS_2026_09_CAMPAIGN, actorEmail: 'ai@example.test', store: store(),
+      readBytes: async (path) => path === 'source.png' ? source : image,
+    });
+
+    expect(report.fingerprint).toBeNull();
+    expect(report.blockingErrors.join(' ')).toMatch(/squarePath/u);
+  });
+
   it('performs zero writes and returns prepared portrait bytes bound to a stable fingerprint', async () => {
     const [image, source] = await Promise.all([
       jpeg(),

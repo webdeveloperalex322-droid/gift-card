@@ -46,6 +46,7 @@ export interface GeneratedLibraryCampaign {
   readonly expected: GeneratedLibraryExpectedCounts;
   readonly approvalFile: string;
   readonly reportFile: string;
+  readonly requiresSquarePath: boolean;
 }
 
 export const GENERATED_LIBRARY_DEFAULT_CAMPAIGN: GeneratedLibraryCampaign = {
@@ -61,6 +62,7 @@ export const GENERATED_LIBRARY_DEFAULT_CAMPAIGN: GeneratedLibraryCampaign = {
   },
   approvalFile: '.generated-library-dry-run-approved.json',
   reportFile: 'generated-library-import-report.json',
+  requiresSquarePath: false,
 };
 
 export const UPCOMING_HOLIDAYS_2026_09_CAMPAIGN: GeneratedLibraryCampaign = {
@@ -76,6 +78,7 @@ export const UPCOMING_HOLIDAYS_2026_09_CAMPAIGN: GeneratedLibraryCampaign = {
   },
   approvalFile: '.upcoming-holidays-2026-09-dry-run-approved.json',
   reportFile: 'upcoming-holidays-2026-09-import-report.json',
+  requiresSquarePath: true,
 };
 
 export const GENERATED_LIBRARY_CAMPAIGNS = [
@@ -161,9 +164,27 @@ function isPopular(name: GeneratedLibraryPackageName): boolean {
 
 export async function planGeneratedLibrary(input: GeneratedLibraryInput): Promise<GeneratedLibraryPlan> {
   const campaign = input.campaign ?? GENERATED_LIBRARY_DEFAULT_CAMPAIGN;
-  const packageNames = new Set(input.packages.map(({ name }) => name));
+  const packageCounts = new Map<GeneratedLibraryPackageName, number>();
+  for (const { name } of input.packages) packageCounts.set(name, (packageCounts.get(name) ?? 0) + 1);
+  const packageNames = new Set(packageCounts.keys());
   const missing = campaign.packageNames.filter((name) => !packageNames.has(name));
-  if (missing.length > 0) throw new Error(`Missing generated library packages: ${missing.join(', ')}.`);
+  const unexpected = [...packageNames].filter((name) => !campaign.packageNames.includes(name));
+  const duplicates = [...packageCounts.entries()].filter(([, count]) => count > 1).map(([name]) => name);
+  const packageErrors = [
+    ...(missing.length === 0 ? [] : [`missing package: ${missing.join(', ')}`]),
+    ...(unexpected.length === 0 ? [] : [`unexpected package: ${unexpected.join(', ')}`]),
+    ...(duplicates.length === 0 ? [] : [`duplicate package: ${duplicates.join(', ')}`]),
+  ];
+  if (packageErrors.length > 0) {
+    throw new Error(`Generated library campaign ${campaign.name} package set must match exactly: ${packageErrors.join('; ')}.`);
+  }
+  if (campaign.requiresSquarePath) {
+    const missingSquares = input.packages.flatMap(({ name, rows }) => rows.flatMap((row) =>
+      typeof row.squarePath === 'string' && row.squarePath.trim() !== '' ? [] : [`${name}:${row.id}`]));
+    if (missingSquares.length > 0) {
+      throw new Error(`Generated library campaign ${campaign.name} requires a valid squarePath for every row: ${missingSquares.join(', ')}.`);
+    }
+  }
 
   const rowsWithoutHashes = input.packages.flatMap(({ name, rows }) => rows.map((row, manifestOrder) => ({
     ...row,

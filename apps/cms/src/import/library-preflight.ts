@@ -5,7 +5,7 @@ import { computeImageRevision } from '@otkritka/images';
 import sharp from 'sharp';
 
 import { buildCardPath } from '../seo/paths';
-import type { GeneratedLibraryPlan } from './library-manifest';
+import { GENERATED_LIBRARY_DEFAULT_CAMPAIGN, type GeneratedLibraryCampaign, type GeneratedLibraryPlan } from './library-manifest';
 import type { GeneratedCardSeed, GeneratedCollectionSeed, GeneratedLibrarySeeds } from './library-seeds';
 import { normalizePilotRichText } from './pilot-preflight';
 import { pilotCardImportKey, pilotImageImportKey } from './pilot-import-identity';
@@ -53,6 +53,7 @@ export interface GeneratedLibraryReadStore {
 export interface GeneratedLibraryPreflightInput {
   readonly actorEmail: string; readonly plan: GeneratedLibraryPlan; readonly seeds: GeneratedLibrarySeeds;
   readonly store: GeneratedLibraryReadStore; readonly readBytes: (path: string) => Promise<Buffer>;
+  readonly campaign?: GeneratedLibraryCampaign;
 }
 export interface GeneratedLibraryPreparedCard {
   readonly seed: GeneratedCardSeed; readonly portraitPath: string; readonly portraitSha256: string; readonly portraitRevision: string;
@@ -154,6 +155,7 @@ export async function runGeneratedLibraryPreflight(input: GeneratedLibraryPrefli
     cardsToCreate: 0, cardsToResume: 0, collectionsToCreate: 0, blockingErrors, fingerprint: null, preparedCards: [] });
   if (!await input.store.isSchemaReady()) return empty([GENERATED_LIBRARY_SCHEMA_ERROR]);
   const errors: string[] = [];
+  const campaign = input.campaign ?? GENERATED_LIBRARY_DEFAULT_CAMPAIGN;
   const actor = await input.store.findActor(input.actorEmail.trim());
   if (actor === null) errors.push(`Import actor ${input.actorEmail} does not exist.`);
   else if (actor.role !== 'ai-editor') errors.push(`Import actor ${input.actorEmail} must have role ai-editor; received ${actor.role}.`);
@@ -173,10 +175,13 @@ export async function runGeneratedLibraryPreflight(input: GeneratedLibraryPrefli
       assetFacts.push({ path: row.finalPath, sha256: portraitSha256 });
       portraitFacts.set(row.finalPath, { sha256: portraitSha256, revision: portraitRevision });
       errors.push(...await validateImage(portrait, row.finalPath, 'portrait'));
-      if (typeof row.squarePath === 'string') {
-        const square = await input.readBytes(row.squarePath);
-        assetFacts.push({ path: row.squarePath, sha256: createHash('sha256').update(square).digest('hex') });
-        errors.push(...await validateImage(square, row.squarePath, 'square'));
+      const squarePath = typeof row.squarePath === 'string' && row.squarePath.trim() !== '' ? row.squarePath : null;
+      if (campaign.requiresSquarePath && squarePath === null) {
+        errors.push(`Asset ${row.package}:${row.id} requires a valid squarePath for campaign ${campaign.name}.`);
+      } else if (squarePath !== null) {
+        const square = await input.readBytes(squarePath);
+        assetFacts.push({ path: squarePath, sha256: createHash('sha256').update(square).digest('hex') });
+        errors.push(...await validateImage(square, squarePath, 'square'));
       }
     } catch (error) { errors.push(`Asset read failed for row ${row.package}:${row.id}: ${error instanceof Error ? error.message : String(error)}.`); }
   }

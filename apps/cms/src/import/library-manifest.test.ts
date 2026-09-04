@@ -103,19 +103,19 @@ describe('generated library manifest planner', () => {
   });
 
   it('plans the isolated upcoming-holidays campaign without weakening the August package requirement', async () => {
-    const rows = Array.from({ length: 212 }, (_, index) => row(
+    const rows = Array.from({ length: 212 }, (_, index) => ({ ...row(
       `upcoming-${String(index + 1)}`,
       'День воспитателя',
       `upcoming-${String(index + 1)}.png`,
       `upcoming-${String(index + 1)}.jpg`,
-    ));
+    ), squarePath: `upcoming-${String(index + 1)}-square.jpg` }));
     const input = {
       packages: [{ name: 'upcoming-holidays-2026-09' as const, rows }],
       readBytes: async (path: string) => Buffer.from(path),
       expected: UPCOMING_HOLIDAYS_2026_09_CAMPAIGN.expected,
     };
 
-    await expect(planGeneratedLibrary(input)).rejects.toThrow(/Missing generated library packages/u);
+    await expect(planGeneratedLibrary(input)).rejects.toThrow(/package set must match exactly/u);
     const plan = await planGeneratedLibrary({ ...input, campaign: UPCOMING_HOLIDAYS_2026_09_CAMPAIGN });
 
     expect(UPCOMING_HOLIDAYS_2026_09_CAMPAIGN.packageNames).toEqual(['upcoming-holidays-2026-09']);
@@ -129,5 +129,42 @@ describe('generated library manifest planner', () => {
     });
     expect(plan.creationCandidates).toHaveLength(212);
     expect(GENERATED_LIBRARY_DEFAULT_CAMPAIGN.packageNames).toHaveLength(4);
+  });
+
+  it('rejects unexpected and duplicate package manifests before counting either campaign', async () => {
+    const singleUpcoming = {
+      name: 'upcoming-holidays-2026-09' as const,
+      rows: [{ ...row('upcoming-1', 'День воспитателя', 'upcoming.png', 'upcoming.jpg'), squarePath: 'upcoming-square.jpg' }],
+    };
+    const defaultPackages = GENERATED_LIBRARY_DEFAULT_CAMPAIGN.packageNames.map((name) => ({ name, rows: [] }));
+    const input = { readBytes: async (path: string) => Buffer.from(path), expected: UPCOMING_HOLIDAYS_2026_09_CAMPAIGN.expected };
+
+    await expect(planGeneratedLibrary({ ...input, campaign: UPCOMING_HOLIDAYS_2026_09_CAMPAIGN,
+      packages: [singleUpcoming, { name: 'pilot-2026-08', rows: [] }],
+    })).rejects.toThrow(/unexpected package/u);
+    await expect(planGeneratedLibrary({ ...input, campaign: UPCOMING_HOLIDAYS_2026_09_CAMPAIGN,
+      packages: [singleUpcoming, singleUpcoming],
+    })).rejects.toThrow(/duplicate package/u);
+    await expect(planGeneratedLibrary({ ...input, campaign: GENERATED_LIBRARY_DEFAULT_CAMPAIGN,
+      packages: [...defaultPackages, { name: 'upcoming-holidays-2026-09', rows: [] }],
+    })).rejects.toThrow(/unexpected package/u);
+    await expect(planGeneratedLibrary({ ...input, campaign: GENERATED_LIBRARY_DEFAULT_CAMPAIGN,
+      packages: [...defaultPackages, defaultPackages[0]!],
+    })).rejects.toThrow(/duplicate package/u);
+  });
+
+  it('requires a nonempty squarePath for every upcoming row but preserves August optional squares', async () => {
+    const missingSquare = { name: 'upcoming-holidays-2026-09' as const,
+      rows: [row('upcoming-1', 'День воспитателя', 'upcoming.png', 'upcoming.jpg')] };
+    await expect(planGeneratedLibrary({
+      packages: [missingSquare], campaign: UPCOMING_HOLIDAYS_2026_09_CAMPAIGN,
+      readBytes: async (path) => Buffer.from(path), expected: UPCOMING_HOLIDAYS_2026_09_CAMPAIGN.expected,
+    })).rejects.toThrow(/squarePath/u);
+
+    await expect(planGeneratedLibrary({
+      packages: GENERATED_LIBRARY_DEFAULT_CAMPAIGN.packageNames.map((name) => ({ name, rows: [] })),
+      readBytes: async (path) => Buffer.from(path),
+      expected: { sourceRows: 0, uniqueSources: 0, pilotRows: 0, pilotRepeatedOutside: 0, sovietRepeatedInPopular: 0, creationCandidates: 0 },
+    })).resolves.toMatchObject({ sourceRowCount: 0 });
   });
 });
