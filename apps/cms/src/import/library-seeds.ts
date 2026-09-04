@@ -1,6 +1,11 @@
 import { basename, extname } from 'node:path';
 
-import type { GeneratedLibraryPlan, NormalizedGeneratedManifestRow } from './library-manifest';
+import {
+  GENERATED_LIBRARY_DEFAULT_CAMPAIGN,
+  type GeneratedLibraryCampaign,
+  type GeneratedLibraryPlan,
+  type NormalizedGeneratedManifestRow,
+} from './library-manifest';
 
 interface ThemeDefinition {
   readonly path: string;
@@ -18,6 +23,13 @@ const THEMES: Readonly<Record<string, ThemeDefinition>> = {
   'День рождения маме': { path: '/otkrytki/prazdniki/den-rozhdeniya/mame', label: 'день рождения маме' },
   'День рождения подруге': { path: '/otkrytki/prazdniki/den-rozhdeniya/podruge', label: 'день рождения подруге' },
   'День матери': { path: '/otkrytki/prazdniki/den-materi', label: 'День матери' },
+  'День воспитателя': { path: '/otkrytki/prazdniki/27-sentyabrya', label: 'День воспитателя' },
+  'День пожилых людей': { path: '/otkrytki/prazdniki/1-oktyabrya', label: 'День пожилых людей' },
+  'День отца': { path: '/otkrytki/prazdniki/den-ottsa', label: 'День отца' },
+  'День бабушек и дедушек': { path: '/otkrytki/prazdniki/28-oktyabrya', label: 'День бабушек и дедушек' },
+  'День народного единства': { path: '/otkrytki/prazdniki/4-noyabrya', label: 'День народного единства' },
+  'День сотрудника органов внутренних дел': { path: '/otkrytki/prazdniki/10-noyabrya', label: 'День сотрудника органов внутренних дел' },
+  'День бухгалтера': { path: '/otkrytki/prazdniki/21-noyabrya', label: 'День бухгалтера' },
   'День свадьбы': { path: '/otkrytki/prazdniki/den-svadby', label: 'день свадьбы' },
   'День учителя': { path: '/otkrytki/prazdniki/den-uchitelya', label: 'День учителя' },
   'Доброе утро': { path: '/otkrytki/pozhelaniya/dobroe-utro', label: 'доброе утро' },
@@ -163,6 +175,65 @@ const NEW_COLLECTIONS: readonly Omit<GeneratedCollectionSeed, 'relatedPaths'>[] 
   },
 ];
 
+const UPCOMING_HOLIDAYS_COLLECTIONS: readonly Omit<GeneratedCollectionSeed, 'relatedPaths'>[] = [
+  {
+    key: 'upcoming-27-sentyabrya', slug: '27-sentyabrya', path: '/otkrytki/prazdniki/27-sentyabrya', parentPath: '/otkrytki/prazdniki', nodeKind: 'occasion',
+    title: 'Открытки ко Дню воспитателя с тёплыми словами благодарности', h1: 'Открытки ко Дню воспитателя',
+    metaDescription: 'Открытки ко Дню воспитателя с цветами, детскими рисунками и добрыми словами признательности за заботу.',
+    intro: 'День воспитателя — повод поблагодарить человека, который каждый день помогает детям расти, дружить и открывать мир. В подборке — тёплые сюжеты с цветами, рисунками и искренними пожеланиями.',
+    description: 'Добрые поздравления воспитателю с благодарностью за заботу, терпение и внимание к детям.',
+    status: 'draft', robots: 'noindex,follow',
+  },
+  {
+    key: 'upcoming-1-oktyabrya', slug: '1-oktyabrya', path: '/otkrytki/prazdniki/1-oktyabrya', parentPath: '/otkrytki/prazdniki', nodeKind: 'occasion',
+    title: 'Открытки ко Дню пожилых людей с уважением и душевным теплом', h1: 'Открытки ко Дню пожилых людей',
+    metaDescription: 'Душевные открытки ко Дню пожилых людей с осенними цветами, семейными сценами и пожеланиями здоровья.',
+    intro: 'В этот день особенно хочется сказать старшему поколению о любви, уважении и благодарности. Осенние букеты, семейное тепло и спокойные добрые слова помогают сделать поздравление личным.',
+    description: 'Тёплые поздравления старшему поколению с пожеланиями здоровья, внимания и радостных встреч.',
+    status: 'draft', robots: 'noindex,follow',
+  },
+  {
+    key: 'upcoming-den-ottsa', slug: 'den-ottsa', path: '/otkrytki/prazdniki/den-ottsa', parentPath: '/otkrytki/prazdniki', nodeKind: 'occasion',
+    title: 'Открытки ко Дню отца с искренними словами для папы', h1: 'Открытки ко Дню отца',
+    metaDescription: 'Открытки ко Дню отца для папы с семейными сюжетами и пожеланиями здоровья, сил и радости.',
+    intro: 'Поздравление папе может быть спокойным, весёлым или особенно трогательным. Здесь собраны семейные сюжеты и искренние слова о поддержке, надёжности и совместных моментах.',
+    description: 'Открытки для папы с благодарностью за поддержку, заботу и счастливые семейные дни.',
+    status: 'draft', robots: 'noindex,follow',
+  },
+  {
+    key: 'upcoming-28-oktyabrya', slug: '28-oktyabrya', path: '/otkrytki/prazdniki/28-oktyabrya', parentPath: '/otkrytki/prazdniki', nodeKind: 'occasion',
+    title: 'Открытки ко Дню бабушек и дедушек для родных и близких', h1: 'Открытки ко Дню бабушек и дедушек',
+    metaDescription: 'Открытки ко Дню бабушек и дедушек с домашним уютом, осенними цветами и благодарными пожеланиями.',
+    intro: 'Бабушки и дедушки хранят семейные истории, заботу и особое домашнее тепло. Эти открытки помогут сказать спасибо за мудрость, ласку и радость встреч с близкими.',
+    description: 'Сердечные поздравления бабушкам и дедушкам с благодарностью за любовь и семейное тепло.',
+    status: 'draft', robots: 'noindex,follow',
+  },
+  {
+    key: 'upcoming-4-noyabrya', slug: '4-noyabrya', path: '/otkrytki/prazdniki/4-noyabrya', parentPath: '/otkrytki/prazdniki', nodeKind: 'occasion',
+    title: 'Открытки ко Дню народного единства с добрыми пожеланиями', h1: 'Открытки ко Дню народного единства',
+    metaDescription: 'Открытки ко Дню народного единства с осенними городскими видами, символами дружбы и пожеланиями мира.',
+    intro: 'День народного единства напоминает о взаимной поддержке, уважении и силе общего дела. В подборке — спокойные праздничные образы и пожелания мира, согласия и благополучия.',
+    description: 'Поздравления с пожеланиями мира, согласия и добрых перемен для друзей, коллег и близких.',
+    status: 'draft', robots: 'noindex,follow',
+  },
+  {
+    key: 'upcoming-10-noyabrya', slug: '10-noyabrya', path: '/otkrytki/prazdniki/10-noyabrya', parentPath: '/otkrytki/prazdniki', nodeKind: 'occasion',
+    title: 'Открытки ко Дню сотрудника органов внутренних дел', h1: 'Открытки ко Дню сотрудника органов внутренних дел',
+    metaDescription: 'Поздравительные открытки ко Дню сотрудника органов внутренних дел с уважительными пожеланиями здоровья и успехов.',
+    intro: 'В профессиональный праздник хочется поблагодарить за ответственность, выдержку и службу людям. Здесь собраны сдержанные поздравления с пожеланиями здоровья, благополучия и уверенности.',
+    description: 'Уважительные поздравления сотрудникам органов внутренних дел с пожеланиями здоровья и успехов.',
+    status: 'draft', robots: 'noindex,follow',
+  },
+  {
+    key: 'upcoming-21-noyabrya', slug: '21-noyabrya', path: '/otkrytki/prazdniki/21-noyabrya', parentPath: '/otkrytki/prazdniki', nodeKind: 'occasion',
+    title: 'Открытки ко Дню бухгалтера для коллег и близких', h1: 'Открытки ко Дню бухгалтера',
+    metaDescription: 'Открытки ко Дню бухгалтера с деловыми и тёплыми пожеланиями точных расчётов, успехов и благополучия.',
+    intro: 'День бухгалтера — повод поблагодарить за внимательность, порядок и спокойствие в важных делах. В подборке — поздравления для коллег и близких с пожеланиями успехов и хорошего настроения.',
+    description: 'Поздравления бухгалтеру с пожеланиями точных расчётов, уверенности и профессиональных успехов.',
+    status: 'draft', robots: 'noindex,follow',
+  },
+];
+
 export function collectionPathForTheme(theme: string): string {
   const definition = THEMES[theme];
   if (definition === undefined) throw new Error(`Unknown generated-library theme: ${theme}.`);
@@ -243,12 +314,18 @@ export function validateGeneratedLibrarySeeds(seeds: GeneratedLibrarySeeds): voi
   assertUnique(seeds.cards.map(({ sourceFile }) => sourceFile), 'portrait final path');
 }
 
-export function buildGeneratedLibrarySeeds(plan: GeneratedLibraryPlan): GeneratedLibrarySeeds {
-  const collections = NEW_COLLECTIONS.map((seed) => ({
+export function buildGeneratedLibrarySeeds(
+  plan: GeneratedLibraryPlan,
+  campaign: GeneratedLibraryCampaign = GENERATED_LIBRARY_DEFAULT_CAMPAIGN,
+): GeneratedLibrarySeeds {
+  const collectionDefinitions = campaign.name === 'upcoming-holidays-2026-09'
+    ? UPCOMING_HOLIDAYS_COLLECTIONS
+    : NEW_COLLECTIONS;
+  const collections = collectionDefinitions.map((seed) => ({
     ...seed,
     relatedPaths: [
       seed.parentPath,
-      ...NEW_COLLECTIONS.filter((candidate) => candidate.parentPath === seed.parentPath && candidate.path !== seed.path)
+      ...collectionDefinitions.filter((candidate) => candidate.parentPath === seed.parentPath && candidate.path !== seed.path)
         .map(({ path }) => path),
     ],
   }));

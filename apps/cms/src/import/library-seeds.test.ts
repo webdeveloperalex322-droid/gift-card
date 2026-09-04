@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GeneratedLibraryPlan, NormalizedGeneratedManifestRow } from './library-manifest';
+import {
+  UPCOMING_HOLIDAYS_2026_09_CAMPAIGN,
+  type GeneratedLibraryPlan,
+  type NormalizedGeneratedManifestRow,
+} from './library-manifest';
 import {
   buildGeneratedLibrarySeeds,
   collectionPathForTheme,
@@ -101,5 +105,40 @@ describe('generated library seeds', () => {
     expect(() => buildGeneratedLibrarySeeds(plan([candidate({
       finalPath: `final/${'a'.repeat(81)}.jpg`, fileName: `${'a'.repeat(81)}.jpg`,
     })]))).toThrow(/filename exceeds 68/u);
+  });
+
+  it.each([
+    ['День воспитателя', '/otkrytki/prazdniki/27-sentyabrya'],
+    ['День пожилых людей', '/otkrytki/prazdniki/1-oktyabrya'],
+    ['День отца', '/otkrytki/prazdniki/den-ottsa'],
+    ['День бабушек и дедушек', '/otkrytki/prazdniki/28-oktyabrya'],
+    ['День народного единства', '/otkrytki/prazdniki/4-noyabrya'],
+    ['День сотрудника органов внутренних дел', '/otkrytki/prazdniki/10-noyabrya'],
+    ['День бухгалтера', '/otkrytki/prazdniki/21-noyabrya'],
+    ['День учителя', '/otkrytki/prazdniki/den-uchitelya'],
+    ['День матери', '/otkrytki/prazdniki/den-materi'],
+    ['Новый год', '/otkrytki/prazdniki/novyy-god'],
+  ])('maps the upcoming theme %s to %s', (theme, path) => {
+    expect(collectionPathForTheme(theme)).toBe(path);
+  });
+
+  it('emits only the seven approved missing collection seeds for upcoming holidays', () => {
+    const seeds = buildGeneratedLibrarySeeds(plan([candidate({
+      package: 'upcoming-holidays-2026-09', theme: 'День воспитателя',
+    })]), UPCOMING_HOLIDAYS_2026_09_CAMPAIGN);
+
+    expect(seeds.collections.map(({ path }) => path)).toEqual([
+      '/otkrytki/prazdniki/27-sentyabrya',
+      '/otkrytki/prazdniki/1-oktyabrya',
+      '/otkrytki/prazdniki/den-ottsa',
+      '/otkrytki/prazdniki/28-oktyabrya',
+      '/otkrytki/prazdniki/4-noyabrya',
+      '/otkrytki/prazdniki/10-noyabrya',
+      '/otkrytki/prazdniki/21-noyabrya',
+    ]);
+    expect(seeds.collections).toEqual(expect.not.arrayContaining([
+      expect.objectContaining({ path: '/otkrytki/prazdniki/den-uchitelya' }),
+    ]));
+    expect(seeds.collections.every(({ status, robots }) => status === 'draft' && robots === 'noindex,follow')).toBe(true);
   });
 });

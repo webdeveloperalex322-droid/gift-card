@@ -7,7 +7,11 @@ export const GENERATED_LIBRARY_PACKAGES = [
   'soviet-holidays-2026-08',
 ] as const;
 
-export type GeneratedLibraryPackageName = typeof GENERATED_LIBRARY_PACKAGES[number];
+export const UPCOMING_HOLIDAYS_2026_09_PACKAGES = ['upcoming-holidays-2026-09'] as const;
+
+export type GeneratedLibraryPackageName =
+  | typeof GENERATED_LIBRARY_PACKAGES[number]
+  | typeof UPCOMING_HOLIDAYS_2026_09_PACKAGES[number];
 
 export interface GeneratedManifestRowInput {
   readonly id: string;
@@ -36,10 +40,60 @@ export interface GeneratedLibraryExpectedCounts {
   readonly creationCandidates: number;
 }
 
+export interface GeneratedLibraryCampaign {
+  readonly name: 'generated-library-2026-08' | 'upcoming-holidays-2026-09';
+  readonly packageNames: readonly GeneratedLibraryPackageName[];
+  readonly expected: GeneratedLibraryExpectedCounts;
+  readonly approvalFile: string;
+  readonly reportFile: string;
+}
+
+export const GENERATED_LIBRARY_DEFAULT_CAMPAIGN: GeneratedLibraryCampaign = {
+  name: 'generated-library-2026-08',
+  packageNames: GENERATED_LIBRARY_PACKAGES,
+  expected: {
+    sourceRows: 1150,
+    uniqueSources: 1021,
+    pilotRows: 50,
+    pilotRepeatedOutside: 49,
+    sovietRepeatedInPopular: 80,
+    creationCandidates: 971,
+  },
+  approvalFile: '.generated-library-dry-run-approved.json',
+  reportFile: 'generated-library-import-report.json',
+};
+
+export const UPCOMING_HOLIDAYS_2026_09_CAMPAIGN: GeneratedLibraryCampaign = {
+  name: 'upcoming-holidays-2026-09',
+  packageNames: UPCOMING_HOLIDAYS_2026_09_PACKAGES,
+  expected: {
+    sourceRows: 212,
+    uniqueSources: 212,
+    pilotRows: 0,
+    pilotRepeatedOutside: 0,
+    sovietRepeatedInPopular: 0,
+    creationCandidates: 212,
+  },
+  approvalFile: '.upcoming-holidays-2026-09-dry-run-approved.json',
+  reportFile: 'upcoming-holidays-2026-09-import-report.json',
+};
+
+export const GENERATED_LIBRARY_CAMPAIGNS = [
+  GENERATED_LIBRARY_DEFAULT_CAMPAIGN,
+  UPCOMING_HOLIDAYS_2026_09_CAMPAIGN,
+] as const;
+
+export function generatedLibraryCampaignForName(name: string): GeneratedLibraryCampaign {
+  const campaign = GENERATED_LIBRARY_CAMPAIGNS.find((candidate) => candidate.name === name);
+  if (campaign === undefined) throw new Error(`Unknown generated-library campaign: ${name}.`);
+  return campaign;
+}
+
 export interface GeneratedLibraryInput {
   readonly packages: readonly GeneratedManifestPackage[];
   readonly readBytes: (path: string) => Promise<Uint8Array>;
   readonly expected: GeneratedLibraryExpectedCounts;
+  readonly campaign?: GeneratedLibraryCampaign;
 }
 
 export interface NormalizedGeneratedManifestRow extends GeneratedManifestRowInput {
@@ -79,6 +133,7 @@ const PRIORITY: Readonly<Record<GeneratedLibraryPackageName, number>> = {
   'popular-top10-2026-08': 1,
   'popular-next10-2026-08': 2,
   'soviet-holidays-2026-08': 3,
+  'upcoming-holidays-2026-09': 4,
 };
 
 function compareRows(left: NormalizedGeneratedManifestRow, right: NormalizedGeneratedManifestRow): number {
@@ -105,8 +160,9 @@ function isPopular(name: GeneratedLibraryPackageName): boolean {
 }
 
 export async function planGeneratedLibrary(input: GeneratedLibraryInput): Promise<GeneratedLibraryPlan> {
+  const campaign = input.campaign ?? GENERATED_LIBRARY_DEFAULT_CAMPAIGN;
   const packageNames = new Set(input.packages.map(({ name }) => name));
-  const missing = GENERATED_LIBRARY_PACKAGES.filter((name) => !packageNames.has(name));
+  const missing = campaign.packageNames.filter((name) => !packageNames.has(name));
   if (missing.length > 0) throw new Error(`Missing generated library packages: ${missing.join(', ')}.`);
 
   const rowsWithoutHashes = input.packages.flatMap(({ name, rows }) => rows.map((row, manifestOrder) => ({

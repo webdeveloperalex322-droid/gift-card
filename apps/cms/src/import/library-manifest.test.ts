@@ -1,7 +1,11 @@
 /* eslint-disable @typescript-eslint/require-await -- Byte-reader fakes implement an async filesystem boundary. */
 import { describe, expect, it } from 'vitest';
 
-import { planGeneratedLibrary } from './library-manifest';
+import {
+  GENERATED_LIBRARY_DEFAULT_CAMPAIGN,
+  UPCOMING_HOLIDAYS_2026_09_CAMPAIGN,
+  planGeneratedLibrary,
+} from './library-manifest';
 
 const bytes = new Map<string, Buffer>([
   ['pilot.png', Buffer.from('pilot-shared')],
@@ -96,5 +100,34 @@ describe('generated library manifest planner', () => {
       expected: { sourceRows: 3, uniqueSources: 3, pilotRows: 0, pilotRepeatedOutside: 0, sovietRepeatedInPopular: 0, creationCandidates: 3 },
     });
     expect(maximum).toBe(1);
+  });
+
+  it('plans the isolated upcoming-holidays campaign without weakening the August package requirement', async () => {
+    const rows = Array.from({ length: 212 }, (_, index) => row(
+      `upcoming-${String(index + 1)}`,
+      'День воспитателя',
+      `upcoming-${String(index + 1)}.png`,
+      `upcoming-${String(index + 1)}.jpg`,
+    ));
+    const input = {
+      packages: [{ name: 'upcoming-holidays-2026-09' as const, rows }],
+      readBytes: async (path: string) => Buffer.from(path),
+      expected: UPCOMING_HOLIDAYS_2026_09_CAMPAIGN.expected,
+    };
+
+    await expect(planGeneratedLibrary(input)).rejects.toThrow(/Missing generated library packages/u);
+    const plan = await planGeneratedLibrary({ ...input, campaign: UPCOMING_HOLIDAYS_2026_09_CAMPAIGN });
+
+    expect(UPCOMING_HOLIDAYS_2026_09_CAMPAIGN.packageNames).toEqual(['upcoming-holidays-2026-09']);
+    expect(UPCOMING_HOLIDAYS_2026_09_CAMPAIGN.expected).toEqual({
+      sourceRows: 212,
+      uniqueSources: 212,
+      pilotRows: 0,
+      pilotRepeatedOutside: 0,
+      sovietRepeatedInPopular: 0,
+      creationCandidates: 212,
+    });
+    expect(plan.creationCandidates).toHaveLength(212);
+    expect(GENERATED_LIBRARY_DEFAULT_CAMPAIGN.packageNames).toHaveLength(4);
   });
 });

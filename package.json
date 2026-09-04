@@ -19,6 +19,8 @@
     "content:import:apply": "pnpm --filter @otkritka/cms exec payload run ./scripts/import-pilot-content.ts -- --apply",
     "content:library:dry-run": "pnpm --filter @otkritka/cms run content:library:dry-run",
     "content:library:apply": "pnpm --filter @otkritka/cms run content:library:apply",
+    "content:upcoming:dry-run": "pnpm --filter @otkritka/cms run content:upcoming:dry-run",
+    "content:upcoming:apply": "pnpm --filter @otkritka/cms run content:upcoming:apply",
     "verify": "pnpm run check && pnpm run test && pnpm run test:seo"
   },
   "devDependencies": {

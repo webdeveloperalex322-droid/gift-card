@@ -10,8 +10,10 @@ import { commitTransaction, initTransaction, killTransaction, type Payload, type
 import { applyGeneratedLibrary, type GeneratedLibraryApplyStore } from '../src/import/library-apply';
 import { approveGeneratedLibraryDryRun, assertGeneratedLibraryDryRunApproved } from '../src/import/library-approval';
 import {
-  GENERATED_LIBRARY_PACKAGES,
+  GENERATED_LIBRARY_DEFAULT_CAMPAIGN,
+  generatedLibraryCampaignForName,
   planGeneratedLibrary,
+  type GeneratedLibraryCampaign,
   type GeneratedLibraryPackageName,
   type GeneratedManifestPackage,
   type GeneratedManifestRowInput,
@@ -43,6 +45,26 @@ export function parseGeneratedLibraryCli(args: readonly string[]): GeneratedLibr
     throw new Error('Choose exactly one generated library import mode: --dry-run or --apply.');
   }
   return args[0] === '--apply' ? 'apply' : 'dry-run';
+}
+
+export interface GeneratedLibraryImportCli {
+  readonly mode: GeneratedLibraryMode;
+  readonly campaign: GeneratedLibraryCampaign;
+}
+
+export function parseGeneratedLibraryImportCli(args: readonly string[]): GeneratedLibraryImportCli {
+  const campaignArguments = args.filter((argument) => argument === '--campaign');
+  if (campaignArguments.length === 0) {
+    return { mode: parseGeneratedLibraryCli(args), campaign: GENERATED_LIBRARY_DEFAULT_CAMPAIGN };
+  }
+  if (campaignArguments.length !== 1) throw new Error('Choose at most one generated-library campaign.');
+  const campaignIndex = args.indexOf('--campaign');
+  const campaignName = args[campaignIndex + 1];
+  if (campaignName === undefined || campaignName.startsWith('--')) {
+    throw new Error('Generated-library --campaign requires a campaign name.');
+  }
+  const modeArguments = args.filter((_, index) => index !== campaignIndex && index !== campaignIndex + 1);
+  return { mode: parseGeneratedLibraryCli(modeArguments), campaign: generatedLibraryCampaignForName(campaignName) };
 }
 
 export function requireGeneratedLibraryEnvironment(
@@ -444,15 +466,16 @@ export async function recordOrphanedImage(assetRoot: string, value: {
 
 async function main(): Promise<void> {
   loadEnvFiles();
-  const mode = parseGeneratedLibraryCli(process.argv.slice(2));
+  const { mode, campaign } = parseGeneratedLibraryImportCli(process.argv.slice(2));
   const environment = requireGeneratedLibraryEnvironment(process.env, workspaceRoot());
-  const packages = await Promise.all(GENERATED_LIBRARY_PACKAGES.map((name) => loadPackage(environment.assetRoot, name)));
+  const packages = await Promise.all(campaign.packageNames.map((name) => loadPackage(environment.assetRoot, name)));
   const plan = await planGeneratedLibrary({
     packages,
     readBytes: (path) => readFile(path),
-    expected: { sourceRows: 1150, uniqueSources: 1021, pilotRows: 50, pilotRepeatedOutside: 49, sovietRepeatedInPopular: 80, creationCandidates: 971 },
+    expected: campaign.expected,
+    campaign,
   });
-  const seeds = buildGeneratedLibrarySeeds(plan);
+  const seeds = buildGeneratedLibrarySeeds(plan, campaign);
   const payload = await initializePayload();
   const store = createPayloadGeneratedLibraryStore(payload, environment.actorEmail);
   const preflightInput = { actorEmail: environment.actorEmail, plan, seeds, store, readBytes: (path: string) => readFile(path) };
@@ -460,10 +483,10 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ ...preflight, preparedCards: preflight.preparedCards.length }));
   if (preflight.blockingErrors.length > 0) throw new Error(`Generated library preflight blocked by ${String(preflight.blockingErrors.length)} error(s).`);
   if (mode === 'dry-run') {
-    await approveGeneratedLibraryDryRun(environment.assetRoot, environment.actorEmail, preflight);
+    await approveGeneratedLibraryDryRun(environment.assetRoot, environment.actorEmail, preflight, campaign);
     return;
   }
-  await assertGeneratedLibraryDryRunApproved(environment.assetRoot, environment.actorEmail, preflight.fingerprint);
+  await assertGeneratedLibraryDryRunApproved(environment.assetRoot, environment.actorEmail, preflight.fingerprint, campaign);
   const applied = await applyGeneratedLibrary({
     ...preflightInput, preflight,
     recordOrphanedImage: (value) => recordOrphanedImage(environment.assetRoot, value),
@@ -473,7 +496,7 @@ async function main(): Promise<void> {
     duplicateGroups: plan.groups.filter(({ rows }) => rows.length > 1).length,
     representativeAliases: plan.aliases,
   };
-  await writeReport(resolve(environment.assetRoot, 'generated-library-import-report.json'), report);
+  await writeReport(resolve(environment.assetRoot, campaign.reportFile), report);
   console.log(JSON.stringify(report));
 }
 

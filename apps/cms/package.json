@@ -17,6 +17,8 @@
     "content:import:dry-run": "payload run ./scripts/import-pilot-content.ts -- --dry-run",
     "content:library:apply": "payload run ./scripts/import-generated-library.ts -- --apply",
     "content:library:dry-run": "payload run ./scripts/import-generated-library.ts -- --dry-run",
+    "content:upcoming:apply": "payload run ./scripts/import-generated-library.ts -- --campaign upcoming-holidays-2026-09 --apply",
+    "content:upcoming:dry-run": "payload run ./scripts/import-generated-library.ts -- --campaign upcoming-holidays-2026-09 --dry-run",
     "dev": "next dev --port 3011",
     "ensure-db": "node scripts/ensure-database.mjs",
     "generate:importmap": "payload generate:importmap",

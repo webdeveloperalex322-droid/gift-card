@@ -8,6 +8,7 @@ import {
   assertGeneratedLibraryActor,
   createPayloadGeneratedLibraryStore,
   parseGeneratedLibraryCli,
+  parseGeneratedLibraryImportCli,
   requireGeneratedLibraryEnvironment,
   recordOrphanedImage,
   resolveGeneratedLibraryAssetPath,
@@ -23,6 +24,28 @@ describe('generated library CLI', () => {
     expect(() => parseGeneratedLibraryCli(['--dry-run', '--apply'])).toThrow(/exactly one/u);
     expect(parseGeneratedLibraryCli(['--dry-run'])).toBe('dry-run');
     expect(parseGeneratedLibraryCli(['--apply'])).toBe('apply');
+  });
+
+  it('selects the isolated upcoming package, approval, and report configuration', () => {
+    const upcoming = parseGeneratedLibraryImportCli(['--campaign', 'upcoming-holidays-2026-09', '--dry-run']);
+    const august = parseGeneratedLibraryImportCli(['--apply']);
+
+    expect(upcoming).toMatchObject({
+      mode: 'dry-run',
+      campaign: {
+        packageNames: ['upcoming-holidays-2026-09'],
+        approvalFile: '.upcoming-holidays-2026-09-dry-run-approved.json',
+        reportFile: 'upcoming-holidays-2026-09-import-report.json',
+      },
+    });
+    expect(august).toMatchObject({
+      mode: 'apply',
+      campaign: {
+        packageNames: ['pilot-2026-08', 'popular-top10-2026-08', 'popular-next10-2026-08', 'soviet-holidays-2026-08'],
+        approvalFile: '.generated-library-dry-run-approved.json',
+        reportFile: 'generated-library-import-report.json',
+      },
+    });
   });
 
   it('requires an explicit asset root and AI editor email', () => {
