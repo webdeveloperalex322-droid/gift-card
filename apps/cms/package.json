@@ -23,6 +23,9 @@
     "ensure-db": "node scripts/ensure-database.mjs",
     "generate:importmap": "payload generate:importmap",
     "generate:types": "payload generate:types",
+    "images:s3:apply": "tsx scripts/sync-images-to-s3.ts --apply",
+    "images:s3:check": "tsx scripts/sync-images-to-s3.ts --check",
+    "images:s3:dry-run": "tsx scripts/sync-images-to-s3.ts --dry-run",
     "start": "next start --port 3011"
   },
   "dependencies": {

@@ -18,6 +18,7 @@ const alias = {
   // объекта сохраняется, первое совпадение выигрывает.
   '@otkritka/shared': resolvePath('./packages/shared/src/index.ts'),
   '@otkritka/images/media': resolvePath('./packages/images/src/media.ts'),
+  '@otkritka/images/s3': resolvePath('./packages/images/src/s3.ts'),
   '@otkritka/images': resolvePath('./packages/images/src/index.ts'),
 };
 

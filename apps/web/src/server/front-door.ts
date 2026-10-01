@@ -44,7 +44,8 @@ import {
 import { errorPageRobots, robotsMetaTag } from '../seo/robots-directive.js';
 import type { AstroNodeHandler } from './astro-app.js';
 import type { MaintenanceDecision } from './maintenance.js';
-import { decideMediaRequest, type MediaDecision } from './media-files.js';
+import { decideMediaRequest, type MediaDecision, type MediaSource } from './media-files.js';
+import { tryServeObject } from './object-files.js';
 import { tryServeStaticFile } from './static-files.js';
 
 /**
@@ -90,6 +91,11 @@ const BAD_REQUEST_TEXT = [
 
 const SERVER_ERROR_TEXT = '500 Internal Server Error\n';
 
+const SERVICE_UNAVAILABLE_TEXT = '503 Service Unavailable\n';
+
+/** `Retry-After` для `/media`, когда не отвечает бакет: минута — сетевой сбой, а не обслуживание. */
+const MEDIA_RETRY_AFTER_SECONDS = 60;
+
 export interface FrontDoorOptions {
   /** Обработчик собранного приложения Astro. */
   readonly astroHandler: AstroNodeHandler;
@@ -98,15 +104,16 @@ export interface FrontDoorOptions {
   /** Путь админки Payload из `PAYLOAD_ADMIN_PATH`. */
   readonly adminPath: string;
   /**
-   * Корень ПУБЛИЧНЫХ производных изображений (`IMAGE_STORAGE_DERIVATIVES_ROOT`).
+   * Источник ПУБЛИЧНЫХ производных изображений: корень локальной ФС
+   * (`IMAGE_STORAGE_DERIVATIVES_ROOT`) или бакет S3 (`IMAGE_STORAGE_DRIVER=s3`).
    *
-   * Функция, а не строка, и вызывается только на запросе к `/media/...`:
+   * Функция, а не значение, и вызывается только на запросе к `/media/...`:
    * значение обязательное и без дефолта, но без изображений сайт поднимается и
    * страницы отдаёт. Валить старт сервера из-за незаполненного параметра
    * означало бы блокировать работу, которая от него не зависит, — то же решение
    * и по той же причине принято в `apps/cms` (`src/images/storage-env.ts`).
    */
-  readonly mediaRoot: () => string;
+  readonly mediaSource: () => MediaSource;
   /** Куда писать диагностику. Отдельным параметром, чтобы тест не читал stderr. */
   readonly logError: (message: string) => void;
   /**
@@ -118,7 +125,7 @@ export interface FrontDoorOptions {
    *
    *   1. значение не должно застыть на ИМПОРТЕ модуля. Порядок «сначала
    *      подмешать корневой `.env`, потом собрать обработчик» держится тем, что
-   *      окружение читается позже — ровно как у `mediaRoot` рядом;
+   *      окружение читается позже — ровно как у `mediaSource` рядом;
    *   2. правило одно на два входа (наш сервер и middleware Astro), и проверяется
    *      оно юнит-тестом на подставленном решении, а не поднятым сервером с
    *      подкрученным `process.env`.
@@ -295,7 +302,7 @@ export function createFrontDoor(
 }
 
 /**
- * Отдаёт производную изображения из корня хранилища.
+ * Отдаёт производную изображения из хранилища (локальная ФС или бакет S3).
  *
  * Запрос, признанный обращением к производной, приложению Astro не передаётся:
  * пространство файлов и пространство страниц разные, и промах по файлу здесь —
@@ -321,13 +328,45 @@ async function serveMedia(
     return;
   }
 
-  const served = await tryServeStaticFile({
-    headers: decision.headers,
-    relativePath: decision.key,
-    req,
-    res,
-    root: context.mediaRoot(),
-  });
+  const source = context.mediaSource();
+  let served: boolean;
+  if (source.kind === 's3') {
+    try {
+      served = await tryServeObject({
+        headers: decision.headers,
+        key: decision.key,
+        req,
+        res,
+        store: source.store,
+      });
+    } catch (error) {
+      if (res.headersSent) {
+        throw error;
+      }
+      // Бакет недоступен (сеть, таймаут, 5xx, отказ в доступе): по таблице
+      // статусов это «сервис недоступен» — 503 + Retry-After, а не 500. Кеш
+      // перед сервером при этом может отдать то, что уже лежит у него.
+      context.logError(
+        `503 на «${req.url ?? '—'}»: хранилище изображений не ответило: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      res.writeHead(503, {
+        'Cache-Control': 'no-store',
+        'Content-Length': String(Buffer.byteLength(SERVICE_UNAVAILABLE_TEXT)),
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Retry-After': String(MEDIA_RETRY_AFTER_SECONDS),
+      });
+      res.end(SERVICE_UNAVAILABLE_TEXT);
+      return;
+    }
+  } else {
+    served = await tryServeStaticFile({
+      headers: decision.headers,
+      relativePath: decision.key,
+      req,
+      res,
+      root: source.root,
+    });
+  }
 
   if (!served) {
     await respondNotFound(res, context);

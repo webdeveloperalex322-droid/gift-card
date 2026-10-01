@@ -19,8 +19,15 @@
  */
 import path from 'node:path';
 
+import {
+  createS3ImageBuckets,
+  resolveImageStorageDriver,
+  resolveS3StorageConfig,
+} from '@otkritka/images/s3';
+
 import { loadEnvFiles, workspaceRoot } from '../env.mjs';
 import { createLocalFsImageStorage } from './local-fs-storage';
+import { createS3ImageStorage } from './s3-storage';
 import type { ImageStorage } from './storage';
 
 /** Корень ПУБЛИЧНЫХ производных: это дерево `apps/web` отдаёт по `/media/...`. */
@@ -70,11 +77,15 @@ export function resolveImageStorageRoots(env: StorageEnv): ImageStorageRoots {
 /**
  * Собирает адаптер хранилища по окружению.
  *
- * До переезда на S3 (открытая часть Ч-03) реализация одна — локальная ФС. Выбор
- * реализации живёт здесь и только здесь: вызывающий код знает лишь интерфейс
- * {@link ImageStorage}, поэтому переезд не трогает ни хуки, ни коллекции.
+ * Реализацию выбирает `IMAGE_STORAGE_DRIVER` (`local-fs` | `s3`, пусто —
+ * `local-fs`). Выбор живёт здесь и только здесь: вызывающий код знает лишь
+ * интерфейс {@link ImageStorage}, поэтому переезд не трогает ни хуки, ни
+ * коллекции. При `s3` корни локальной ФС не читаются вовсе.
  */
 export function createImageStorageFromEnv(env: StorageEnv): ImageStorage {
+  if (resolveImageStorageDriver(env) === 's3') {
+    return createS3ImageStorage(createS3ImageBuckets(resolveS3StorageConfig(env)));
+  }
   return createLocalFsImageStorage(resolveImageStorageRoots(env));
 }
 

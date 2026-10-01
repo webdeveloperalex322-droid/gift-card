@@ -82,7 +82,7 @@ function frontDoor(env: Record<string, string | undefined>): ReturnType<typeof c
     clientRoot,
     logError: (message) => errors.push(message),
     maintenance: () => maintenanceMode(env),
-    mediaRoot: () => {
+    mediaSource: () => {
       throw new Error('Корень производных в этом тесте не нужен: до него доходить не должно.');
     },
   });
@@ -231,7 +231,7 @@ describe('провал чтения тела 404 не кешируется на�
       clientRoot: root,
       logError: (message) => logged.push(message),
       maintenance: () => maintenanceMode({}),
-      mediaRoot: () => {
+      mediaSource: () => {
         throw new Error('Корень производных в этом наборе не нужен.');
       },
     });

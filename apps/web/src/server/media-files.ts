@@ -49,6 +49,13 @@
 import path from 'node:path';
 
 import { derivativeCacheHeaders, derivativeKeyFromPublicPath } from '@otkritka/images/media';
+import {
+  createS3ImageBuckets,
+  resolveImageStorageDriver,
+  resolveS3StorageConfig,
+  type ObjectStore,
+  type S3StorageConfig,
+} from '@otkritka/images/s3';
 
 /**
  * Корень ПУБЛИЧНЫХ производных. Имя переменной совпадает с тем, по которому
@@ -150,4 +157,49 @@ export function resolveMediaRoot(
   }
   const value = raw.trim();
   return path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceRoot, value);
+}
+
+/**
+ * Откуда читаются производные: каталог локальной ФС или бакет S3.
+ *
+ * Выбор — та же переменная `IMAGE_STORAGE_DRIVER`, по которой `apps/cms`
+ * решает, КУДА писать: одно значение на оба приложения, иначе CMS писала бы в
+ * бакет, а сайт искал бы файлы на диске. Публичный путь от выбора не зависит —
+ * `/media/<ключ>` в обоих случаях (условие Ч-03 «тот же путь, другой origin»).
+ */
+export type MediaSource =
+  | { readonly kind: 'local-fs'; readonly root: string }
+  | { readonly kind: 's3'; readonly store: ObjectStore };
+
+/**
+ * Источник производных из окружения.
+ *
+ * @param createStore сборка хранилища бакета; параметром, чтобы тест не ходил в
+ *   сеть и не собирал настоящий клиент S3.
+ * @throws Error если драйвер не распознан или его параметры не заполнены.
+ */
+export function resolveMediaSource(
+  env: Readonly<Record<string, string | undefined>>,
+  workspaceRoot: string,
+  createStore: (config: S3StorageConfig) => ObjectStore = (config) =>
+    createS3ImageBuckets(config).derivatives,
+): MediaSource {
+  if (resolveImageStorageDriver(env) === 's3') {
+    return { kind: 's3', store: createStore(resolveS3StorageConfig(env)) };
+  }
+  return { kind: 'local-fs', root: resolveMediaRoot(env, workspaceRoot) };
+}
+
+/**
+ * Ленивый источник с кешем УСПЕХА: клиент S3 держит пул соединений, и собирать
+ * его на каждый запрос `/media` незачем. Отказ не кешируется — незаполненный
+ * параметр даёт 500 с причиной в журнале на каждом запросе, пока его не
+ * исправят, а не однажды.
+ */
+export function createMediaSourceResolver(resolve: () => MediaSource): () => MediaSource {
+  let cached: MediaSource | undefined;
+  return () => {
+    cached ??= resolve();
+    return cached;
+  };
 }

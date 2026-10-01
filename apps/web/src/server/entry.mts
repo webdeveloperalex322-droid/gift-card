@@ -36,7 +36,7 @@ import { serverEnv, workspaceRoot } from '../server-env.js';
 import { loadBuiltAstroApp } from './astro-app.js';
 import { createFrontDoor } from './front-door.js';
 import { maintenanceMode } from './maintenance.js';
-import { resolveMediaRoot } from './media-files.js';
+import { createMediaSourceResolver, resolveMediaSource } from './media-files.js';
 
 /**
  * Порт по умолчанию нужен только когда его не назвали ни окружение (`PORT`), ни
@@ -70,14 +70,14 @@ export const handler = createFrontDoor({
    */
   maintenance: () => maintenanceMode(serverEnv()),
   /**
-   * Корень производных вычисляется ЛЕНИВО — при первом запросе к `/media/...`, а
-   * не при старте. Причина в шапке `FrontDoorOptions.mediaRoot`: без корня сайт
+   * Источник производных вычисляется ЛЕНИВО — при первом запросе к `/media/...`, а
+   * не при старте. Причина в шапке `FrontDoorOptions.mediaSource`: без него сайт
    * работоспособен во всём, кроме изображений, и валить старт означало бы
    * блокировать работу, которая от параметра не зависит. Пустое значение всё
    * равно не подменяется дефолтом — оно даёт внятную ошибку и 500 на запрос
    * файла.
    */
-  mediaRoot: () => resolveMediaRoot(serverEnv(), workspaceRoot()),
+  mediaSource: createMediaSourceResolver(() => resolveMediaSource(serverEnv(), workspaceRoot())),
 });
 
 function resolvePort(): number {

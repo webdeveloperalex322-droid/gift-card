@@ -64,6 +64,15 @@ describe('ключ производной из пути запроса', () => {
     }
   });
 
+  it('ключ вне пространства производных не отдаётся, даже правильной формы', () => {
+    // В общем бакете (S3, один бакет на оба пространства) оригиналы лежат рядом
+    // с производными под префиксом originals/. Форма ключа у них та же, поэтому
+    // отличает их только префикс — без этой проверки /media/originals/... отдал
+    // бы оригинал (ТЗ §6.1).
+    expect(derivativeKeyFromPublicPath('/media/originals/0123456789abcdef0123456789abcdef.jpg')).toBeNull();
+    expect(derivativeKeyFromPublicPath('/media/other/a1b2c3d4/otkrytka-640.webp')).toBeNull();
+  });
+
   it('каталог без имени файла ключом не является', () => {
     expect(derivativeKeyFromPublicPath('/media/cards')).toBeNull();
     expect(derivativeKeyFromPublicPath('/media/cards/a1b2c3d4')).toBeNull();
