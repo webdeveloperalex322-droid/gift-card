@@ -1,0 +1,85 @@
+# Самостоятельный стек otkritka рядом с videocard.
+# Порты наружу НЕ публикуются в 0.0.0.0 — только на loopback, host nginx
+# проксирует их по домену dobrye-otkrytki.ru (как videocard -> 127.0.0.1:8080).
+# Запуск: docker compose -f docker-compose.prod.yml --env-file otkritka.prod.env up -d
+
+name: otkritka
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [internal]
+
+  cms:
+    image: otkritka:latest
+    restart: unless-stopped
+    working_dir: /app/apps/cms
+    command: ["pnpm", "run", "start"]            # next start --port 3011
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      PAYLOAD_SECRET: ${PAYLOAD_SECRET}
+      PAYLOAD_ADMIN_PATH: ${PAYLOAD_ADMIN_PATH}
+      PAYLOAD_ADMIN_EMAIL: ${PAYLOAD_ADMIN_EMAIL}
+      PAYLOAD_ADMIN_PASSWORD: ${PAYLOAD_ADMIN_PASSWORD}
+      SITE_URL: ${SITE_URL}
+      IMAGE_STORAGE_DERIVATIVES_ROOT: ${IMAGE_STORAGE_DERIVATIVES_ROOT}
+      IMAGE_STORAGE_ORIGINALS_ROOT: ${IMAGE_STORAGE_ORIGINALS_ROOT}
+      # cms умеет накатывать схему (в отличие от собранного web): пусть пушит.
+      PAYLOAD_DB_PUSH: "true"
+    volumes:
+      - storage:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3011:3011"
+    networks: [internal]
+
+  web:
+    image: otkritka:latest
+    restart: unless-stopped
+    working_dir: /app/apps/web
+    command: ["pnpm", "run", "start"]            # node scripts/start-server.mjs -> dist/server/entry.mjs
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      PAYLOAD_SECRET: ${PAYLOAD_SECRET}
+      PAYLOAD_ADMIN_PATH: ${PAYLOAD_ADMIN_PATH}
+      SITE_URL: ${SITE_URL}
+      HOST: ${HOST}
+      PORT: ${PORT}
+      IMAGE_STORAGE_DERIVATIVES_ROOT: ${IMAGE_STORAGE_DERIVATIVES_ROOT}
+      IMAGE_STORAGE_ORIGINALS_ROOT: ${IMAGE_STORAGE_ORIGINALS_ROOT}
+      # Собранный web НЕ резолвит drizzle-kit/api -> схему он не пушит.
+      PAYLOAD_DB_PUSH: "false"
+    volumes:
+      - storage:/data
+    depends_on:
+      db:
+        condition: service_healthy
+      cms:
+        condition: service_started
+    ports:
+      - "127.0.0.1:4321:4321"
+    networks: [internal]
+
+volumes:
+  pgdata:
+  storage:
+
+networks:
+  internal:
+    driver: bridge
