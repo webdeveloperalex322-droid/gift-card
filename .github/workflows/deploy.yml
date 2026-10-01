@@ -26,9 +26,11 @@ jobs:
       - name: Lint + типы
         run: pnpm run check
       - name: Юнит-тесты
-        run: pnpm run test
-      # test:seo не гоняется здесь: ему нужен поднятый сервер + БД (стенд этапа 7).
-      # Добавить отдельным job со службой postgres, когда стенд будет описан.
+        # Только проект unit (~2170 тестов). Проект api и tests/seo требуют
+        # живого Postgres + env (PAYLOAD_ADMIN_PATH, DATABASE_URL, PAYLOAD_SECRET)
+        # и накатывают схему — это стенд этапа 7, отдельным job со службой
+        # postgres, когда он будет описан. Пока CI = типы/линт + unit.
+        run: pnpm exec vitest run --project unit
 
   # Деплой в прод ТОЛЬКО из main и только при зелёных checks.
   deploy:

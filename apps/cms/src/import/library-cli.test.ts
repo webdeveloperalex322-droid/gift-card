@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Payload } from 'payload';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import {
   assertGeneratedLibraryActor,
@@ -52,10 +52,14 @@ describe('generated library CLI', () => {
     expect(() => requireGeneratedLibraryEnvironment({}, 'D:/workspace')).toThrow(/GENERATED_LIBRARY_ROOT/u);
     expect(() => requireGeneratedLibraryEnvironment({ GENERATED_LIBRARY_ROOT: '.local' }, 'D:/workspace'))
       .toThrow(/AI_EDITOR_EMAIL/u);
+    // assetRoot считается production-кодом через path.resolve(cwd, raw) —
+    // ожидаемое берём тем же resolve, разделители ОС не хардкодим (иначе тест
+    // зелен на Windows и красен на Linux-CI).
+    const workspace = 'D:/workspace';
     expect(requireGeneratedLibraryEnvironment({
       GENERATED_LIBRARY_ROOT: '.local', AI_EDITOR_EMAIL: 'ai@example.test',
-    }, 'D:/workspace')).toEqual({
-      assetRoot: 'D:\\workspace\\.local', actorEmail: 'ai@example.test',
+    }, workspace)).toEqual({
+      assetRoot: resolve(workspace, '.local'), actorEmail: 'ai@example.test',
     });
   });
 
