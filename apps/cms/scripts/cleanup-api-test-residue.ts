@@ -20,8 +20,10 @@
  * у изображений заголовок `Э6-02: …` даёт стем `e6-02-…`. Реальный контент —
  * транслитерация русских названий (`otkrytka-mame-…`, `8-marta`, `den-materi`),
  * он не начинается ни с `e60`, ни с `p0-`. Скрипт не верит этому на слово:
- * перед удалением он печатает и число отобранных записей, и число оставшихся, и
- * ОТКАЗЫВАЕТСЯ работать, если сумма не совпадает с общим числом строк в таблице.
+ * перед удалением он печатает отобранные записи поимённо и примеры оставшихся, и
+ * ОТКАЗЫВАЕТСЯ работать, если маркер отобрал больше половины таблицы
+ * ({@link MAX_HARNESS_SHARE}) — так выглядел бы маркер, начавший задевать
+ * реальный контент.
  *
  * ПОЧЕМУ ФИЛЬТР ЗАПИСАН ЗДЕСЬ ЗАНОВО, А НЕ ВЗЯТ ИЗ ГАРНИЗОНА. Тот же маркер
  * живёт в `src/testing/content-residue.ts` (им проверяется, что база чистая), но
@@ -34,33 +36,34 @@
  * хуки удаления: у изображения — снятие файлов с диска, у подборки — запрет
  * удаления узла с потомками (поэтому порядок: сначала карточки, потом подборки
  * от самых глубоких, потом изображения). SQL снёс бы строки и оставил файлы.
- * Три служебные таблицы — реестр путей, реестр имён и журнал — удаляются
- * запросом: хуков удаления у них нет, а `seo-history` намеренно переживает
- * удаление документа, то есть сама себя за ним не уберёт.
+ *
+ * ЧЕГО СКРИПТ НЕ УДАЛЯЕТ (исправление ревью от 2026-10-01). Реестр путей
+ * (`content_path_claims`), реестр имён файлов (`image_name_claims`) и журнал
+ * `seo_history` скрипт только СЧИТАЕТ. Claim по правилу CLAUDE.md «не
+ * освобождается и не переиспользуется», а журнал намеренно переживает удаление
+ * документа — это след аудита. Первая версия скрипта удаляла строки всех трёх
+ * таблиц SQL-запросом и успела отработать с `--apply`; законность того
+ * освобождения — вопрос человеку (`docs/otkrytye-voprosy.md`), а не решение
+ * скрипта.
  */
 import type { Payload } from 'payload';
+
+import { type CleanupMode, cleanupMode } from '../src/scripts/cleanup-mode';
 
 /** Маркер записи харнесса в начале slug, стема файла или адреса почты. */
 const SLUG_MARKER = /^(p0-|e60\d)/;
 const IMAGE_MARKER = /^e6-0\d/;
 
-/** Тот же маркер для SQL — служебные таблицы читаются и чистятся запросом. */
+/** Тот же маркер для SQL — служебные таблицы только читаются запросом. */
 const SQL_PATH_MARKER = "'/(p0-|e60[0-9])'";
 const SQL_IMAGE_MARKER = "'^e6-0[0-9]'";
 
-export type CleanupMode = 'apply' | 'dry-run';
-
-export function cleanupMode(args: readonly string[]): CleanupMode {
-  if (args.length === 0 || (args.length === 1 && args[0] === '--dry-run')) {
-    return 'dry-run';
-  }
-  if (args.length === 1 && args[0] === '--apply') {
-    return 'apply';
-  }
-  throw new Error(
-    `Неизвестные аргументы уборки: ${args.join(' ') || '—'}. Допустимо --dry-run или --apply.`,
-  );
-}
+/**
+ * Доля таблицы, выше которой отбор считается сломанным маркером, а не остатками.
+ * Остатков харнесса в любой таблице — единицы процентов; половина и больше
+ * означает, что маркер задевает реальный контент.
+ */
+const MAX_HARNESS_SHARE = 0.5;
 
 interface Doc {
   readonly email?: unknown;
@@ -114,9 +117,9 @@ function describe(doc: Doc): string {
 /**
  * Доказательство, что фильтр отбирает ровно записи харнесса.
  *
- * Печатает обе части выборки и требует, чтобы они складывались в целое. Если
- * маркер однажды начнёт задевать реальный контент, это увидит человек, а не
- * узнает после удаления.
+ * Печатает обе части выборки и останавливает уборку, если маркер отобрал
+ * подозрительно большую долю таблицы. Если маркер однажды начнёт задевать
+ * реальный контент, это увидит человек, а не узнает после удаления.
  */
 function report(what: string, docs: readonly Doc[]): readonly Doc[] {
   const harness = docs.filter(marked);
@@ -125,8 +128,12 @@ function report(what: string, docs: readonly Doc[]): readonly Doc[] {
     `${what}: всего ${String(docs.length)}, харнесса ${String(harness.length)}, ` +
       `реальных ${String(real.length)}`,
   );
-  if (harness.length + real.length !== docs.length) {
-    throw new Error(`Разбор ${what} потерял записи — уборка остановлена.`);
+  if (docs.length > 0 && harness.length / docs.length > MAX_HARNESS_SHARE) {
+    throw new Error(
+      `${what}: маркер харнесса отобрал ${String(harness.length)} из ${String(docs.length)} ` +
+        'записей — больше половины таблицы. Так выглядит маркер, задевающий реальный ' +
+        'контент; уборка остановлена.',
+    );
   }
   const published = harness.filter((doc) => doc.status === 'published');
   if (published.length > 0) {
@@ -155,13 +162,6 @@ async function countRows(payload: Payload, sql: string): Promise<number> {
   }).pool;
   const { rows } = await pool.query<{ count: string }>(sql);
   return Number(rows.at(0)?.count ?? '0');
-}
-
-async function execute(payload: Payload, sql: string): Promise<void> {
-  const pool = (payload.db as unknown as {
-    pool: { query: (sql: string) => Promise<unknown> };
-  }).pool;
-  await pool.query(sql);
 }
 
 const SERVICE_TABLES: readonly { readonly sql: string; readonly what: string }[] = [
@@ -211,15 +211,10 @@ export async function runCleanup(payload: Payload, mode: CleanupMode): Promise<v
     await payload.delete({ collection: 'card-images', id: doc.id, overrideAccess: true });
   }
 
-  // Журнал — до аккаунтов: у `seo_history.changed_by_id` внешний ключ
-  // `ON DELETE SET NULL`, и удаление автора обезличило бы записи, которые всё
-  // равно уходят.
-  for (const table of SERVICE_TABLES) {
-    await execute(payload, `delete ${table.sql}`);
-  }
-
-  // Аккаунты прогонов последними: это действующие API-ключи, то есть доступ, а
-  // не мусор в таблице.
+  // Реестры и журнал не трогаются (см. шапку). Аккаунты прогонов последними:
+  // это действующие API-ключи, то есть доступ, а не мусор в таблице. Их записи
+  // в `seo_history` остаются, связь с автором обнулится (`ON DELETE SET NULL`),
+  // роль автора в журнале хранится отдельным полем и сохраняется.
   for (const doc of users) {
     await payload.delete({ collection: 'users', id: doc.id, overrideAccess: true });
   }
@@ -233,7 +228,8 @@ export async function runCleanup(payload: Payload, mode: CleanupMode): Promise<v
 }
 
 // `payload run` исполняет модуль напрямую; в тестовом процессе конфиг и база не
-// поднимаются — Vitest импортирует только разбор аргументов.
+// поднимаются. Разбор аргументов вынесен в `src/scripts/cleanup-mode.ts` и
+// покрыт тестом там.
 if (process.env.VITEST !== 'true') {
   const [{ getPayload }, { default: config }] = await Promise.all([
     import('payload'),

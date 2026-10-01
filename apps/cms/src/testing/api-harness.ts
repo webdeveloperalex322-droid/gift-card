@@ -106,10 +106,20 @@ let payloadPromise: Promise<Payload> | null = null;
  * Остальной конфиг — тот самый, что обслуживает продакшн-запросы: коллекции,
  * хуки и access control не подменяются ничем, иначе набор проверял бы не тот
  * код, который работает.
+ *
+ * ПРОВЕРКА БАЗЫ ДО PUSH. Push выполняется внутри `connect()` адаптера, а
+ * {@link assertConnectedToTestDatabase} — только после `getPayload`, то есть уже
+ * после наката схемы. Если подмена однажды тихо перестанет работать, push ушёл
+ * бы в КОНТЕНТНУЮ базу раньше, чем сработала бы проверка. Поэтому `connect`
+ * обёрнут: пул создаётся здесь, Postgres спрашивается, к какой базе он
+ * подключён, и только при совпадении управление отдаётся штатному `connect` —
+ * а он, найдя готовый пул, использует ровно его (`if (!this.pool)` в
+ * `@payloadcms/db-postgres/dist/connect.js`). Push идёт через проверенный пул.
  */
 async function testDatabaseConfig(): Promise<SanitizedConfig> {
   const sanitized = await config;
   const url = apiTestDatabaseUrl();
+  const expected = databaseNameOf(url);
   const original = sanitized.db;
 
   return {
@@ -121,6 +131,29 @@ async function testDatabaseConfig(): Promise<SanitizedConfig> {
         const postgres = adapter as unknown as PostgresAdapter;
         postgres.poolOptions = { ...postgres.poolOptions, connectionString: url };
         postgres.push = true;
+
+        const originalConnect = adapter.connect;
+        if (originalConnect === undefined) {
+          throw new Error('У адаптера базы нет connect(): подмену тестовой базы проверить нечем.');
+        }
+        adapter.connect = async (options) => {
+          if (postgres.pool === undefined) {
+            postgres.pool = new postgres.pg.Pool(postgres.poolOptions);
+          }
+          const { rows } = await postgres.pool.query<{ name: string }>(
+            'select current_database() as name',
+          );
+          const name = rows.at(0)?.name;
+          if (name !== expected) {
+            await postgres.pool.end();
+            throw new Error(
+              `Пул тестов подключён к базе ${String(name)}, а должен к ${expected}. ` +
+                'Подмена базы сломана; push схемы НЕ выполнен — остановлено до него, ' +
+                'чтобы не тронуть контентную базу.',
+            );
+          }
+          await originalConnect.call(adapter, options);
+        };
         return adapter;
       },
     },
