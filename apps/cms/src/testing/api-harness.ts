@@ -28,12 +28,38 @@
  * `SEO_ACCEPTANCE: SKIPPED` за `PASSED`. Поэтому {@link getTestPayload} падает с
  * внятным текстом, а не пропускает набор.
  *
+ * НА КАКОЙ БАЗЕ ОН РАБОТАЕТ (решение человека 2026-09-03). Не на контентной:
+ * `DATABASE_URL` даёт только хост и учётные данные, а набор работает на
+ * отдельной базе `<контентная>_api_tests`, которую сам создаёт и каждый прогон
+ * начинает с пустой схемы. Причина и цена решения — в шапке
+ * `api-test-database.mjs`; коротко: фикстура Э6-02 обязана публиковать записи
+ * по-настоящему, а опубликованная запись в контентной базе попадает в живой
+ * каталог и в sitemap.
+ *
+ * КАК ИМЕННО ПОДМЕНЯЕТСЯ БАЗА. Не переменной окружения (её значение конфиг
+ * читает при загрузке модуля, то есть раньше любого кода харнесса), а обёрткой
+ * над `db.init` в САНИТИЗИРОВАННОМ конфиге: адаптер Postgres создаёт пул лениво,
+ * из `poolOptions`, уже после `init`. Экземпляр Payload при этом остаётся
+ * ЕДИНСТВЕННЫМ на процесс — `getPayload` кеширует его на `globalThis` по ключу
+ * `'default'` независимо от переданного конфига, — поэтому файлы маршрутов,
+ * которые импортируют настоящий конфиг, получают тот же экземпляр и ту же
+ * тестовую базу. Чтобы порядок вызовов не мог этого испортить, каждый вход
+ * харнесса ({@link restRaw}, {@link graphqlHttp}, {@link playgroundHttp})
+ * дожидается {@link getTestPayload} перед вызовом обработчика.
+ *
  * ЧТО ЗДЕСЬ НЕ ЖИВЁТ: ни одного правила проекта. Гарнизон только доставляет
  * запрос и возвращает ответ; все решения принимает конфиг Payload.
  */
 import { randomUUID } from 'node:crypto';
 
-import type { CollectionSlug, GlobalSlug, Payload, PayloadRequest } from 'payload';
+import type { PostgresAdapter } from '@payloadcms/db-postgres';
+import type {
+  CollectionSlug,
+  GlobalSlug,
+  Payload,
+  PayloadRequest,
+  SanitizedConfig,
+} from 'payload';
 import { formatNames, getPayload } from 'payload';
 
 import type { User } from '../payload-types';
@@ -47,6 +73,7 @@ import {
 import { GET as GRAPHQL_PLAYGROUND_GET } from '../app/(payload)/api/graphql-playground/route';
 import { POST as GRAPHQL_POST } from '../app/(payload)/api/graphql/route';
 import config from '../payload.config';
+import { apiTestDatabaseUrl, databaseNameOf, ensureApiTestDatabase } from './api-test-database.mjs';
 
 /**
  * Слаги коллекций и глобалов пробрасываются наружу из `payload`.
@@ -65,23 +92,116 @@ export type { CollectionSlug, GlobalSlug } from 'payload';
 let payloadPromise: Promise<Payload> | null = null;
 
 /**
- * Единственный экземпляр Payload на весь прогон.
+ * Конфиг, у которого база подменена на тестовую.
+ *
+ * Меняется РОВНО ДВА свойства адаптера, и оба — после его создания:
+ *   - `poolOptions.connectionString` — пул создаётся лениво, в `connect()`, из
+ *     этого поля (проверено по `@payloadcms/db-postgres/dist/connect.js`);
+ *   - `push: true` — тестовая база создаётся пустой, и без наката схемы в ней
+ *     нет ни одной таблицы. Это НЕ обход `PAYLOAD_DB_PUSH=false`: тот выключатель
+ *     защищает КОНТЕНТНУЮ базу от правки схемы (и от интерактивного вопроса
+ *     drizzle про потерю данных), а тестовую базу харнесс сам только что снёс —
+ *     терять в ней нечего, и вопрос не возникает.
+ *
+ * Остальной конфиг — тот самый, что обслуживает продакшн-запросы: коллекции,
+ * хуки и access control не подменяются ничем, иначе набор проверял бы не тот
+ * код, который работает.
+ */
+async function testDatabaseConfig(): Promise<SanitizedConfig> {
+  const sanitized = await config;
+  const url = apiTestDatabaseUrl();
+  const original = sanitized.db;
+
+  return {
+    ...sanitized,
+    db: {
+      ...original,
+      init: (args) => {
+        const adapter = original.init(args);
+        const postgres = adapter as unknown as PostgresAdapter;
+        postgres.poolOptions = { ...postgres.poolOptions, connectionString: url };
+        postgres.push = true;
+        return adapter;
+      },
+    },
+  };
+}
+
+/**
+ * Имя базы, к которой РЕАЛЬНО подключён экземпляр Payload.
+ *
+ * Спрашивается сам Postgres (`current_database()`), а не конфиг: вопрос стоит о
+ * факте подключения, и конфиг на него не отвечает — подмена базы могла не
+ * примениться.
+ */
+async function databaseNameOfConnection(payload: Payload): Promise<string | undefined> {
+  const postgres = payload.db as unknown as PostgresAdapter;
+  const { rows } = await postgres.pool.query<{ name: string }>('select current_database() as name');
+  return rows.at(0)?.name;
+}
+
+/**
+ * Имя базы прогона — для проверки «набор работает не на контентной базе».
+ *
+ * Экспортируется ради теста `tests/api/content-database-untouched.test.ts`:
+ * пакет `@payloadcms/db-postgres` из `tests/api` не разрешается (он зависимость
+ * `apps/cms`), поэтому спросить адаптер оттуда напрямую нельзя.
+ */
+export async function connectedDatabaseName(): Promise<string | undefined> {
+  return databaseNameOfConnection(await getTestPayload());
+}
+
+/**
+ * Требует, чтобы соединение вело в ТЕСТОВУЮ базу.
+ *
+ * Проверка не перестраховка, а единственное утверждение о факте: подмена базы
+ * держится на внутреннем устройстве адаптера, и её поломка (переименованное
+ * поле, другой способ создания пула) выглядела бы как совершенно зелёный
+ * прогон — просто выполненный на контентной базе. Спрашивается сам Postgres,
+ * а не конфиг.
+ *
+ * @throws Error, если Payload подключился к другой базе.
+ */
+async function assertConnectedToTestDatabase(payload: Payload): Promise<void> {
+  const expected = databaseNameOf(apiTestDatabaseUrl());
+  const name = await databaseNameOfConnection(payload);
+
+  if (name !== expected) {
+    throw new Error(
+      `Живые API-тесты подключились к базе ${String(name)}, а должны к ${expected}. ` +
+        'Подмена базы в харнессе сломана. Прогон остановлен НАМЕРЕННО: фикстура Э6-02 ' +
+        'публикует записи по-настоящему, и в контентной базе они попадут в живой каталог ' +
+        'и в sitemap (решение человека 2026-09-03).',
+    );
+  }
+}
+
+/**
+ * Единственный экземпляр Payload на весь прогон — на ТЕСТОВОЙ базе.
  *
  * Тот же экземпляр получают и обработчики маршрутов: `handleEndpoints` зовёт
- * `getPayload` с тем же конфигом, а он кеширует инстанс. Поэтому Local API здесь
- * и REST/GraphQL снаружи работают с ОДНОЙ базой и одним пулом подключений.
+ * `getPayload`, а тот кеширует инстанс на `globalThis` по ключу `'default'`.
+ * Поэтому Local API здесь и REST/GraphQL снаружи работают с ОДНОЙ базой и одним
+ * пулом подключений.
  *
  * @throws Error с указанием параметра окружения, если база недоступна.
  */
 export async function getTestPayload(): Promise<Payload> {
-  payloadPromise ??= getPayload({ config }).catch((error: unknown) => {
+  payloadPromise ??= (async (): Promise<Payload> => {
+    await ensureApiTestDatabase();
+    const payload = await getPayload({ config: testDatabaseConfig() });
+    await assertConnectedToTestDatabase(payload);
+    return payload;
+  })().catch((error: unknown) => {
     payloadPromise = null;
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(
       'Живые API-тесты (tests/api) не поднялись: Payload не подключился к базе. ' +
-        'Им нужен работающий PostgreSQL из DATABASE_URL — пропускать набор при недоступной ' +
-        'базе запрещено, иначе негативные сценарии «зелёные» ровно тогда, когда ничего не ' +
-        `проверяют. Создайте базу (pnpm --filter @otkritka/cms run ensure-db). Причина: ${detail}`,
+        'Им нужен работающий PostgreSQL из DATABASE_URL — сама база прогона ' +
+        `(${databaseNameOf(apiTestDatabaseUrl())}) создаётся харнессом, но сервер и ` +
+        'учётные данные берутся из этого параметра. Пропускать набор при недоступной ' +
+        'базе запрещено, иначе негативные сценарии «зелёные» ровно тогда, когда ничего ' +
+        `не проверяют. Причина: ${detail}`,
     );
   });
   return payloadPromise;
@@ -180,8 +300,16 @@ export interface RestCall {
   readonly query?: Record<string, string>;
 }
 
-/** Сырой ответ REST: нужен там, где тест смотрит на код и заголовки. */
+/**
+ * Сырой ответ REST: нужен там, где тест смотрит на код и заголовки.
+ *
+ * Начинается с {@link getTestPayload} и это обязательно: обработчик маршрута
+ * поднимет Payload сам, если экземпляра ещё нет, — и поднимет его на КОНТЕНТНОЙ
+ * базе, потому что подмену базы делает харнесс. Вызов дешёвый (промис
+ * запоминается), а без него порядок вызовов в тесте решал бы, куда пишет прогон.
+ */
 export async function restRaw(call: RestCall): Promise<Response> {
+  await getTestPayload();
   const search = new URLSearchParams(call.query ?? {}).toString();
   const url = `${REQUEST_ORIGIN}/api/${call.segments.join('/')}${search === '' ? '' : `?${search}`}`;
 
@@ -307,6 +435,9 @@ function assertGraphqlReachedPayload(
  * ответ отсюда.
  */
 export async function graphqlHttp(call: GraphqlCall): Promise<Response> {
+  // См. {@link restRaw}: экземпляр Payload на тестовой базе обязан существовать
+  // до первого вызова обработчика.
+  await getTestPayload();
   const request = new Request(`${REQUEST_ORIGIN}/api/graphql`, {
     body: JSON.stringify({ query: call.query, variables: call.variables ?? {} }),
     headers: {
@@ -334,6 +465,8 @@ export async function graphqlHttp(call: GraphqlCall): Promise<Response> {
  * разбирать здесь нечего. Проверяются код ответа и заголовки.
  */
 export async function playgroundHttp(actor: ApiActor | null): Promise<Response> {
+  // См. {@link restRaw}.
+  await getTestPayload();
   const request = new Request(`${REQUEST_ORIGIN}/api/graphql-playground`, {
     headers: { ...authHeaders(actor) },
     method: 'GET',
@@ -980,6 +1113,49 @@ export async function removeUsers(ids: readonly (number | string)[]): Promise<vo
     );
   }
   throwIfFailed(failures, 'удалением тестовых пользователей');
+}
+
+/**
+ * Требует, чтобы в базе прогона не осталось НИ ОДНОЙ опубликованной записи.
+ *
+ * Утверждение не про конкретные идентификаторы, а про состояние базы целиком, и
+ * поэтому ловит то, чего не ловит {@link assertRemoved}: запись, о которой
+ * уборка не знает — созданную забытым сценарием, оставленную прерванным шагом,
+ * добавленную будущим тестом рядом. Требование человека от 2026-09-03
+ * сформулировано ровно так: опубликованное состояние существует во время теста
+ * и не выживает после.
+ *
+ * Проверять это можно потому, что файлы набора идут ПОСЛЕДОВАТЕЛЬНО в одном
+ * форке (`singleFork` у проекта `api`): в момент уборки одного файла ничей
+ * другой фикстуры в базе быть не может.
+ *
+ * @throws Error со списком уцелевших опубликованных записей.
+ */
+export async function assertNothingPublishedLeft(): Promise<void> {
+  const payload = await getTestPayload();
+  const survived: string[] = [];
+
+  for (const collection of ['cards', 'collections'] as const) {
+    const found = await payload.find({
+      collection,
+      depth: 0,
+      limit: 20,
+      overrideAccess: true,
+      where: { status: { equals: 'published' } },
+    });
+    for (const doc of found.docs) {
+      survived.push(`${collection}#${String(doc.id)} ${String(doc.slug)}`);
+    }
+  }
+
+  if (survived.length > 0) {
+    throw new Error(
+      'После уборки в базе прогона остались ОПУБЛИКОВАННЫЕ записи: ' +
+        `${survived.join(', ')}. Опубликованная запись — это страница: она попадает в ` +
+        'каталог, в sitemap и в индекс. Прогон обязан оставлять базу без публикаций ' +
+        '(решение человека 2026-09-03).',
+    );
+  }
 }
 
 /**
