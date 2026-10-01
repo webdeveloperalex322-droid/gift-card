@@ -460,10 +460,11 @@ describe('sizes — параметр вёрстки', () => {
     }
   });
 
-  it('ширина колонки контента взята из вёрстки layout: 60rem минус отбивки', () => {
-    // Значение обязано соответствовать `--content-max` и padding в BaseLayout.
+  it('ширина главного изображения взята из вёрстки: колонка разворота 34rem от 60rem', () => {
+    // Значение обязано соответствовать `.card__spread` в CardDetailPage.astro
+    // (колонка изображения) и padding колонки контента в BaseLayout.
     expect(IMAGE_LAYOUT_SIZES['content-width']).toBe(
-      '(min-width: 60rem) calc(60rem - 2rem), calc(100vw - 2rem)',
+      '(min-width: 60rem) 34rem, calc(100vw - 2rem)',
     );
   });
 });

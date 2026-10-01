@@ -80,24 +80,24 @@ const jsonLd = jsonLdScriptText(breadcrumbListJsonLd(trail, serverEnv()));
 <script type="application/ld+json" is:inline set:html={jsonLd} />
 
 <style>
-  /* Крошки набраны служебным начертанием: это адресная строка материала, а не
-     его текст, и разница в гарнитуре отделяет их от заголовка под ними. */
+  /* Крошки — навигация, а не метаданные, поэтому набраны основной гарнитурой
+     малым кеглем: системный моноширинный с подчёркиваниями на трёх строках
+     узкого экрана был самым тяжёлым элементом над заголовком. От заголовка их
+     отделяют кегль и цвет. */
   .breadcrumbs {
     margin-block-end: 1rem;
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    letter-spacing: 0.02em;
+    font-size: 0.8125rem;
     color: var(--ink-soft);
   }
 
   .breadcrumbs__link {
     text-decoration: none;
-    border-block-end: 1px solid var(--rule);
   }
 
   .breadcrumbs__link:hover {
     color: var(--stamp);
-    border-block-end-color: var(--stamp);
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
   }
 
   .breadcrumbs__list {

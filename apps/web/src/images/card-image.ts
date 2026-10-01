@@ -121,9 +121,11 @@ export type ImageLayout = 'content-width' | 'grid-tile';
  * сторон. Значит доступная ширина колонки = `min(60rem, 100vw) - 2rem`, то есть
  * 928 px на широком экране.
  *
- *   - `content-width` — изображение занимает всю колонку контента (главное
- *     изображение страницы карточки). Отсюда `calc(60rem - 2rem)` на широком
- *     экране и `calc(100vw - 2rem)` на узком;
+ *   - `content-width` — главное изображение страницы карточки. От 60rem страница
+ *     раскладывается в разворот (`.card__spread` в
+ *     `../components/CardDetailPage.astro`): изображение в колонке 34rem,
+ *     подписи и действия рядом. Отсюда `34rem` на широком экране и
+ *     `calc(100vw - 2rem)` на узком, где изображение занимает всю колонку;
  *   - `grid-tile` — плитка в сетке списка. Набор посчитан для сетки
  *     `grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 1rem;`
  *     внутри той же колонки: три колонки от 49rem (240·3 + отбивки), две от
@@ -150,15 +152,15 @@ export type ImageLayout = 'content-width' | 'grid-tile';
  *
  *   - `grid-tile`, три колонки: объявлено 298,7 px, фактически 284,7 px. DPR 1
  *     → 320 в обоих случаях, DPR 2 → 640, DPR 3 → 960;
- *   - `content-width`: объявлено 928 px, фактически 910 px. DPR 1 → 960 в обоих
- *     случаях, DPR 2 → 1920.
+ *   - `content-width`: объявлено 544 px, фактически 526 px. DPR 1 → 640 в обоих
+ *     случаях, DPR 2 → 1280, DPR 3 → 1920.
  *
  * Если рамка станет толще или в набор ширин добавят значение между фактической
  * и объявленной шириной — разница начнёт переключать кандидата, и набор придётся
  * пересчитать здесь же.
  */
 export const IMAGE_LAYOUT_SIZES: Readonly<Record<ImageLayout, string>> = Object.freeze({
-  'content-width': '(min-width: 60rem) calc(60rem - 2rem), calc(100vw - 2rem)',
+  'content-width': '(min-width: 60rem) 34rem, calc(100vw - 2rem)',
   'grid-tile':
     '(min-width: 60rem) calc((60rem - 4rem) / 3), ' +
     '(min-width: 49rem) calc((100vw - 4rem) / 3), ' +

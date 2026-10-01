@@ -38,12 +38,18 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
   <Breadcrumbs trail={trail} />
   <h1>{content.heading}</h1>
 
+  {/* Разворот: изображение и всё, что нужно для действия с ним (описание,
+      скачивание, подборки, поделиться), на одном экране. От 60rem — две
+      колонки; ширина колонки изображения согласована с набором sizes роли
+      content-width (../images/card-image.ts). */}
+  <div class="card__spread">
   <figure class="card__figure">
     <CardImage card={card} layout="content-width" priority />
     {content.caption === null ? null : <figcaption>{content.caption}</figcaption>}
   </figure>
 
-  {content.description === null ? null : <p>{content.description}</p>}
+  <div class="card__details">
+  {content.description === null ? null : <p class="card__description">{content.description}</p>}
 
   <p class="card__download">
     <a href={content.downloadPath} download>Скачать открытку</a>
@@ -69,6 +75,8 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
       ))}
     </ul>
   </section>
+  </div>
+  </div>
 
   {content.aiDisclosure === null && content.usageTerms === null ? null : (
     <section class="page-section">
@@ -89,8 +97,42 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
 </BaseLayout>
 
 <style>
+  .card__spread {
+    display: grid;
+    gap: 1.5rem;
+    align-items: start;
+  }
+
+  /* Порог 60rem — тот же, что у набора sizes роли content-width: от него колонка
+     изображения равна 34rem, ниже изображение занимает всю колонку контента. */
+  @media (min-width: 60rem) {
+    .card__spread {
+      grid-template-columns: minmax(0, 34rem) minmax(0, 1fr);
+      gap: 2rem;
+    }
+  }
+
   .card__figure {
     margin: 0;
+  }
+
+  .card__description {
+    margin-block: 0;
+  }
+
+  .card__description + .card__download {
+    margin-block-start: 1rem;
+  }
+
+  /* В боковой колонке разделы идут плотнее и с меньшим заголовком: это
+     подписи к изображению, а не самостоятельные части страницы. */
+  .card__details .page-section {
+    margin-block-start: 1.5rem;
+  }
+
+  .card__details h2 {
+    font-size: 1rem;
+    margin-block-end: 0.5rem;
   }
 
   /* Рамка изображения живёт в критическом CSS `../layouts/BaseLayout.astro`,

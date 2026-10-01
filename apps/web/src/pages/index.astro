@@ -62,6 +62,11 @@ export const prerender = false;
 
 const content = await homePage(new Date(), serverEnv());
 const jsonLd = jsonLdScriptText(content.jsonLd);
+
+// Первый абзац вводного текста живёт в герое рядом с заголовком, остальные —
+// в конце страницы: они описывают устройство сайта, а не отвечают на вопрос
+// «какие тут открытки». Текст на странице остаётся весь, меняется порядок.
+const [leadFirst, ...leadRest] = content.lead;
 ---
 
 <BaseLayout
@@ -71,24 +76,26 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
   robots={content.view.robots}
   categorySections={content.categorySections}
 >
-  {/* Герой — обратная сторона открытки: бумажный лист, оттиск штемпеля в углу,
-      заголовок и поиск на нём. Это оформление, а не структура: внутри тот же
-      единственный `<h1>`, тот же вводный текст и та же форма поиска, что были
-      до направления «Почтовый штемпель». Оттиск помечен `aria-hidden`, потому
-      что содержания не несёт. */}
+  {/* Герой — оборот открытки: слева сообщение (заголовок и первый абзац),
+      справа адресная часть — место под марку с оттиском и строка поиска, между
+      ними линия бланка. Это оформление, а не структура: внутри тот же
+      единственный `<h1>` и та же форма поиска. Линия и место под марку помечены
+      `aria-hidden`, потому что содержания не несут. */}
   <div class="hero">
-    <StampMark class="hero__mark" size={96} />
-
-    <h1>{content.view.heading}</h1>
-
-    <div class="home__lead">
-      {content.lead.map((paragraph) => <p>{paragraph}</p>)}
+    <div class="hero__message">
+      <h1>{content.view.heading}</h1>
+      {leadFirst === undefined ? null : <p class="hero__lead">{leadFirst}</p>}
     </div>
-
-    {/* Форма поиска (Э3-10): обычная HTML-форма с method="get", ноль клиентского
-        JS. Она ведёт на единственный маршрут /search с чистым canonical и второго
-        адреса главной не создаёт. */}
-    <SearchForm fieldId="home-search-query" />
+    <div class="hero__rule" aria-hidden="true"></div>
+    <div class="hero__address">
+      <div class="hero__stamp-box" aria-hidden="true">
+        <StampMark class="hero__mark" size={56} />
+      </div>
+      {/* Форма поиска (Э3-10): обычная HTML-форма с method="get", ноль клиентского
+          JS. Она ведёт на единственный маршрут /search с чистым canonical и второго
+          адреса главной не создаёт. */}
+      <SearchForm fieldId="home-search-query" />
+    </div>
   </div>
 
   {
@@ -105,6 +112,19 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
           }
         </ul>
       </nav>
+    )
+  }
+
+  {
+    content.recent.length === 0 ? null : (
+      <section class="page-section">
+        <h2>{HOME_PAGE.recent.heading}</h2>
+        <CardGrid
+          tiles={content.recent}
+          prioritizeFirst
+          ariaLabel={HOME_PAGE.recent.listLabel}
+        />
+      </section>
     )
   }
 
@@ -141,15 +161,10 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
   }
 
   {
-    content.recent.length === 0 ? null : (
-      <section class="page-section">
-        <h2>{HOME_PAGE.recent.heading}</h2>
-        <CardGrid
-          tiles={content.recent}
-          prioritizeFirst
-          ariaLabel={HOME_PAGE.recent.listLabel}
-        />
-      </section>
+    leadRest.length === 0 ? null : (
+      <div class="home__about">
+        {leadRest.map((paragraph) => <p>{paragraph}</p>)}
+      </div>
     )
   }
 
@@ -157,12 +172,17 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
 </BaseLayout>
 
 <style>
-  .home__lead {
+  /* Остаток вводного текста — заметка в конце страницы, отбитая линией. */
+  .home__about {
     max-width: 45rem;
+    margin-block-start: 2.5rem;
+    padding-block-start: 1rem;
+    border-block-start: 1px solid var(--rule);
+    font-size: 0.9375rem;
     color: var(--ink-soft);
   }
 
-  .home__lead > p {
+  .home__about > p {
     margin-block: 0 0.75rem;
   }
 
@@ -236,14 +256,20 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
     color: var(--stamp);
   }
 
+  /* Группы разделов — в две колонки от 40rem: списком они растягивали страницу
+     и повторяли рельс категорий ряд за рядом. */
   .home__sections {
+    display: grid;
+    gap: 1.25rem 2rem;
     margin: 0;
     padding: 0;
     list-style: none;
   }
 
-  .home__section + .home__section {
-    margin-block-start: 1.25rem;
+  @media (min-width: 40rem) {
+    .home__sections {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
 
   .home__section-title {
