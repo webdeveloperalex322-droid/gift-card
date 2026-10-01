@@ -231,6 +231,7 @@ export const CARD_REVIEW_REQUIREMENTS: readonly ReviewRequirement[] = [
  * приёмку только случайно.
  */
 export const COLLECTION_REVIEW_REQUIREMENTS: readonly ReviewRequirement[] = [
+  { field: 'description', label: 'краткое видимое описание' },
   { field: 'intro', label: 'вводный текст' },
   { field: 'metaDescription', label: 'meta description' },
   { field: 'related', label: 'смежные подборки (перелинковка)' },

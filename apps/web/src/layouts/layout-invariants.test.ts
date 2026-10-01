@@ -19,7 +19,7 @@
  *     навигацию» — условие п. 5.1 ТЗ, а меню печатает `BaseLayout`. Значит,
  *     каждый шаблон страницы обязан рендерить именно этот layout: шаблон со
  *     своей разметкой `<html>` выпал бы из навигации молча;
- *   - **меню ведёт на оба каталога** — `/otkrytki` и `/podborki` (задача Э3-08);
+ *   - **меню ведёт на единый каталог** — `/otkrytki` (задача Э3-08);
  *   - **клиентского JS в шаблонах нет.** Ни одной директивы `client:*`: острова
  *     добавляются точечно и осознанно, а не появляются в шаблоне списка.
  *
@@ -165,7 +165,7 @@ describe('инварианты всех шаблонов страниц', () => 
     expect(markupOf(readFileSync(file, 'utf8'))).not.toMatch(/\bclient:[a-z]+/);
   });
 
-  it('BaseLayout печатает меню, а меню ведёт на оба каталога', () => {
+  it('BaseLayout печатает меню, а меню ведёт на единый каталог', () => {
     const layout = readFileSync(join(WEB_SRC, 'layouts', 'BaseLayout.astro'), 'utf8');
     const nav = readFileSync(join(WEB_SRC, 'components', 'SiteNav.astro'), 'utf8');
     const paths = SITE_NAV.map((link) => link.path);
@@ -178,8 +178,18 @@ describe('инварианты всех шаблонов страниц', () => 
     expect(nav).toMatch(/<a\b[^>]*href=\{link\.path\}/);
     expect(markupOf(nav)).not.toContain('href="#"');
     expect(markupOf(nav)).not.toMatch(/<button\b/);
-    expect(paths).toContain('/otkrytki');
-    expect(paths).toContain('/podborki');
+    expect(paths.filter((path) => path === '/otkrytki')).toHaveLength(1);
+    expect(paths).not.toContain('/podborki');
+  });
+
+  it('единый маршрут каталога не сериализует независимые чтения настроек и крошек', () => {
+    const route = readFileSync(
+      join(WEB_SRC, 'pages', 'otkrytki', '[...path].astro'),
+      'utf8',
+    );
+
+    expect(route).not.toMatch(/const settings = await readSiteSettings\(\)/u);
+    expect(route).not.toMatch(/trail: await (?:card|collection)BreadcrumbTrail/u);
   });
 
   it('BaseLayout печатает подвал, а подвал ведёт на все три служебные страницы', () => {
@@ -251,5 +261,51 @@ describe('инварианты всех шаблонов страниц', () => 
     expect(notFound).not.toMatch(/from\s+'\.\.\/data'/u);
     // Canonical у страницы 404 не бывает: она отвечает по любому адресу.
     expect(notFound).toMatch(/canonicalPath=\{null\}/u);
+  });
+
+  it('в цепочке рендера 404 нет ЗНАЧЕНИЙ из слоя данных — только типы', () => {
+    // Расширение проверки выше на файлы, которые страница 404 РЕНДЕРИТ (находка
+    // контролёра `seo-auditor` на задаче бокового меню). Сторож, глядящий только
+    // на `404.astro`, перестал закрывать вопрос в тот день, когда `BaseLayout`
+    // начал импортировать из `../data` тип `CatalogSection`: сам тип безвреден —
+    // `import type` стирается компилятором и в сборку не попадает, — а вот
+    // обычный импорт из того же модуля затащил бы в пререндер клиент Payload,
+    // то есть подключение к БД на сборке, где базы может не быть вовсе. Разница
+    // между двумя формами импорта — одно слово, и увидеть её падением иначе
+    // нечем: `astro check` обе считает законными.
+    // `SiteSidebar` в список входит, хотя на 404 он не РЕНДЕРИТСЯ (проп там
+    // `null`): импортирует его всё равно `BaseLayout`, то есть модуль попадает в
+    // граф сборки пререндеренной страницы целиком.
+    const chain = ['layouts/BaseLayout.astro', 'components/SiteNav.astro',
+      'components/SiteFooter.astro', 'components/StampMark.astro',
+      'components/Breadcrumbs.astro', 'components/SiteSidebar.astro'];
+
+    for (const relative of chain) {
+      const source = readFileSync(join(WEB_SRC, ...relative.split('/')), 'utf8');
+      // Две тонкости регулярки, обе найдены на этой же задаче:
+      //
+      //   - `[^;]` вместо `[\s\S]`: без него ленивый поиск начинался с ПЕРВОГО
+      //     импорта файла и дотягивался до `'../data'` через все остальные, то
+      //     есть читал слово `type` не у того импорта. Точка с запятой — граница
+      //     инструкции, и переносы строк внутри фигурных скобок ей не мешают;
+      //   - путь сопоставляется ПРЕФИКСОМ, а не точной строкой (находка
+      //     контролёра `seo-auditor`). Точное `'../data'` пропускало вглубь
+      //     слоя — `'../data/site-nav.js'`, `'../data/index.js'`, — а это не
+      //     экзотика, а идиома самого слоя: так импортируют друг друга его
+      //     модули. Сторож, не видящий глубокого пути, закрывал бы вопрос лишь
+      //     на вид.
+      const dataImports = [
+        ...source.matchAll(/^import\s+(type\s+)?[^;]*?from\s+'\.\.\/data(?:\/[^']*)?';$/gmu),
+      ];
+
+      for (const match of dataImports) {
+        expect(
+          match[1],
+          `${relative} импортирует из '../data' ЗНАЧЕНИЕ, а не тип: «${match[0]}». Этот файл ` +
+            'участвует в рендере пререндеренной страницы 404, поэтому значение из слоя данных ' +
+            'подключит клиент Payload на сборке. Нужен `import type`.',
+        ).toBeDefined();
+      }
+    }
   });
 });

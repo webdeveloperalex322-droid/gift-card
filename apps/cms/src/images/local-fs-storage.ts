@@ -148,6 +148,17 @@ export function createLocalFsImageStorage(options: LocalFsImageStorageOptions): 
       }
     },
 
+    async readDerivative(key) {
+      const target = resolveInside(derivativesRoot, key);
+      try {
+        return await readFile(target);
+      } catch (error) {
+        throw new Error(
+          `Производная «${key}» не читается из хранилища: ${error instanceof Error ? error.message : String(error)}.`,
+        );
+      }
+    },
+
     async deleteDerivative(key) {
       await remove(derivativesRoot, key);
     },

@@ -4,8 +4,8 @@
  * редирект удалённых страниц на главную запрещён прямо.
  *
  * Что проверяется сейчас: статус, отсутствие `Location` и отсутствие 200 на
- * заведомо несуществующих адресах разной глубины — включая адреса внутри
- * контейнеров `/otkrytki` и `/podborki`, где позже появятся настоящие маршруты.
+ * заведомо несуществующих адресах разной глубины — включая карточки и
+ * вложенные подборки в единственном контейнере `/otkrytki`.
  * Именно там soft 404 обычно и возникает: шаблон списка отвечает 200 с пустой
  * сеткой.
  *
@@ -25,12 +25,16 @@ const MISSING_PATHS: readonly { readonly path: string; readonly note: string }[]
   { path: '/takogo-razdela-net-e3-14', note: 'первый уровень' },
   { path: '/otkrytki/takoy-otkrytki-net-e3-14', note: 'адрес карточки в контейнере /otkrytki' },
   {
-    path: '/podborki/prazdniki/takogo-prazdnika-net-e3-14',
-    note: 'адрес праздничной посадочной в контейнере /podborki',
+    path: '/otkrytki/prazdniki/takogo-prazdnika-net-e3-14',
+    note: 'адрес праздничной посадочной в контейнере /otkrytki',
   },
   {
-    path: '/podborki/prazdniki/8-marta/takogo-adresata-net-e3-14',
+    path: '/otkrytki/prazdniki/8-marta/takogo-adresata-net-e3-14',
     note: 'пара «праздник × адресат», которой нет',
+  },
+  {
+    path: '/podborki',
+    note: 'удалённый непубличный namespace не получает ни страницы, ни выдуманного 301',
   },
 ];
 

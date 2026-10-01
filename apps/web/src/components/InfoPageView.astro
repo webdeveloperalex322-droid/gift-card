@@ -25,15 +25,18 @@
  */
 import Breadcrumbs from './Breadcrumbs.astro';
 import RichText from './RichText.astro';
+import type { CatalogSection } from '../data';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { type InfoPageView, INFO_PAGE_STUB_NOTICE, infoPageBreadcrumbTrail } from '../seo/info-pages';
 import { richTextBlocks } from '../seo/rich-text';
 
 interface Props {
   view: InfoPageView;
+  /** Категории бокового меню (`./SiteSidebar.astro`) — см. `../data/site-nav.ts`. */
+  categorySections: readonly CatalogSection[];
 }
 
-const { view } = Astro.props;
+const { categorySections, view } = Astro.props;
 
 const trail = infoPageBreadcrumbTrail(view);
 // Разбор тела — тот же, что у вводного текста подборки. Узел, содержимое которого
@@ -47,6 +50,7 @@ const body = richTextBlocks(view.body);
   description={view.metaDescription}
   canonicalPath={view.path}
   robots={view.robots}
+  categorySections={categorySections}
 >
   <Breadcrumbs trail={trail} />
 
@@ -62,10 +66,14 @@ const body = richTextBlocks(view.body);
 </BaseLayout>
 
 <style>
+  /* Отметка «текст не заполнен» — служебная вставка, а не содержание страницы.
+     Подложка акцента вместо прозрачности: прозрачность гасила и рамку, и текст,
+     из-за чего вставка переставала проходить по контрасту. */
   .info-page__stub {
     margin-block-start: 1rem;
     padding: 0.75rem 1rem;
-    border-inline-start: 3px solid currentColor;
-    opacity: 0.8;
+    border-inline-start: 3px solid var(--stamp);
+    background: var(--stamp-tint);
+    color: var(--ink-soft);
   }
 </style>

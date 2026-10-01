@@ -46,6 +46,12 @@ function memoryStorage(): ImageStorage & {
     hasOriginal: (key) => Promise.resolve(originals.has(key)),
     putDerivative: (key, data) => Promise.resolve(void derivatives.set(key, data)),
     putOriginal: (key, data) => Promise.resolve(void originals.set(key, data)),
+    readDerivative: (key) => {
+      const data = derivatives.get(key);
+      return data === undefined
+        ? Promise.reject(new Error(`нет производной ${key}`))
+        : Promise.resolve(data);
+    },
     readOriginal: (key) => {
       const data = originals.get(key);
       return data === undefined

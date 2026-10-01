@@ -182,22 +182,18 @@ export function cardBySlugQuery(slug: string): PublicFindQuery<'cards'> {
  *
  * Путь приводится к канонической форме (решение Ч-21 — без завершающего слеша)
  * единственным хелпером `canonicalizePath`, а не сравнивается «как пришло»:
- * иначе `/podborki/8-marta/` не нашёл бы запись, у которой в поле `path` лежит
- * `/podborki/8-marta`.
+ * иначе `/otkrytki/prazdniki/8-marta/` не нашёл бы запись, у которой в поле
+ * `path` лежит `/otkrytki/prazdniki/8-marta`.
  *
- * @throws Error если путь лежит вне пространства подборок. Пространства имён
- *   разведены решением человека от 2026-08-22, и путь карточки здесь — ошибка
- *   вызывающего, а не пустой результат: пустой результат выглядел бы как «такой
- *   подборки нет» и прятал бы перепутанный маршрут.
+ * @throws Error если путь лежит вне общего пространства `/otkrytki`.
  */
 export function collectionByPathQuery(path: string): PublicFindQuery<'collections'> {
   const canonical = canonicalizePath(path);
   if (canonical !== COLLECTION_PATH_PREFIX && !canonical.startsWith(`${COLLECTION_PATH_PREFIX}/`)) {
     throw new Error(
       `«${canonical}» не является путём подборки: узлы таксономии живут под ` +
-        `${COLLECTION_PATH_PREFIX}, карточки — под /otkrytki (решение человека от ` +
-        '2026-08-22). Запрос не отправлен: коллизия пространств имён невозможна ' +
-        'структурно, поэтому чужой путь здесь означает ошибку маршрута.',
+        `${COLLECTION_PATH_PREFIX}. Карточки и подборки делят контейнер, а чужой ` +
+        'префикс означает ошибку маршрута.',
     );
   }
   return {
@@ -315,7 +311,7 @@ export function sitemapCollectionsQuery(page: number): PublicFindQuery<'collecti
 }
 
 /**
- * Узлы верхнего уровня таксономии — содержание каталога `/podborki` (Э3-08).
+ * Узлы верхнего уровня таксономии — навигационная часть каталога `/otkrytki` (Э3-08).
  *
  * «Верхний уровень» — это отсутствие родителя, а не вид узла: группирующие узлы
  * (`prazdniki`, `adresaty`) и адресаты без праздника лежат на первом уровне
@@ -323,8 +319,8 @@ export function sitemapCollectionsQuery(page: number): PublicFindQuery<'collecti
  * первом же новом виде узла.
  *
  * Предел — {@link MAX_LIST_ROWS}: это не пагинация, а граница SSR-запроса.
- * Каталог `/podborki` пагинации не имеет намеренно — узлов верхнего уровня
- * единицы, и страница со списком разделов постранично не разбивается.
+ * Корневые узлы не пагинируются отдельно от карточек каталога: их единицы, и
+ * навигационная часть страницы постранично не разбивается.
  */
 export function rootCollectionsQuery(): PublicFindQuery<'collections'> {
   return {

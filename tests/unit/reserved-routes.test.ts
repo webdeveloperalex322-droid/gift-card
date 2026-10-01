@@ -58,9 +58,11 @@ describe('реестр: структура записей', () => {
   it('содержит стартовое наполнение из CLAUDE.md', () => {
     const byPath = new Map(reservedRoutes(DEFAULT_ADMIN_ENV).map((r) => [r.path, r.kind]));
 
-    for (const container of ['/', '/otkrytki', '/podborki']) {
-      expect(byPath.get(container), container).toBe('container');
-    }
+    expect(
+      reservedRoutes(DEFAULT_ADMIN_ENV)
+        .filter((route) => route.kind === 'container')
+        .map((route) => route.path),
+    ).toEqual(['/', '/otkrytki']);
     for (const occupied of [
       '/search',
       '/account',
@@ -87,7 +89,7 @@ describe('реестр: структура записей', () => {
     expect(isReservedPath('/media/cards/1a2b3c4d/otkrytka-320.webp', DEFAULT_ADMIN_ENV)).toBe(
       true,
     );
-    expect(isReservedPath('/podborki/media', DEFAULT_ADMIN_ENV)).toBe(false);
+    expect(isReservedPath('/otkrytki/media', DEFAULT_ADMIN_ENV)).toBe(false);
   });
 
   it('не выводит форму директив Disallow: у записи есть путь, вид, доступ и причина', () => {
@@ -130,7 +132,6 @@ describe('реестр: структура записей', () => {
     for (const open of [
       '/',
       '/otkrytki',
-      '/podborki',
       '/media',
       '/robots.txt',
       '/sitemap.xml',
@@ -153,7 +154,7 @@ describe('правило 1: сегмент page запрещён на любой
     '/otkrytki/prazdniki/page',
     '/otkrytki/prazdniki/8-marta/page',
     '/otkrytki/prazdniki/page/mame',
-    '/podborki/page/3',
+    '/otkrytki/page/3',
   ];
 
   for (const path of paths) {
@@ -203,7 +204,7 @@ describe('правило 2: вид записи определяет прове�
   });
 
   it('контейнер — запрещено только совпадение, пути под ним норма', () => {
-    for (const container of ['/', '/otkrytki', '/podborki']) {
+    for (const container of ['/', '/otkrytki']) {
       const result = checkReservedPath(container, DEFAULT_ADMIN_ENV);
       expect(result.available, container).toBe(false);
       if (!result.available) {
@@ -216,7 +217,7 @@ describe('правило 2: вид записи определяет прове�
       '/otkrytki/prazdniki',
       '/otkrytki/prazdniki/8-marta',
       '/otkrytki/prazdniki/8-marta/mame',
-      '/podborki/krasivye',
+      '/otkrytki/krasivye',
     ]) {
       expect(isReservedPath(path, DEFAULT_ADMIN_ENV), path).toBe(false);
     }
@@ -339,7 +340,7 @@ describe('правило 3 и файловые маршруты', () => {
       '/sitemap-podborki',
       '/sitemap-cards2',
       '/sitemapcards-1',
-      '/podborki/sitemap-cards-1',
+      '/otkrytki/sitemap-cards-1',
       '/otkrytki/sitemap-images-2',
     ]) {
       expect(isReservedPath(path, DEFAULT_ADMIN_ENV), path).toBe(false);
@@ -382,7 +383,7 @@ describe('правило 3 и файловые маршруты', () => {
     // У `/otkrytki` корневой сегмент совпадает с самим контейнером: вид
     // контейнера обязан победить, иначе весь каталог оказался бы закрыт.
     expect(isReservedPath('/otkrytki/8-marta', DEFAULT_ADMIN_ENV)).toBe(false);
-    expect(isReservedPath('/podborki/krasivye', DEFAULT_ADMIN_ENV)).toBe(false);
+    expect(isReservedPath('/otkrytki/krasivye', DEFAULT_ADMIN_ENV)).toBe(false);
   });
 });
 
@@ -456,7 +457,6 @@ describe('путь админки вычисляется из PAYLOAD_ADMIN_PATH
   it('совпадение с любым видом ЯВНОЙ записи отказывает одинаково', () => {
     for (const raw of [
       '/otkrytki',
-      '/podborki',
       '/search',
       '/account',
       '/pozdravleniya',
@@ -511,7 +511,6 @@ describe('путь админки вычисляется из PAYLOAD_ADMIN_PATH
     const byPath = new Map(reservedRoutes(env).map((route) => [route.path, route.kind]));
 
     expect(byPath.get('/otkrytki')).toBe('container');
-    expect(byPath.get('/podborki')).toBe('container');
     expect(byPath.get('/cms')).toBe('occupied');
     expect(isReservedPath('/otkrytki/8-marta', env)).toBe(false);
   });
@@ -594,22 +593,14 @@ describe('parseAdminPath: ОДИН разбор PAYLOAD_ADMIN_PATH на весь
 });
 
 describe('чего реестр НЕ закрывает: узлы таксономии — это данные', () => {
-  it('группирующий узел реестру неизвестен, и пространства имён разведены', () => {
-    // Форма путей от 2026-08-22 (Ч-04-9): карточки живут под `/otkrytki`,
-    // подборки — под `/podborki`, и это два РАЗНЫХ контейнера реестра. Прежняя
-    // модель с общим пространством имён отменена, поэтому коллизии «карточка
-    // против группирующего узла» больше нет структурно.
-    expect(isReservedPath('/podborki/prazdniki', DEFAULT_ADMIN_ENV)).toBe(false);
-    expect(isReservedPath('/podborki/prazdniki/8-marta', DEFAULT_ADMIN_ENV)).toBe(false);
+  it('группирующий узел реестру неизвестен в едином пространстве /otkrytki', () => {
+    // Реестр знает только контейнер. Коллизии карточки с узлом подборки по
+    // итоговому пути атомарно закрывает системный реестр Payload claims.
+    expect(isReservedPath('/otkrytki/prazdniki', DEFAULT_ADMIN_ENV)).toBe(false);
+    expect(isReservedPath('/otkrytki/prazdniki/8-marta', DEFAULT_ADMIN_ENV)).toBe(false);
     expect(isReservedPath('/otkrytki/8-marta-mame', DEFAULT_ADMIN_ENV)).toBe(false);
 
-    // Сами контейнеры собственную запись не принимают — это правило реестра, а
-    // не свойство таксономии.
+    // Единственный контейнер собственную запись не принимает.
     expect(isReservedPath('/otkrytki', DEFAULT_ADMIN_ENV)).toBe(true);
-    expect(isReservedPath('/podborki', DEFAULT_ADMIN_ENV)).toBe(true);
-
-    // Что остаётся вне реестра: коллизия ДВУХ узлов на одном пути. Её держит
-    // уникальный индекс БД на сохранённом `path` подборки (Э1-05) и уникальный
-    // slug карточки (Э1-09) — узлы приходят из базы, реестр их не знает.
   });
 });

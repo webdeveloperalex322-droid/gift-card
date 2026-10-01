@@ -6,7 +6,7 @@
     "types": ["vitest/globals", "node"],
     "emitDeclarationOnly": true
   },
-  "include": ["unit/**/*.ts", "seo/**/*.ts"],
+  "include": ["unit/**/*.ts", "seo/**/*.ts", "../scripts/content-import/**/*.ts"],
   // Модули маршрутизации apps/web в `include` НЕ входят, хотя юнит-тесты их
   // импортируют. Раньше входили — и тогда владельцем проверки типов кода
   // apps/web оказывался проект тестов, причём под `NodeNext`, тогда как

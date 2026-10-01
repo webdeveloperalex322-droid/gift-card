@@ -23,8 +23,8 @@
  *     self-canonical на себя и `noindex,follow`, `/page/1` — одиночный 301 на
  *     базовый URL, номер вне диапазона — 404, а ссылки на `/page/1` не
  *     появляется ни на одной странице;
- *   - что каталоги `/otkrytki` и `/podborki` отдают 200, а меню с ссылками на
- *     оба каталога есть в ответе КАЖДОЙ страницы.
+ *   - что единый каталог `/otkrytki` отдаёт 200, а ссылка на него есть в меню
+ *     КАЖДОЙ страницы.
  *
  * Проверка идёт против собранного сервера (`dist/server/entry.mjs`), а не против
  * `astro dev`: порядок обработки запроса и правило слеша в dev ведут себя иначе
@@ -377,9 +377,9 @@ function checkPageInvariants(label: string, response: RawResponse, expected: {
   // условие п. 5.1 ТЗ, и проверяется он на живом ответе, а не на исходниках.
   const navHrefs = anchors(html).map((anchor) => anchor.href);
   record(
-    `${label}: меню со ссылками на оба каталога в ответе сервера`,
-    navHrefs.includes('/otkrytki') && navHrefs.includes('/podborki') && navHrefs.includes('/'),
-    `есть /otkrytki=${String(navHrefs.includes('/otkrytki'))} /podborki=${String(navHrefs.includes('/podborki'))}`,
+    `${label}: меню со ссылкой на единый каталог в ответе сервера`,
+    navHrefs.includes('/otkrytki') && navHrefs.includes('/'),
+    `есть /otkrytki=${String(navHrefs.includes('/otkrytki'))}`,
   );
 
   const crumbs = findByType(jsonLdBlocks(html), 'BreadcrumbList');
@@ -409,7 +409,7 @@ const INTRO: NonNullable<Collection['intro']> = {
           },
           {
             type: 'link',
-            fields: { linkType: 'custom', newTab: false, url: '/podborki/smoke-e3-05-gruppa' },
+            fields: { linkType: 'custom', newTab: false, url: '/otkrytki/smoke-e3-05-gruppa' },
             children: [
               {
                 type: 'text',
@@ -684,7 +684,7 @@ async function main(): Promise<void> {
      * поэтому условие было недостижимо).
      *
      * Узел стоит РЕБЁНКОМ группы, и это не деталь фикстуры: иначе его вообще
-     * нельзя создать — CMS не пускает `occasion` в корень `/podborki`
+     * нельзя создать — CMS не пускает `occasion` в корень `/otkrytki`
      * (допустимый родитель у него только `group`). Заодно это делает проверку
      * полной: у группы есть блок «Разделы подборки», и вместе со статусом
      * проверяется условие Э3-13-A — ссылки на опустевший узел в списках нет.
@@ -1017,8 +1017,8 @@ async function main(): Promise<void> {
     );
     record(
       'карточка: атрибуты-ссылки ведут на подборки',
-      anchors(cardHtml).some((anchor) => anchor.href === `/podborki/${PREFIX}-gruppa/${PREFIX}-povod`) &&
-        anchors(cardHtml).some((anchor) => anchor.href === `/podborki/${PREFIX}-gruppa`),
+      anchors(cardHtml).some((anchor) => anchor.href === `/otkrytki/${PREFIX}-gruppa/${PREFIX}-povod`) &&
+        anchors(cardHtml).some((anchor) => anchor.href === `/otkrytki/${PREFIX}-gruppa`),
     );
 
     const cardBlocks = jsonLdBlocks(cardHtml);
@@ -1054,7 +1054,7 @@ async function main(): Promise<void> {
     /* 2. Подборка с открытками                                     */
     /* ------------------------------------------------------------ */
 
-    const collectionPath = `/podborki/${PREFIX}-gruppa/${PREFIX}-povod`;
+    const collectionPath = `/otkrytki/${PREFIX}-gruppa/${PREFIX}-povod`;
     const collectionResponse = await request(collectionPath);
     const collectionHtml = collectionResponse.body;
 
@@ -1103,7 +1103,7 @@ async function main(): Promise<void> {
     );
     record(
       'подборка: внутренняя ссылка вводного текста — <a href> на путь',
-      anchors(collectionHtml).some((anchor) => anchor.href === `/podborki/${PREFIX}-gruppa`),
+      anchors(collectionHtml).some((anchor) => anchor.href === `/otkrytki/${PREFIX}-gruppa`),
     );
     record(
       'подборка: во вводном тексте нет ни одного href="#"',
@@ -1124,7 +1124,7 @@ async function main(): Promise<void> {
     );
     record(
       'подборка: перелинковка вверх на родителя и вбок на смежные',
-      anchors(collectionHtml).some((anchor) => anchor.href === `/podborki/${PREFIX}-gruppa`),
+      anchors(collectionHtml).some((anchor) => anchor.href === `/otkrytki/${PREFIX}-gruppa`),
     );
     // Фикстура нарочно указывает родителя ещё и в `related`: так проверяется, что
     // блок перелинковки не выводит две одинаковые ссылки на один адрес.
@@ -1141,7 +1141,7 @@ async function main(): Promise<void> {
     /* 3. Группирующий узел: содержание — дети                      */
     /* ------------------------------------------------------------ */
 
-    const groupPath = `/podborki/${PREFIX}-gruppa`;
+    const groupPath = `/otkrytki/${PREFIX}-gruppa`;
     const groupResponse = await request(groupPath);
 
     checkPageInvariants('группирующий узел', groupResponse, {
@@ -1211,8 +1211,10 @@ async function main(): Promise<void> {
 
     const pageOne = await request(`${collectionPath}/page/1`);
     record(
-      '/page/1 подборки — одиночный 301 на базовый URL (решение Э3-07)',
-      pageOne.status === 301 && pageOne.headers.location === collectionPath,
+      '/page/1 подборки — пустой одиночный 301 на базовый URL (решение Э3-07)',
+      pageOne.status === 301 &&
+        pageOne.headers.location === collectionPath &&
+        pageOne.body.length === 0,
       `${String(pageOne.status)} → ${String(pageOne.headers.location)}`,
     );
     const afterHop = await request(String(pageOne.headers.location));
@@ -1234,7 +1236,7 @@ async function main(): Promise<void> {
       `/otkrytki/page/01`,
       `/otkrytki/page/999`,
       `/otkrytki/page`,
-      '/podborki/page/2',
+      '/otkrytki/page/2/extra',
     ];
     for (const target of badPages) {
       const response = await request(target);
@@ -1254,7 +1256,7 @@ async function main(): Promise<void> {
     // 404, значит и `/page/1` обязан отвечать 404, а не отправлять клиента на
     // адрес с 404 (находка вердикта `reviewer`, MAJOR 1).
 
-    const emptiedPath = `/podborki/${PREFIX}-gruppa/${PREFIX}-opustevshiy`;
+    const emptiedPath = `/otkrytki/${PREFIX}-gruppa/${PREFIX}-opustevshiy`;
     const emptiedBase = await request(emptiedPath);
     record(
       'опустевший узел: базовый URL отдаёт 404, а не 200 с пустой сеткой',
@@ -1278,11 +1280,11 @@ async function main(): Promise<void> {
 
     // И ГЛАВНОЕ: на адрес с 404 не должно вести ни одной ссылки. Условие Э3-13-A
     // требует, чтобы списки узлов отбирали их предикатом «опубликован И непуст»,
-    // а не одним статусом; иначе каталог `/podborki`, карта разделов главной и
+    // а не одним статусом; иначе каталог `/otkrytki`, карта разделов главной и
     // блок «Разделы подборки» продолжали бы печатать ссылку на страницу, которая
     // законно отвечает 404. Проверка живая, потому что именно живой прогон
     // показывает разницу: юнит-тест не знает состояния базы.
-    for (const page of ['/podborki', '/', groupPath]) {
+    for (const page of ['/otkrytki', '/', groupPath]) {
       const response = await request(page);
       record(
         `ссылки на опустевший узел нет: ${page}`,
@@ -1334,22 +1336,9 @@ async function main(): Promise<void> {
       `${String(catalogRedirect.status)} → ${String(catalogRedirect.headers.location)}`,
     );
 
-    const nodesCatalog = await request('/podborki');
-    checkPageInvariants('каталог /podborki', nodesCatalog, {
-      heading: 'Подборки открыток',
-      path: '/podborki',
-      robots: 'noindex,follow',
-    });
     record(
-      'каталог /podborki: в списке узел верхнего уровня и его ребёнок',
-      anchors(nodesCatalog.body).some((anchor) => anchor.href === groupPath) &&
-        anchors(nodesCatalog.body).some((anchor) => anchor.href === collectionPath),
-    );
-    const catalogList = findByType(jsonLdBlocks(nodesCatalog.body), 'ItemList');
-    record(
-      'каталог /podborki: ItemList соответствует видимому списку',
-      (catalogList?.['numberOfItems'] as number) >= 2,
-      JSON.stringify(catalogList?.['numberOfItems']),
+      'каталог /otkrytki: есть серверная ссылка на корневой узел подборок',
+      anchors(cardsCatalog.body).some((anchor) => anchor.href === groupPath),
     );
 
     /* ------------------------------------------------------------ */
@@ -1391,9 +1380,6 @@ async function main(): Promise<void> {
       { path: collectionPath, withImages: true },
       { path: pageTwoPath, withImages: true },
       { path: '/otkrytki', withImages: true },
-      // Каталог подборок — карта разделов ссылками; изображений на нём нет вовсе,
-      // и требовать их означало бы требовать сетку там, где её не должно быть.
-      { path: '/podborki', withImages: false },
     ]);
 
     // Матрица статусов: строки, порученные этому смоуку, обязаны быть
@@ -1413,8 +1399,7 @@ async function main(): Promise<void> {
           `  curl -i ${ORIGIN}${collectionPath}/page/999\n` +
           `  curl -i ${ORIGIN}${collectionPath}/page/0\n` +
           `  curl -i ${ORIGIN}${collectionPath}/page/01\n` +
-          `  curl -i ${ORIGIN}/otkrytki\n` +
-          `  curl -i ${ORIGIN}/podborki\n`,
+          `  curl -i ${ORIGIN}/otkrytki\n`,
       );
       await delay(holdMs);
     }

@@ -42,7 +42,7 @@ const NODE_CONFLICT: MetaConflict = {
   documentCollection: 'collections',
   documentId: '7',
   field: 'metaDescription',
-  path: '/podborki/prazdniki/8-marta',
+  path: '/otkrytki/prazdniki/8-marta',
   status: 'review',
   title: 'Открытки к 8 Марта',
 };
@@ -364,13 +364,13 @@ describe('открытие в index,follow при совпадении мета�
         conflicts,
         confirmedNow: false,
         indexOpening: true,
-        path: '/podborki/prazdniki/8-marta',
+        path: '/otkrytki/prazdniki/8-marta',
       });
       throw new Error('индексация открылась при совпадении заголовков');
     } catch (error) {
       expect(error).toBeInstanceOf(ContentRuleError);
       expect((error as ContentRuleError).rule).toBe('index-requires-unique-meta');
-      expect((error as ContentRuleError).message).toContain('/podborki/prazdniki/8-marta');
+      expect((error as ContentRuleError).message).toContain('/otkrytki/prazdniki/8-marta');
       expect((error as ContentRuleError).message).toContain('/otkrytki/otkrytka-mame');
     }
   });
@@ -446,7 +446,7 @@ describe('описание набора конфликтов', () => {
       truncated: false,
     });
     expect(summary).toContain('/otkrytki/otkrytka-mame');
-    expect(summary).toContain('/podborki/prazdniki/8-marta');
+    expect(summary).toContain('/otkrytki/prazdniki/8-marta');
     expect(summary).toContain('published');
   });
 

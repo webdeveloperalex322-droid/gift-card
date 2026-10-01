@@ -50,6 +50,40 @@ export const MEDIA_ROUTE_PREFIX = '/media';
  */
 export const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 
+/**
+ * Префикс пространства ПУБЛИЧНЫХ производных внутри хранилища.
+ *
+ * Константа, а не параметр окружения: префикс — часть постоянного URL файла
+ * (ТЗ §6.3). Настраиваемость означала бы, что смена значения в `.env` переносит
+ * все уже опубликованные изображения на другие адреса.
+ *
+ * Жил в `apps/cms/src/images/storage.ts`; переехал сюда, когда появился вариант
+ * «один бакет на оба пространства» (`./s3.ts`): отдача `/media` обязана знать,
+ * какие ключи публичны, а входной сервер `apps/web` читает только этот пакет.
+ */
+export const DERIVATIVE_KEY_PREFIX = 'cards';
+
+/**
+ * Префикс пространства НЕПУБЛИЧНЫХ оригиналов. Публичного адреса у этого
+ * пространства нет вообще.
+ */
+export const ORIGINAL_KEY_PREFIX = 'originals';
+
+/**
+ * Ключ лежит в пространстве публичных производных: прошёл форму и начинается с
+ * {@link DERIVATIVE_KEY_PREFIX}. На локальной ФС пространства разведены
+ * корнями, в общем бакете — только этим префиксом, поэтому отдача обязана его
+ * проверять: иначе `/media/originals/<id>.jpg` отдал бы оригинал.
+ */
+export function isDerivativeKey(key: string): boolean {
+  return isStorageKey(key) && key.startsWith(`${DERIVATIVE_KEY_PREFIX}/`);
+}
+
+/** Ключ лежит в пространстве оригиналов. */
+export function isOriginalKey(key: string): boolean {
+  return isStorageKey(key) && key.startsWith(`${ORIGINAL_KEY_PREFIX}/`);
+}
+
 /** MIME-тип по расширению файла производной. Набор закрыт набором форматов вывода. */
 const CONTENT_TYPE_BY_EXTENSION: Readonly<Record<string, string>> = Object.freeze(
   Object.fromEntries(
@@ -135,7 +169,8 @@ export function derivativePublicPath(key: string): string {
  * этой функции).
  *
  * @param pathname путь запроса от корня, без строки запроса.
- * @returns ключ объекта либо `null`, если путь не является адресом производной.
+ * @returns ключ объекта либо `null`, если путь не является адресом производной
+ *   (в том числе ключ вне {@link DERIVATIVE_KEY_PREFIX}).
  */
 export function derivativeKeyFromPublicPath(pathname: string): string | null {
   const prefix = `${MEDIA_ROUTE_PREFIX}/`;
@@ -143,7 +178,9 @@ export function derivativeKeyFromPublicPath(pathname: string): string | null {
     return null;
   }
   const key = pathname.slice(prefix.length);
-  return isStorageKey(key) ? key : null;
+  // Только пространство производных: в общем бакете (`./s3.ts`) рядом лежат
+  // оригиналы, и форма ключа одна на оба пространства.
+  return isDerivativeKey(key) ? key : null;
 }
 
 /**

@@ -17,12 +17,10 @@ import {
 
 const env = { PAYLOAD_ADMIN_PATH: '/admin' } as const;
 
-describe('пространства имён (решение человека 2026-08-22)', () => {
-  it('карточки живут под /otkrytki, подборки — под /podborki', () => {
-    // Пространства разведены: коллизия «карточка против подборки» невозможна
-    // структурно, а не за счёт проверки уникальности.
+describe('пространство имён контента', () => {
+  it('/otkrytki — единственный контейнер карточек и подборок', () => {
     expect(CARD_PATH_PREFIX).toBe('/otkrytki');
-    expect(COLLECTION_PATH_PREFIX).toBe('/podborki');
+    expect(COLLECTION_PATH_PREFIX).toBe('/otkrytki');
   });
 
   it('канонический путь карточки — /otkrytki/<slug>', () => {

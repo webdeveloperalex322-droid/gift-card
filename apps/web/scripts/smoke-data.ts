@@ -396,7 +396,7 @@ async function main(): Promise<void> {
       `id=${String(publishedCard?.id)}`,
     );
 
-    const publishedNode = await findCollectionByPath('/podborki/smoke-e3-02-gruppa/smoke-e3-02-published');
+    const publishedNode = await findCollectionByPath('/otkrytki/smoke-e3-02-gruppa/smoke-e3-02-published');
     record(
       'опубликованная подборка читается по итоговому пути',
       publishedNode?.id === publishedNodeId,
@@ -466,11 +466,11 @@ async function main(): Promise<void> {
     record('карточка в review по slug не отдаётся', (await findCardBySlug('smoke-e3-02-otkrytka-review')) === null);
     record(
       'подборка в draft по пути не отдаётся',
-      (await findCollectionByPath('/podborki/smoke-e3-02-gruppa/smoke-e3-02-draft')) === null,
+      (await findCollectionByPath('/otkrytki/smoke-e3-02-gruppa/smoke-e3-02-draft')) === null,
     );
     record(
       'подборка в review по пути не отдаётся',
-      (await findCollectionByPath('/podborki/smoke-e3-02-gruppa/smoke-e3-02-review')) === null,
+      (await findCollectionByPath('/otkrytki/smoke-e3-02-gruppa/smoke-e3-02-review')) === null,
     );
 
     // Подбор параметров: прямой запрос по идентификатору, запрос по статусу,

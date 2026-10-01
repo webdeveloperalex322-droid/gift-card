@@ -225,7 +225,7 @@ const validateCanonicalValue: TextFieldSingleValidation = (value) =>
   validateCanonicalOverride(value);
 
 export interface SlugFieldOptions {
-  /** Префикс пространства имён записи: `/otkrytki` или `/podborki`. */
+  /** Префикс единого пространства имён записей: `/otkrytki`. */
   readonly prefix: string;
   /**
    * Уникален ли САМ slug. По умолчанию `true` — так у карточки, чей путь равен
@@ -233,8 +233,8 @@ export interface SlugFieldOptions {
    *
    * Для подборок значение `false`, и это не послабление: у иерархической записи
    * уникален ИТОГОВЫЙ ПУТЬ, а не сегмент. Slug `mame` законно существует и под
-   * праздником (`/podborki/prazdniki/8-marta/mame`), и в ветке адресатов
-   * (`/podborki/adresaty/mame`); уникальный индекс стоит на поле `path`.
+   * праздником (`/otkrytki/prazdniki/8-marta/mame`), и в ветке адресатов
+   * (`/otkrytki/adresaty/mame`); уникальный индекс стоит на поле `path`.
    */
   readonly unique?: boolean;
   /** Пояснение в админке, если путь собирается не как `<префикс>/<slug>`. */

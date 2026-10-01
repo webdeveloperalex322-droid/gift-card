@@ -34,6 +34,8 @@ import {
   catalogSections,
   collectionLinks,
   collectionPageContent,
+  type OtkrytkiPathRead,
+  loadOtkrytkiPathPage,
   seasonalLinks,
 } from './page-data.js';
 
@@ -73,8 +75,9 @@ function collection(overrides: Partial<Collection> = {}): Collection {
   return {
     id: 10,
     createdAt: '2026-01-01T00:00:00.000Z',
+    description: 'Короткое описание подборки перед вводным текстом.',
     nodeKind: 'occasion',
-    path: '/podborki/prazdniki/8-marta',
+    path: '/otkrytki/prazdniki/8-marta',
     robots: 'noindex,follow',
     slug: '8-marta',
     status: 'published',
@@ -83,6 +86,127 @@ function collection(overrides: Partial<Collection> = {}): Collection {
     ...overrides,
   };
 }
+
+function pathRead(input: {
+  readonly cards?: readonly Card[];
+  readonly collections?: readonly Collection[];
+}): OtkrytkiPathRead {
+  return (query) => {
+    const docs = query.collection === 'cards' ? (input.cards ?? []) : (input.collections ?? []);
+    return Promise.resolve({ docs: docs.filter((doc) => doc.status === 'published') });
+  };
+}
+
+describe('единый диспетчер /otkrytki', () => {
+  it('на одном сегменте возвращает карточку, если подборки с тем же путём нет', async () => {
+    const result = await loadOtkrytkiPathPage({
+      path: '/otkrytki/piony',
+      read: pathRead({ cards: [card({ slug: 'piony' })] }),
+    });
+
+    expect(result).toMatchObject({ kind: 'card', card: { slug: 'piony' } });
+  });
+
+  it('на одном сегменте возвращает подборку, если карточки с тем же slug нет', async () => {
+    const result = await loadOtkrytkiPathPage({
+      path: '/otkrytki/prazdniki',
+      read: pathRead({
+        collections: [collection({ path: '/otkrytki/prazdniki', slug: 'prazdniki' })],
+      }),
+    });
+
+    expect(result).toMatchObject({
+      kind: 'collection',
+      node: { path: '/otkrytki/prazdniki' },
+      page: 1,
+    });
+  });
+
+  it('на двух и более сегментах ищет только подборку по итоговому пути', async () => {
+    const calls: string[] = [];
+    const read: OtkrytkiPathRead = (query) => {
+      calls.push(query.collection);
+      return Promise.resolve({
+        docs:
+          query.collection === 'collections'
+            ? [collection({ path: '/otkrytki/prazdniki/8-marta' })]
+            : [],
+      });
+    };
+
+    const result = await loadOtkrytkiPathPage({
+      path: '/otkrytki/prazdniki/8-marta',
+      read,
+    });
+
+    expect(result).toMatchObject({ kind: 'collection', page: 1 });
+    expect(calls).toEqual(['collections']);
+  });
+
+  it('возвращает null для отсутствующей страницы и пути вне /otkrytki', async () => {
+    const read = pathRead({});
+
+    await expect(
+      loadOtkrytkiPathPage({ path: '/otkrytki/net-takoy-stranitsy', read }),
+    ).resolves.toBeNull();
+    await expect(loadOtkrytkiPathPage({ path: '/otkrytki/prazdniki', read })).resolves.toBeNull();
+  });
+
+  it('падает диагностически, если один сегмент одновременно занят карточкой и подборкой', async () => {
+    await expect(
+      loadOtkrytkiPathPage({
+        path: '/otkrytki/piony',
+        read: pathRead({
+          cards: [card({ slug: 'piony' })],
+          collections: [collection({ path: '/otkrytki/piony', slug: 'piony' })],
+        }),
+      }),
+    ).rejects.toThrow(/одновременно.*карточк.*подборк/iu);
+  });
+
+  it('делегирует каноническую пагинацию подборке', async () => {
+    const read = pathRead({
+      collections: [collection({ path: '/otkrytki/prazdniki/8-marta' })],
+    });
+
+    await expect(
+      loadOtkrytkiPathPage({ path: '/otkrytki/prazdniki/8-marta/page/2', read }),
+    ).resolves.toMatchObject({
+      kind: 'collection',
+      node: { path: '/otkrytki/prazdniki/8-marta' },
+      page: 2,
+    });
+  });
+
+  it('/page/1 публичной вложенной подборки возвращает решение о 301 на базу', async () => {
+    const read = pathRead({
+      collections: [collection({ path: '/otkrytki/prazdniki/8-marta' })],
+    });
+
+    await expect(
+      loadOtkrytkiPathPage({ path: '/otkrytki/prazdniki/8-marta/page/1', read }),
+    ).resolves.toMatchObject({
+      kind: 'redirect',
+      location: '/otkrytki/prazdniki/8-marta',
+      node: { path: '/otkrytki/prazdniki/8-marta' },
+    });
+  });
+
+  it.each([
+    ['отсутствующей', []],
+    ['неопубликованной', [collection({ status: 'review' })]],
+  ] as const)(
+    '/page/1 %s вложенной подборки отвечает 404, а не 301 на 404',
+    async (_case, collections) => {
+      await expect(
+        loadOtkrytkiPathPage({
+          path: '/otkrytki/prazdniki/8-marta/page/1',
+          read: pathRead({ collections }),
+        }),
+      ).resolves.toBeNull();
+    },
+  );
+});
 
 const EMPTY_SETTINGS = { id: 1, createdAt: '', updatedAt: '' } as SiteSetting;
 
@@ -256,21 +380,21 @@ describe('лицензия и указание на ИИ (решение Ч-10)'
 describe('атрибуты карточки', () => {
   it('идут в порядке редактора и подписаны видом узла', () => {
     const links = cardAttributeLinks([
-      collection({ id: 10, nodeKind: 'occasion', path: '/podborki/prazdniki/8-marta' }),
+      collection({ id: 10, nodeKind: 'occasion', path: '/otkrytki/prazdniki/8-marta' }),
       collection({
         id: 11,
         nodeKind: 'recipient',
-        path: '/podborki/prazdniki/8-marta/mame',
+        path: '/otkrytki/prazdniki/8-marta/mame',
         title: 'Открытки маме на 8 Марта',
       }),
-      collection({ id: 12, nodeKind: 'group', path: '/podborki/prazdniki', title: 'Праздники' }),
+      collection({ id: 12, nodeKind: 'group', path: '/otkrytki/prazdniki', title: 'Праздники' }),
     ]);
 
     expect(links.map((link) => link.kindLabel)).toEqual(['Повод', 'Адресат', 'Раздел']);
     expect(links.map((link) => link.path)).toEqual([
-      '/podborki/prazdniki/8-marta',
-      '/podborki/prazdniki/8-marta/mame',
-      '/podborki/prazdniki',
+      '/otkrytki/prazdniki/8-marta',
+      '/otkrytki/prazdniki/8-marta/mame',
+      '/otkrytki/prazdniki',
     ]);
   });
 
@@ -281,7 +405,7 @@ describe('атрибуты карточки', () => {
   it('текст ссылки — H1 узла, а при пустом H1 — title', () => {
     const [withH1, withoutH1] = cardAttributeLinks([
       collection({ id: 10, h1: 'Открытки к 8 Марта' }),
-      collection({ id: 11, h1: null, path: '/podborki/prazdniki/9-maya', title: 'Открытки к 9 Мая' }),
+      collection({ id: 11, h1: null, path: '/otkrytki/prazdniki/9-maya', title: 'Открытки к 9 Мая' }),
     ]);
 
     expect(withH1?.name).toBe('Открытки к 8 Марта');
@@ -380,10 +504,10 @@ describe('страница подборки: ItemList = видимая сетк�
     const content = collectionContent({
       cards: [],
       children: [
-        collection({ id: 20, path: '/podborki/prazdniki/8-marta', title: 'Открытки на 8 Марта' }),
-        collection({ id: 21, path: '/podborki/prazdniki/9-maya', title: 'Открытки на 9 Мая' }),
+        collection({ id: 20, path: '/otkrytki/prazdniki/8-marta', title: 'Открытки на 8 Марта' }),
+        collection({ id: 21, path: '/otkrytki/prazdniki/9-maya', title: 'Открытки на 9 Мая' }),
       ],
-      node: collection({ id: 19, nodeKind: 'group', path: '/podborki/prazdniki', title: 'Праздники' }),
+      node: collection({ id: 19, nodeKind: 'group', path: '/otkrytki/prazdniki', title: 'Праздники' }),
     });
 
     expect(content.tiles).toEqual([]);
@@ -410,20 +534,32 @@ describe('страница подборки: ItemList = видимая сетк�
 });
 
 describe('страница подборки: перелинковка и дата', () => {
+  it('видимое описание принадлежит посадочной странице и на страницах 2+ не повторяется', () => {
+    const first = collectionContent({ node: collection({ description: 'Описание раздела.' }) });
+    const second = collectionContent({
+      node: collection({ description: 'Описание раздела.' }),
+      page: 2,
+      pageCount: 2,
+    });
+
+    expect(first.description).toBe('Описание раздела.');
+    expect(second.description).toBeNull();
+  });
+
   it('вверх на родителя, вбок на смежные, вниз на детей', () => {
     const content = collectionContent({
-      children: [collection({ id: 30, path: '/podborki/prazdniki/8-marta/mame', title: 'Маме' })],
-      parent: collection({ id: 31, nodeKind: 'group', path: '/podborki/prazdniki', title: 'Праздники' }),
+      children: [collection({ id: 30, path: '/otkrytki/prazdniki/8-marta/mame', title: 'Маме' })],
+      parent: collection({ id: 31, nodeKind: 'group', path: '/otkrytki/prazdniki', title: 'Праздники' }),
       related: [
-        collection({ id: 32, path: '/podborki/prazdniki/14-fevralya', title: 'К 14 февраля' }),
-        collection({ id: 33, path: '/podborki/prazdniki/9-maya', title: 'К 9 Мая' }),
+        collection({ id: 32, path: '/otkrytki/prazdniki/14-fevralya', title: 'К 14 февраля' }),
+        collection({ id: 33, path: '/otkrytki/prazdniki/9-maya', title: 'К 9 Мая' }),
       ],
     });
 
-    expect(content.parent).toEqual({ name: 'Праздники', path: '/podborki/prazdniki' });
+    expect(content.parent).toEqual({ name: 'Праздники', path: '/otkrytki/prazdniki' });
     expect(content.related.map((link) => link.path)).toEqual([
-      '/podborki/prazdniki/14-fevralya',
-      '/podborki/prazdniki/9-maya',
+      '/otkrytki/prazdniki/14-fevralya',
+      '/otkrytki/prazdniki/9-maya',
     ]);
     expect(content.children.map((link) => link.name)).toEqual(['Маме']);
   });
@@ -437,15 +573,15 @@ describe('страница подборки: перелинковка и дат�
     // родителя в связи `related`, и в блоке «Смотрите также» появлялись ДВЕ
     // одинаковые ссылки. Повтор пути запрещён по той же причине, что в крошках:
     // это два элемента навигации, между которыми нечего выбирать.
-    const parent = collection({ id: 41, nodeKind: 'group', path: '/podborki/prazdniki', title: 'Праздники' });
+    const parent = collection({ id: 41, nodeKind: 'group', path: '/otkrytki/prazdniki', title: 'Праздники' });
     const content = collectionContent({ parent, related: [parent, parent] });
 
-    expect(content.parent?.path).toBe('/podborki/prazdniki');
+    expect(content.parent?.path).toBe('/otkrytki/prazdniki');
     expect(content.related).toEqual([]);
   });
 
   it('собственный адрес страницы в блок «Смотрите также» не попадает', () => {
-    const node = collection({ id: 42, path: '/podborki/prazdniki/8-marta' });
+    const node = collection({ id: 42, path: '/otkrytki/prazdniki/8-marta' });
     const content = collectionContent({ node, related: [node] });
 
     expect(content.related).toEqual([]);
@@ -480,7 +616,7 @@ describe('страница подборки: пагинация сегменто
   const NODE = collection({
     id: 51,
     metaDescription: 'Открытки к 8 Марта: маме, бабушке, коллеге.',
-    path: '/podborki/prazdniki/8-marta',
+    path: '/otkrytki/prazdniki/8-marta',
     robots: 'index,follow',
     title: 'Открытки на 8 Марта',
   });
@@ -488,12 +624,12 @@ describe('страница подборки: пагинация сегменто
   it('первая страница живёт по базовому URL и сохраняет директиву записи', () => {
     const content = collectionContent({ node: NODE, page: 1, pageCount: 3 });
 
-    expect(content.canonicalPath).toBe('/podborki/prazdniki/8-marta');
+    expect(content.canonicalPath).toBe('/otkrytki/prazdniki/8-marta');
     expect(content.robots).toBe('index,follow');
     expect(content.title).toBe('Открытки на 8 Марта');
     expect(content.metaDescription).toBe('Открытки к 8 Марта: маме, бабушке, коллеге.');
     expect(content.pagination?.previousPath).toBeNull();
-    expect(content.pagination?.nextPath).toBe('/podborki/prazdniki/8-marta/page/2');
+    expect(content.pagination?.nextPath).toBe('/otkrytki/prazdniki/8-marta/page/2');
   });
 
   it('на базовом URL нет ни одной ссылки на /page/1', () => {
@@ -505,8 +641,8 @@ describe('страница подборки: пагинация сегменто
   it('страница 2: self-canonical на САМУ СЕБЯ, а не на первую страницу', () => {
     const content = collectionContent({ node: NODE, page: 2, pageCount: 3 });
 
-    expect(content.canonicalPath).toBe('/podborki/prazdniki/8-marta/page/2');
-    expect(listJsonLd(content).url).toBe(`${ENV.SITE_URL}/podborki/prazdniki/8-marta/page/2`);
+    expect(content.canonicalPath).toBe('/otkrytki/prazdniki/8-marta/page/2');
+    expect(listJsonLd(content).url).toBe(`${ENV.SITE_URL}/otkrytki/prazdniki/8-marta/page/2`);
   });
 
   it('страница 2 отдаёт noindex,follow даже у записи, открытой человеком в индекс', () => {
@@ -530,7 +666,7 @@ describe('страница подборки: пагинация сегменто
   it('«предыдущая» со второй страницы ведёт на базовый URL списка', () => {
     const content = collectionContent({ node: NODE, page: 2, pageCount: 3 });
 
-    expect(content.pagination?.previousPath).toBe('/podborki/prazdniki/8-marta');
+    expect(content.pagination?.previousPath).toBe('/otkrytki/prazdniki/8-marta');
   });
 
   it('одна страница — блока пагинации нет вовсе', () => {
@@ -540,11 +676,11 @@ describe('страница подборки: пагинация сегменто
   it('у группирующего узла без открыток блока пагинации нет', () => {
     const content = collectionContent({
       cards: [],
-      children: [collection({ id: 52, path: '/podborki/prazdniki/8-marta', title: '8 Марта' })],
+      children: [collection({ id: 52, path: '/otkrytki/prazdniki/8-marta', title: '8 Марта' })],
       node: collection({
         id: 53,
         nodeKind: 'group',
-        path: '/podborki/prazdniki',
+        path: '/otkrytki/prazdniki',
         title: 'Праздники',
       }),
       page: 1,
@@ -572,16 +708,16 @@ describe('каталог подборок: разделы верхнего ур�
   const PRAZDNIKI = collection({
     id: 71,
     nodeKind: 'group',
-    path: '/podborki/prazdniki',
+    path: '/otkrytki/prazdniki',
     title: 'Праздники',
   });
   const ADRESATY = collection({
     id: 72,
     nodeKind: 'group',
-    path: '/podborki/adresaty',
+    path: '/otkrytki/adresaty',
     title: 'Адресаты',
   });
-  const MARTA = collection({ id: 73, path: '/podborki/prazdniki/8-marta', title: '8 Марта' });
+  const MARTA = collection({ id: 73, path: '/otkrytki/prazdniki/8-marta', title: '8 Марта' });
 
   it('раздел собирается из узла и его прямых детей, порядок сохраняется', () => {
     const sections = catalogSections([
@@ -590,8 +726,8 @@ describe('каталог подборок: разделы верхнего ур�
     ]);
 
     expect(sections.map((section) => section.node.path)).toEqual([
-      '/podborki/prazdniki',
-      '/podborki/adresaty',
+      '/otkrytki/prazdniki',
+      '/otkrytki/adresaty',
     ]);
     expect(sections[0]?.children.map((child) => child.name)).toEqual(['8 Марта']);
   });
@@ -613,9 +749,9 @@ describe('каталог подборок: разделы верхнего ур�
     ]);
 
     expect(catalogSectionItems(sections).map((item) => item.path)).toEqual([
-      '/podborki/prazdniki',
-      '/podborki/prazdniki/8-marta',
-      '/podborki/adresaty',
+      '/otkrytki/prazdniki',
+      '/otkrytki/prazdniki/8-marta',
+      '/otkrytki/adresaty',
     ]);
   });
 
@@ -634,16 +770,16 @@ describe('сезонный блок главной (задача Э3-09, ТЗ §
 
   it('в блок попадают только узлы, чьё окно показа накрывает день', () => {
     const inWindow = seasonalNode(
-      { id: 91, path: '/podborki/prazdniki/8-marta', title: 'Открытки на 8 Марта' },
+      { id: 91, path: '/otkrytki/prazdniki/8-marta', title: 'Открытки на 8 Марта' },
       { showFrom: '2026-02-01T00:00:00.000Z', showUntil: '2026-03-09T00:00:00.000Z' },
     );
     const later = seasonalNode(
-      { id: 92, path: '/podborki/prazdniki/9-maya', title: 'Открытки на 9 Мая' },
+      { id: 92, path: '/otkrytki/prazdniki/9-maya', title: 'Открытки на 9 Мая' },
       { showFrom: '2026-04-01T00:00:00.000Z', showUntil: '2026-05-10T00:00:00.000Z' },
     );
 
     expect(seasonalLinks([inWindow, later], DAY)).toEqual([
-      { name: 'Открытки на 8 Марта', path: '/podborki/prazdniki/8-marta' },
+      { name: 'Открытки на 8 Марта', path: '/otkrytki/prazdniki/8-marta' },
     ]);
   });
 
@@ -651,7 +787,7 @@ describe('сезонный блок главной (задача Э3-09, ТЗ §
     // Пустое поле означает «показывать не по календарю»: догадываться за
     // редактора нельзя, иначе подборка появится в день, которого он не назначал.
     const halfOpen = seasonalNode(
-      { id: 93, path: '/podborki/prazdniki/paskha', title: 'Открытки на Пасху' },
+      { id: 93, path: '/otkrytki/prazdniki/paskha', title: 'Открытки на Пасху' },
       { showFrom: '2026-02-01T00:00:00.000Z' },
     );
 
@@ -673,17 +809,17 @@ describe('сезонный блок главной (задача Э3-09, ТЗ §
       showUntil: '2026-03-09T00:00:00.000Z',
     } as const;
     const first = seasonalNode(
-      { id: 95, path: '/podborki/prazdniki/14-fevralya', title: '14 февраля' },
+      { id: 95, path: '/otkrytki/prazdniki/14-fevralya', title: '14 февраля' },
       window,
     );
     const second = seasonalNode(
-      { id: 96, path: '/podborki/prazdniki/23-fevralya', title: '23 февраля' },
+      { id: 96, path: '/otkrytki/prazdniki/23-fevralya', title: '23 февраля' },
       window,
     );
 
     expect(seasonalLinks([second, first], DAY).map((link) => link.path)).toEqual([
-      '/podborki/prazdniki/23-fevralya',
-      '/podborki/prazdniki/14-fevralya',
+      '/otkrytki/prazdniki/23-fevralya',
+      '/otkrytki/prazdniki/14-fevralya',
     ]);
   });
 });
@@ -780,9 +916,9 @@ describe('фильтр представления на странице подб
       view: FILTER,
     });
 
-    expect(filtered.filterOptions[0]?.href).toBe('/podborki/prazdniki/8-marta/page/2');
+    expect(filtered.filterOptions[0]?.href).toBe('/otkrytki/prazdniki/8-marta/page/2');
     for (const option of filtered.filterOptions) {
-      expect(option.href.startsWith('/podborki/prazdniki/8-marta/page/2')).toBe(true);
+      expect(option.href.startsWith('/otkrytki/prazdniki/8-marta/page/2')).toBe(true);
     }
   });
 
@@ -794,8 +930,8 @@ describe('фильтр представления на странице подб
     // от собственного пути записи — то есть один блок страницы уводил с неё, а
     // другой оставался. Правильный источник один: адрес самой страницы.
     const node = collection({
-      canonical: '/podborki/prazdniki/8-marta',
-      path: '/podborki/prazdniki/8-marta/mame',
+      canonical: '/otkrytki/prazdniki/8-marta',
+      path: '/otkrytki/prazdniki/8-marta/mame',
     });
 
     const first = collectionContent({
@@ -804,15 +940,15 @@ describe('фильтр представления на странице подб
       pageCount: 2,
       view: FILTER,
     });
-    expect(first.canonicalPath).toBe('/podborki/prazdniki/8-marta');
-    expect(first.filterOptions[0]?.href).toBe('/podborki/prazdniki/8-marta/mame');
+    expect(first.canonicalPath).toBe('/otkrytki/prazdniki/8-marta');
+    expect(first.filterOptions[0]?.href).toBe('/otkrytki/prazdniki/8-marta/mame');
     for (const option of first.filterOptions) {
-      expect(option.href.startsWith('/podborki/prazdniki/8-marta/mame')).toBe(true);
+      expect(option.href.startsWith('/otkrytki/prazdniki/8-marta/mame')).toBe(true);
     }
     // Ряд фильтра и пагинация считаются от ОДНОГО источника — пути записи.
     const firstEntry = first.pagination?.entries[0];
     expect(firstEntry?.kind === 'page' ? firstEntry.path : null).toBe(
-      '/podborki/prazdniki/8-marta/mame',
+      '/otkrytki/prazdniki/8-marta/mame',
     );
 
     // На страницах 2+ переопределение в canonical не участвует вовсе, и ряд
@@ -824,7 +960,7 @@ describe('фильтр представления на странице подб
       pageCount: 2,
       view: FILTER,
     });
-    expect(second.filterOptions[0]?.href).toBe('/podborki/prazdniki/8-marta/mame/page/2');
+    expect(second.filterOptions[0]?.href).toBe('/otkrytki/prazdniki/8-marta/mame/page/2');
   });
 
   it('чужие параметры страницу не меняют вовсе', () => {

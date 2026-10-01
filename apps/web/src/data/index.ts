@@ -98,6 +98,7 @@ export {
   type NodeContentMemo,
   nodesWithContent,
   readSiteSettings,
+  readOtkrytkiPathQuery,
   searchCards,
   searchCollections,
   relationId,
@@ -110,15 +111,13 @@ export {
  * разметки JSON-LD один источник значения — обоснование в шапке `./page-data.ts`.
  */
 /**
- * Сборка страниц каталогов `/otkrytki` и `/podborki` (Э3-07, Э3-08). Маршрут
+ * Сборка единого каталога `/otkrytki` (Э3-07, Э3-08). Маршрут
  * зовёт одну функцию и превращает её решение в ответ: 200, одиночный 301 или 404.
  */
 export {
   type CardCatalogBody,
   cardCatalogPage,
   type CatalogPageResult,
-  type CollectionCatalogBody,
-  collectionCatalogPage,
 } from './catalog.js';
 
 /**
@@ -160,6 +159,9 @@ export {
   collectionLinks,
   type CollectionPageContent,
   collectionPageContent,
+  type CollectionPageData,
+  type CardPageData,
+  loadOtkrytkiPathPage,
   seasonalLinks,
 } from './page-data.js';
 
@@ -194,3 +196,9 @@ export {
 } from './queries.js';
 
 export { payloadClient } from './payload-client.js';
+
+/**
+ * Категории бокового меню (задача про левое меню категорий). Обоснование состава
+ * и отбора — шапка `./site-nav.ts`.
+ */
+export { catalogSectionsFrom, siteCategoryNav } from './site-nav.js';

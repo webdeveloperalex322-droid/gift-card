@@ -68,18 +68,28 @@ const { ariaLabel = 'Фильтр по формату открытки', options
     margin-block: 1rem 0;
   }
 
+  /* Прямоугольник, а не пилюля: скруглений в направлении нет нигде, и фильтр
+     не должен выглядеть единственным исключением. */
   .filter-row__link,
   .filter-row__current {
     display: inline-block;
-    padding: 0.25rem 0.625rem;
-    border: 1px solid currentColor;
-    border-radius: 999px;
+    padding: 0.3125rem 0.6875rem;
+    border: 1px solid var(--rule);
     font-size: 0.875rem;
     text-decoration: none;
   }
 
+  .filter-row__link:hover {
+    border-color: var(--stamp);
+    color: var(--stamp);
+  }
+
+  /* Выбранное значение — светлая подложка акцента: заливка чернилами здесь
+     конкурировала бы с текущей страницей пагинации, а прозрачность читалась бы
+     как «недоступно». */
   .filter-row__current {
-    font-weight: 700;
-    opacity: 0.6;
+    border-color: var(--stamp);
+    background: var(--stamp-tint);
+    color: var(--stamp);
   }
 </style>

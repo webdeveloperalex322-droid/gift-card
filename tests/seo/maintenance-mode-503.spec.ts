@@ -57,7 +57,7 @@ if (adminPath === '') {
 const ADDRESS_CLASSES: readonly { readonly path: string; readonly note: string }[] = [
   { path: '/', note: 'корень сайта' },
   { path: '/otkrytki', note: 'каталог открыток' },
-  { path: '/podborki/prazdniki/8-marta', note: 'адрес записи CMS' },
+  { path: '/otkrytki/prazdniki/8-marta', note: 'адрес подборки CMS' },
   { path: '/search', note: 'служебная страница' },
   { path: '/o-proekte', note: 'информационная страница' },
   { path: '/takogo-adresa-net-e3-14', note: 'несуществующий адрес (иначе был бы 404)' },
@@ -75,7 +75,7 @@ const ADDRESS_CLASSES: readonly { readonly path: string; readonly note: string }
 const NON_CANONICAL_FORMS: readonly { readonly path: string; readonly note: string }[] = [
   { path: '/otkrytki/', note: 'завершающий слеш' },
   { path: '/otkrytki//', note: 'повторный слеш' },
-  { path: '/podborki/prazdniki/8-marta/', note: 'завершающий слеш у адреса записи' },
+  { path: '/otkrytki/prazdniki/8-marta/', note: 'завершающий слеш у адреса подборки' },
 ];
 
 let server: MaintenanceServer | null = null;

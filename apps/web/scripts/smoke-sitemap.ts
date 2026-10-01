@@ -499,11 +499,10 @@ async function main(): Promise<void> {
     );
 
     const catalogFact = facts.sections.find((fact) => fact.pagePath === '/otkrytki');
-    const nodesFact = facts.sections.find((fact) => fact.pagePath === '/podborki');
     record(
-      'условие «отвечает 200» посчитано по живым данным: /otkrytki да, /podborki нет',
-      catalogFact?.respondsOk === true && nodesFact?.respondsOk === false,
-      `otkrytki=${String(catalogFact?.respondsOk)} podborki=${String(nodesFact?.respondsOk)}`,
+      'условие «отвечает 200» посчитано по живым данным для единого каталога /otkrytki',
+      catalogFact?.respondsOk === true,
+      `otkrytki=${String(catalogFact?.respondsOk)}`,
     );
     record(
       'узел-черновик в кандидаты не попал: публичный рендер его не видит',

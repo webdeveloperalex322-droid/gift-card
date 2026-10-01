@@ -48,7 +48,11 @@ import { findRedirectFrom } from './data/redirects.js';
 import { maintenanceMode } from './server/maintenance.js';
 import { adminRoutePrefix, decideRequestTarget } from './routing/path-policy.js';
 import { GONE_PAGE_HTML } from './server/gone-page.js';
-import { decideMediaRequest, resolveMediaRoot } from './server/media-files.js';
+import {
+  createMediaSourceResolver,
+  decideMediaRequest,
+  resolveMediaSource,
+} from './server/media-files.js';
 import { type RedirectDecision, resolveRedirect } from './routing/redirects.js';
 import { serverEnv, workspaceRoot } from './server-env.js';
 import { resolveServableFile } from './server/static-files.js';
@@ -67,6 +71,10 @@ import { resolveServableFile } from './server/static-files.js';
  * корня — `resolveServableFile`. Нет только `ETag`/304 и потоковой отдачи: это
  * оптимизации HTTP, и в dev-сервере они ничего не решают.
  */
+const devMediaSource = createMediaSourceResolver(() =>
+  resolveMediaSource(serverEnv(), workspaceRoot()),
+);
+
 async function respondWithDerivative(pathname: string): Promise<Response | null> {
   const decision = decideMediaRequest(pathname);
   if (decision.action === 'not-media') {
@@ -76,10 +84,19 @@ async function respondWithDerivative(pathname: string): Promise<Response | null>
     return new Response(null, { status: 404 });
   }
 
-  const file = await resolveServableFile(
-    resolveMediaRoot(serverEnv(), workspaceRoot()),
-    decision.key,
-  );
+  const source = devMediaSource();
+  if (source.kind === 's3') {
+    const object = await source.store.read(decision.key);
+    if (object === null) {
+      return new Response(null, { status: 404 });
+    }
+    return new Response(new Uint8Array(object), {
+      headers: { ...decision.headers, 'Content-Length': String(object.length) },
+      status: 200,
+    });
+  }
+
+  const file = await resolveServableFile(source.root, decision.key);
   if (file === null) {
     return new Response(null, { status: 404 });
   }

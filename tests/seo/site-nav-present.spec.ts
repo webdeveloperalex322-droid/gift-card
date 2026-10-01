@@ -6,8 +6,8 @@
  * Достижимость за четыре перехода держится не на дисциплине шаблонов, а на том,
  * что меню и подвал печатает LAYOUT — то есть они есть на каждой странице, а не
  * «пока не забыли». Проверяется ровно это: в ответе КАЖДОЙ страницы выборки, а
- * также на странице 404, присутствуют ссылки `<a href>` на корень и на оба
- * каталога — `/otkrytki` и `/podborki`. Через них достижимы группирующие узлы,
+ * также на странице 404, присутствуют ссылки `<a href>` на корень и единый
+ * каталог `/otkrytki`. Через него достижимы группирующие узлы,
  * через узлы — подборки, через подборки — карточки.
  *
  * Почему проверяется НАЛИЧИЕ ССЫЛКИ, а не 200 у её цели: каталог без
@@ -34,7 +34,7 @@ import { resolveAcceptanceTarget, urlFor } from './support/target.js';
 const target = resolveAcceptanceTarget();
 
 /** Пункты меню, обязательные на каждой странице. */
-const REQUIRED_LINKS: readonly string[] = ['/', '/otkrytki', '/podborki'];
+const REQUIRED_LINKS: readonly string[] = ['/', '/otkrytki'];
 
 const PAGES: readonly { readonly path: string; readonly label: string }[] = [
   ...ACCEPTANCE_PAGES.map((page) => ({ label: page.task, path: page.path })),

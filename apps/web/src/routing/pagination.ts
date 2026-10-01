@@ -12,7 +12,7 @@
  * Модуль ЧИСТЫЙ: ни запросов, ни чтения `process.env`, ни импортов Astro и
  * Payload. Поэтому он входит в composite-проект `../../tsconfig.node.json` и
  * проверяется юнит-тестом `tests/unit/web-pagination.test.ts`. Маршруты
- * (`pages/otkrytki/page/[page].astro`, `pages/podborki/[...path].astro`) только
+ * (`pages/otkrytki/page/[page].astro`, `pages/otkrytki/[...path].astro`) только
  * превращают его решения в HTTP-ответ.
  *
  * ## Почему `/page/1` не может появиться в выходном значении

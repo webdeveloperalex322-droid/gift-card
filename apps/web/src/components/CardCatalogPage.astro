@@ -50,6 +50,7 @@ const jsonLd = jsonLdScriptText(body.jsonLd);
   description={body.view.metaDescription}
   canonicalPath={body.view.canonicalPath}
   robots={body.view.robots}
+  categorySections={body.categorySections}
 >
   <Breadcrumbs trail={body.trail} />
 
@@ -61,9 +62,40 @@ const jsonLd = jsonLdScriptText(body.jsonLd);
     body.page === 1 ? <p class="catalog__lead">{facts.lead}</p> : null
   }
 
+  {
+    body.sections.length === 0 ? null : (
+      <nav aria-label="Разделы открыток">
+        <ul class="catalog__sections">
+          {
+            body.sections.map((section) => (
+              <li class="catalog__section">
+                <h2 class="catalog__section-title">
+                  <a href={section.node.path}>{section.node.name}</a>
+                </h2>
+                {section.children.length === 0 ? null : (
+                  <ul class="link-row">
+                    {section.children.map((child) => (
+                      <li>
+                        <a href={child.path}>{child.name}</a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
+    )
+  }
+
   <AdRow slots={body.ads.underH1} position="under-h1" />
 
-  <CardGrid tiles={body.tiles} prioritizeFirst ariaLabel={facts.listLabel} />
+  {
+    body.tiles.length === 0 ? null : (
+      <CardGrid tiles={body.tiles} prioritizeFirst ariaLabel={facts.listLabel} />
+    )
+  }
 
   {body.pagination === null ? null : <Pagination model={body.pagination} />}
 
@@ -76,5 +108,21 @@ const jsonLd = jsonLdScriptText(body.jsonLd);
   .catalog__lead {
     max-width: 45rem;
     margin-block: 0 1.25rem;
+    color: var(--ink-soft);
+  }
+
+  .catalog__sections {
+    margin: 0 0 1.5rem;
+    padding: 0;
+    list-style: none;
+  }
+
+  .catalog__section + .catalog__section {
+    margin-block-start: 1.5rem;
+  }
+
+  .catalog__section-title {
+    margin-block: 0 0.5rem;
+    font-size: 1.25rem;
   }
 </style>

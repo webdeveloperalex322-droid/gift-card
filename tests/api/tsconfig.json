@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Проект НЕ входит в решение `tsc -b` корня: он не выпускает объявлений и
+    // ни от кого не требуется. Его проверяет `pnpm --filter @otkritka/cms run
+    // check` вторым вызовом tsc — владелец у этих тестов тот же, что у
+    // проверяемого кода (apps/cms), и разъезжаться проверке и коду нельзя.
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+
+    // Разрешение — как в apps/cms (Bundler), а не NodeNext базы. Тесты
+    // импортируют файлы apps/cms НАПРЯМУЮ (маршруты Payload, конфиг), а те
+    // написаны под сборщик Next: относительные импорты у них без расширения
+    // `.js`, и под NodeNext ни один из них не разрешился бы.
+    "allowJs": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "lib": ["ES2023"],
+    "types": ["node"],
+
+    // Тот же псевдоним, что в apps/cms/tsconfig.json: файлы маршрутов Payload
+    // импортируют конфиг под этим именем, а тесты поднимают именно их.
+    "paths": {
+      "@payload-config": ["../../apps/cms/src/payload.config.ts"]
+    }
+  },
+  "include": ["**/*.ts"]
+}

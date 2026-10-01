@@ -1,0 +1,134 @@
+---
+import { CARD_PATH_PREFIX } from '@otkritka/cms/seo/paths';
+
+import CardDetailPage from '../../components/CardDetailPage.astro';
+import CollectionDetailPage from '../../components/CollectionDetailPage.astro';
+import {
+  cardBreadcrumbTrail,
+  cardPageContent,
+  collectionBreadcrumbTrail,
+  collectionPageContent,
+  findCollectionById,
+  listChildCollections,
+  listCollectionCards,
+  listCollectionsByIds,
+  listRelatedCollections,
+  listSimilarCards,
+  loadOtkrytkiPathPage,
+  newNodeContentMemo,
+  readOtkrytkiPathQuery,
+  readSiteSettings,
+  relationId,
+  relationIds,
+  siteCategoryNav,
+} from '../../data';
+import { parseViewParams } from '../../routing/view-params';
+import { adRows } from '../../seo/ad-slots';
+import { serverEnv } from '../../server-env';
+
+export const prerender = false;
+
+const rest = Astro.params.path ?? '';
+const resolved = await loadOtkrytkiPathPage({
+  path: `${CARD_PATH_PREFIX}/${rest}`,
+  read: readOtkrytkiPathQuery,
+});
+if (resolved === null) {
+  return new Response(null, { status: 404 });
+}
+
+let page;
+if (resolved.kind === 'card') {
+  const env = serverEnv();
+  const collectionIds = relationIds(resolved.card.collections);
+  // Мемоизатор общий с рельсом категорий: подборки карточки и узлы таксономии
+  // пересекаются, и без общей памяти предикат «непуст» считался бы для одного и
+  // того же узла дважды за один ответ (то же соображение, что в ветке подборки).
+  const memo = newNodeContentMemo();
+  const [settings, collections, similar, trail, categorySections] = await Promise.all([
+    readSiteSettings(),
+    listCollectionsByIds(collectionIds, memo),
+    listSimilarCards({
+      collectionIds,
+      excludeCardId: resolved.card.id,
+      publishedAt: resolved.card.publishedAt ?? null,
+    }),
+    cardBreadcrumbTrail(resolved.card),
+    siteCategoryNav(memo),
+  ]);
+  const content = cardPageContent({ card: resolved.card, collections, env, settings, similar });
+  if (content === null) {
+    return new Response(null, { status: 404 });
+  }
+  page = {
+    card: resolved.card,
+    categorySections,
+    content,
+    kind: 'card' as const,
+    trail,
+  };
+} else {
+  const collectionPage = resolved.kind === 'redirect' ? 1 : resolved.page;
+  const memo = newNodeContentMemo();
+  const [cardsPage, children, parent, related] = await Promise.all([
+    listCollectionCards({ collectionId: resolved.node.id, page: collectionPage }),
+    listChildCollections(resolved.node.id, memo),
+    findCollectionById(relationId(resolved.node.parent)),
+    listRelatedCollections(relationIds(resolved.node.related), memo),
+  ]);
+  if (collectionPage > 1 && collectionPage > cardsPage.pageCount) {
+    return new Response(null, { status: 404 });
+  }
+
+  const content = collectionPageContent({
+    cards: cardsPage.cards,
+    children,
+    env: serverEnv(),
+    node: resolved.node,
+    page: collectionPage,
+    pageCount: cardsPage.pageCount,
+    parent,
+    related,
+    view: parseViewParams(Astro.url.searchParams),
+  });
+  if (content === null) {
+    return new Response(null, { status: 404 });
+  }
+  if (resolved.kind === 'redirect') {
+    return new Response(null, {
+      headers: { 'Content-Length': '0', Location: resolved.location },
+      status: 301,
+    });
+  }
+  const [settings, trail, categorySections] = await Promise.all([
+    readSiteSettings(),
+    collectionBreadcrumbTrail(resolved.node, collectionPage),
+    siteCategoryNav(memo),
+  ]);
+  page = {
+    ads: adRows(settings.adSlots),
+    categorySections,
+    content,
+    kind: 'collection' as const,
+    trail,
+  };
+}
+---
+
+{page.kind === 'card'
+  ? (
+      <CardDetailPage
+        card={page.card}
+        categorySections={page.categorySections}
+        content={page.content}
+        trail={page.trail}
+      />
+    )
+  : (
+      <CollectionDetailPage
+        ads={page.ads}
+        categorySections={page.categorySections}
+        content={page.content}
+        trail={page.trail}
+      />
+    )}

@@ -72,6 +72,7 @@ export interface Config {
     'card-images': CardImage;
     redirects: Redirect;
     'seo-history': SeoHistory;
+    'content-path-claims': ContentPathClaim;
     'image-name-claims': ImageNameClaim;
     users: User;
     'payload-kv': PayloadKv;
@@ -87,6 +88,7 @@ export interface Config {
     'card-images': CardImagesSelect<false> | CardImagesSelect<true>;
     redirects: RedirectsSelect<false> | RedirectsSelect<true>;
     'seo-history': SeoHistorySelect<false> | SeoHistorySelect<true>;
+    'content-path-claims': ContentPathClaimsSelect<false> | ContentPathClaimsSelect<true>;
     'image-name-claims': ImageNameClaimsSelect<false> | ImageNameClaimsSelect<true>;
     users: UsersSelect<false> | UsersSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
@@ -151,6 +153,8 @@ export interface UserAuthOperations {
  */
 export interface Card {
   id: number;
+  pilotImportKey?: string | null;
+  sourceImportKey?: string | null;
   /**
    * Заголовок страницы (title). Уникален в пределах каталога — совпадения проверяются при сохранении (задача Э5-01). Смена заголовка URL не меняет.
    */
@@ -163,6 +167,7 @@ export interface Card {
    * URL записи: /otkrytki/<slug>. Неизменяем после первой публикации (смена возможна только вместе с одиночным 301 — задача Э1-09). Смена заголовка URL не меняет.
    */
   slug: string;
+  pathClaimKey?: string | null;
   /**
    * Изображение открытки (ТЗ §8.1). Обязательно до перевода в review. После первой публикации сменить изображение может только admin: адреса всех производных при этом меняются (ТЗ §6.7), а URL файла постоянен (ТЗ §6.3). URL самой карточки не меняется никогда.
    */
@@ -396,6 +401,8 @@ export interface Card {
  */
 export interface CardImage {
   id: number;
+  pilotImportKey?: string | null;
+  sourceImportKey?: string | null;
   /**
    * Описательное название изображения — из него один раз строится ИМЯ ФАЙЛА на транслите (например «Открытка маме на 8 марта с тюльпанами» → otkrytka-mame-na-8-marta-s-tyulpanami). После первой загрузки правка этого поля имя файла и пути производных НЕ меняет: URL файла постоянен (ТЗ §6.3).
    */
@@ -476,13 +483,15 @@ export interface CardImage {
   height?: number | null;
 }
 /**
- * Подборки и посадочные. URL собирается из цепочки родителей: /podborki/<группа>/<повод>/<уточнение>. Порядок только «повод → уточнение». Новая запись — draft с noindex; публикует и открывает в индекс только человек.
+ * Подборки и посадочные. URL собирается из цепочки родителей: /otkrytki/<группа>/<повод>/<уточнение>. Порядок только «повод → уточнение». Новая запись — draft с noindex; публикует и открывает в индекс только человек.
  *
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "collections".
  */
 export interface Collection {
   id: number;
+  pilotImportKey?: string | null;
+  sourceImportKey?: string | null;
   /**
    * Заголовок страницы (title). Уникален в пределах каталога — совпадения проверяются при сохранении (задача Э5-01). Смена заголовка URL не меняет.
    */
@@ -492,23 +501,28 @@ export interface Collection {
    */
   h1?: string | null;
   /**
-   * Один сегмент URL. Итоговый путь собирается из пути родителя и этого сегмента, например /podborki/prazdniki/8-marta/mame. Slug праздника с фиксированной датой — <число>-<месяц> (8-marta, 9-maya); без фиксированной даты — короткое название (paskha, novyy-god), решение Ч-04-4. Год в URL ежегодного праздника не добавляется. Неизменяем после первой публикации (смена — только вместе с одиночным 301, задача Э1-09).
+   * Один сегмент URL. Итоговый путь собирается из пути родителя и этого сегмента, например /otkrytki/prazdniki/8-marta/mame. Slug праздника с фиксированной датой — <число>-<месяц> (8-marta, 9-maya); без фиксированной даты — короткое название (paskha, novyy-god), решение Ч-04-4. Год в URL ежегодного праздника не добавляется. Неизменяем после первой публикации (смена — только вместе с одиночным 301, задача Э1-09).
    */
   slug: string;
   /**
    * ИТОГОВЫЙ путь подборки. Считается хуком из цепочки родителей и хранится с уникальным индексом БД: уникальность URL не может держаться на проверке запросом перед записью — два одновременных сохранения через API прошли бы её оба. Снаружи не пишется ни через админку, ни через API.
    */
   path?: string | null;
+  pathClaimKey?: string | null;
   /**
-   * Определяет, куда узел можно вложить: группа — только в корень /podborki, повод — под группу, уточнение — под группу или под повод. Порядок только «повод → уточнение» (решение Ч-04-7): праздник под адресатом не создаётся никогда. Вида под стиль и настроение нет намеренно — по решению Ч-04-3 это фильтр без собственных URL.
+   * Определяет, куда узел можно вложить: группа — только в корень /otkrytki, повод — под группу, уточнение — под группу или под повод. Порядок только «повод → уточнение» (решение Ч-04-7): праздник под адресатом не создаётся никогда. Вида под стиль и настроение нет намеренно — по решению Ч-04-3 это фильтр без собственных URL.
    */
   nodeKind: 'group' | 'occasion' | 'recipient';
   /**
-   * Родительский узел. Пусто — узел верхнего уровня (прямо под /podborki). Смена родителя меняет URL этой подборки и всех вложенных, поэтому после первой публикации она возможна только вместе с одиночным 301 (задача Э1-09).
+   * Родительский узел. Пусто — узел верхнего уровня (прямо под /otkrytki). Смена родителя меняет URL этой подборки и всех вложенных, поэтому после первой публикации она возможна только вместе с одиночным 301 (задача Э1-09).
    */
   parent?: (number | null) | Collection;
   /**
-   * Вводный текст страницы (ТЗ §8.1). Должен быть уникальным и осмысленным: шаблонный текст с заменой пары слов — прямой запрет п. 23 SEO ТЗ, а уникальность вводного текста входит в условия открытия страницы в index,follow (п. 5.1). Набор возможностей редактора сужен до того, что печатает публичный шаблон: изображения, ссылки-записи, разделители и выравнивание недоступны намеренно — они исчезали бы на странице молча. Ссылка внутрь сайта задаётся путём от корня, например /podborki/prazdniki/8-marta.
+   * Краткое видимое описание подборки. Это отдельный текст страницы, не meta description и не развёрнутый вводный rich-text блок.
+   */
+  description?: string | null;
+  /**
+   * Вводный текст страницы (ТЗ §8.1). Должен быть уникальным и осмысленным: шаблонный текст с заменой пары слов — прямой запрет п. 23 SEO ТЗ, а уникальность вводного текста входит в условия открытия страницы в index,follow (п. 5.1). Набор возможностей редактора сужен до того, что печатает публичный шаблон: изображения, ссылки-записи, разделители и выравнивание недоступны намеренно — они исчезали бы на странице молча. Ссылка внутрь сайта задаётся путём от корня, например /otkrytki/prazdniki/8-marta.
    */
   intro?: {
     root: {
@@ -677,7 +691,13 @@ export interface User {
   role: 'admin' | 'ai-editor';
   updatedAt: string;
   createdAt: string;
+  /**
+   * Выдан ли аккаунту API-ключ. Включает и выключает только admin: ключ наследует роль владельца, поэтому распоряжаться им — то же право, что назначать роли.
+   */
   enableAPIKey?: boolean | null;
+  /**
+   * Сам ключ. Читает и меняет только admin — в том числе у своей записи: ключ выдаётся аккаунту, а не принадлежит ему.
+   */
   apiKey?: string | null;
   apiKeyIndex?: string | null;
   email: string;
@@ -706,7 +726,7 @@ export interface User {
 export interface Redirect {
   id: number;
   /**
-   * Старый путь от корня сайта, например /otkrytki/staraya-otkrytka. Уникален: два правила для одного пути сделали бы ответ зависимым от порядка строк. Маршрут, который сайт обслуживает сам, источником быть не может: «/», «/otkrytki», «/podborki», «/search», «/account», служебные страницы, файлы robots и sitemap, «/media», путь админки и любой путь под ними — редирект оттуда сделал бы живую страницу недостижимой. Адреса записей под каталогами переносить можно.
+   * Старый путь от корня сайта, например /otkrytki/staraya-otkrytka. Уникален: два правила для одного пути сделали бы ответ зависимым от порядка строк. Маршрут, который сайт обслуживает сам, источником быть не может: «/», «/otkrytki», «/search», «/account», служебные страницы, файлы robots и sitemap, «/media», путь админки и любой путь под ними — редирект оттуда сделал бы живую страницу недостижимой. Адреса записей под каталогами переносить можно.
    */
   from: string;
   /**
@@ -780,6 +800,21 @@ export interface SeoHistory {
    * Момент изменения. Ставится хуком; собственное поле, а не createdAt, чтобы все записи одной операции имели ровно одно время.
    */
   changedAt: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * Системный неизменяемый реестр публичных URL карточек и подборок. Записи создают только серверные хуки в транзакции сохранения контента.
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "content-path-claims".
+ */
+export interface ContentPathClaim {
+  id: number;
+  path: string;
+  ownerCollection: 'cards' | 'collections';
+  ownerKey: string;
+  claimedAt: string;
   updatedAt: string;
   createdAt: string;
 }
@@ -956,6 +991,10 @@ export interface PayloadLockedDocument {
         value: number | SeoHistory;
       } | null)
     | ({
+        relationTo: 'content-path-claims';
+        value: number | ContentPathClaim;
+      } | null)
+    | ({
         relationTo: 'image-name-claims';
         value: number | ImageNameClaim;
       } | null)
@@ -1010,9 +1049,12 @@ export interface PayloadMigration {
  * via the `definition` "cards_select".
  */
 export interface CardsSelect<T extends boolean = true> {
+  pilotImportKey?: T;
+  sourceImportKey?: T;
   title?: T;
   h1?: T;
   slug?: T;
+  pathClaimKey?: T;
   image?: T;
   alt?: T;
   caption?: T;
@@ -1106,12 +1148,16 @@ export interface CardsSelect<T extends boolean = true> {
  * via the `definition` "collections_select".
  */
 export interface CollectionsSelect<T extends boolean = true> {
+  pilotImportKey?: T;
+  sourceImportKey?: T;
   title?: T;
   h1?: T;
   slug?: T;
   path?: T;
+  pathClaimKey?: T;
   nodeKind?: T;
   parent?: T;
+  description?: T;
   intro?: T;
   metaDescription?: T;
   status?: T;
@@ -1174,6 +1220,8 @@ export interface CollectionsSelect<T extends boolean = true> {
  * via the `definition` "card-images_select".
  */
 export interface CardImagesSelect<T extends boolean = true> {
+  pilotImportKey?: T;
+  sourceImportKey?: T;
   title?: T;
   pHash?: T;
   nameStem?: T;
@@ -1239,6 +1287,18 @@ export interface SeoHistorySelect<T extends boolean = true> {
   changedBy?: T;
   viaApiKey?: T;
   changedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "content-path-claims_select".
+ */
+export interface ContentPathClaimsSelect<T extends boolean = true> {
+  path?: T;
+  ownerCollection?: T;
+  ownerKey?: T;
+  claimedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }

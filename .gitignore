@@ -15,3 +15,14 @@ media/
 uploads/
 .worktrees/
 .local/
+content/pilot-2026-08/backgrounds/
+content/pilot-2026-08/final/
+content/pilot-2026-08/rejected/
+content/pilot-2026-08/contact-sheet.jpg
+content/pilot-2026-08/import-report.json
+
+# Логи фонового dev-сервера (`astro dev` в отсоединённом режиме) — оба потока.
+# Артефакт запуска на машине разработчика: содержимое — адрес и pid, ценности для
+# истории нет, а `git add -A` утащил бы его в коммит.
+*.log
+*.log.err

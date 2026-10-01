@@ -1,0 +1,64 @@
+name: CI & Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Проверки на КАЖДЫЙ PR и push (Э7-02). Красный CI блокирует деплой.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Lint + типы
+        run: pnpm run check
+      - name: Юнит-тесты
+        # Только проект unit (~2170 тестов). Проект api и tests/seo требуют
+        # живого Postgres + env (PAYLOAD_ADMIN_PATH, DATABASE_URL, PAYLOAD_SECRET)
+        # и накатывают схему — это стенд этапа 7, отдельным job со службой
+        # postgres, когда он будет описан. Пока CI = типы/линт + unit.
+        run: pnpm exec vitest run --project unit
+
+  # Деплой в прод ТОЛЬКО из main и только при зелёных checks.
+  deploy:
+    needs: checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Собрать tarball исходников
+        run: git archive --format=tar.gz -o incoming.tgz HEAD
+
+      - name: Настроить SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Доставить исходники
+        run: |
+          scp -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts \
+            incoming.tgz "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:~/otkritka/incoming.tgz"
+
+      - name: Запустить деплой на сервере
+        run: |
+          ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            'bash ~/otkritka/deploy.sh' <<< "${{ secrets.DEPLOY_SUDO_PASS }}"

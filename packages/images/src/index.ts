@@ -63,9 +63,13 @@ export {
   derivativeCacheHeaders,
   derivativeKeyFromPublicPath,
   derivativePublicPath,
+  DERIVATIVE_KEY_PREFIX,
   IMMUTABLE_CACHE_CONTROL,
+  isDerivativeKey,
+  isOriginalKey,
   isStorageKey,
   MEDIA_ROUTE_PREFIX,
+  ORIGINAL_KEY_PREFIX,
 } from './media.js';
 
 export {

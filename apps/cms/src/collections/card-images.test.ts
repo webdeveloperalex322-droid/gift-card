@@ -146,6 +146,26 @@ describe('card-images: права', () => {
     const nameStem = findField(CardImages.fields, 'nameStem');
     expect('unique' in nameStem ? nameStem.unique : undefined).toBe(true);
   });
+
+  it('ключ pilot-иморта уникален в базе, скрыт и не пишется через API', () => {
+    const field = findField(CardImages.fields, 'pilotImportKey');
+    expect('unique' in field ? field.unique : undefined).toBe(true);
+    expect('index' in field ? field.index : undefined).toBe(true);
+    expect(accessOf(field)?.create).toBe(systemFieldAccess);
+    expect(accessOf(field)?.update).toBe(systemFieldAccess);
+    expect('admin' in field && field.admin && 'hidden' in field.admin
+      ? field.admin.hidden
+      : undefined).toBe(true);
+  });
+
+  it('ключ общего импорта уникален, скрыт и доступен только системному хуку', () => {
+    const field = findField(CardImages.fields, 'sourceImportKey');
+    expect('unique' in field ? field.unique : undefined).toBe(true);
+    expect('index' in field ? field.index : undefined).toBe(true);
+    expect(accessOf(field)?.create).toBe(systemFieldAccess);
+    expect(accessOf(field)?.update).toBe(systemFieldAccess);
+    expect('admin' in field && field.admin && 'hidden' in field.admin ? field.admin.hidden : undefined).toBe(true);
+  });
 });
 
 describe('image-name-claims: реестр занятых имён', () => {
@@ -214,14 +234,15 @@ describe('cards: поле image', () => {
     // Правила статусной модели обязаны остаться первыми: отказ по правам должен
     // звучать раньше отказа «есть похожее изображение».
     //
-    // Четыре хука beforeValidate: привязка подборок в пакете (Э5-06 — идёт
-    // ПЕРВОЙ, потому что переписывает значение связи, и правила ниже обязаны
+    // Пять хуков beforeValidate: системный ключ path claim, привязка подборок
+    // в пакете (Э5-06), правила ниже обязаны
     // видеть итоговый список), правила статусной модели, проверка дублей
     // метатегов (Э5-01, общая фабрика) и зеркало изображения с калиткой
     // визуальных дублей. Число проверяется не ради числа: пропавший хук — это
     // тихо отключённая калитка, а порядок задаёт, какой отказ услышит редактор.
-    expect(Cards.hooks?.beforeValidate).toHaveLength(4);
-    expect(Cards.hooks?.beforeChange).toHaveLength(2);
+    // Плюс два независимых защищённых ключа импорта: pilot и общая библиотека.
+    expect(Cards.hooks?.beforeValidate).toHaveLength(7);
+    expect(Cards.hooks?.beforeChange).toHaveLength(3);
     // Два: правила статусной модели на сырых данных плюс громкий отказ на
     // попытку сменить изображение публиковавшейся карточки.
     expect(Cards.hooks?.beforeOperation).toHaveLength(2);

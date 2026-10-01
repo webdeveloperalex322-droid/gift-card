@@ -70,7 +70,7 @@ function stubSite(origin: string): SiteProbe {
   const home: ProbeResponse = {
     body:
       '<html><body><h1>Главная</h1>' +
-      '<a href="/podborki">Подборки</a>' +
+      '<a href="/otkrytki/prazdniki">Праздники</a>' +
       '<a href="/net-takoy-stranicy">Битая</a>' +
       '<a href="/staryy-adres">Переехавшая</a>' +
       '</body></html>',
@@ -78,8 +78,8 @@ function stubSite(origin: string): SiteProbe {
   };
   const pages: Record<string, ProbeResponse> = {
     [`${origin}/`]: home,
-    [`${origin}/podborki`]: { body: '<html><body><h1>Подборки</h1></body></html>', status: 200 },
-    [`${origin}/staryy-adres`]: { body: '', location: '/podborki', status: 301 },
+    [`${origin}/otkrytki/prazdniki`]: { body: '<html><body><h1>Праздники</h1></body></html>', status: 200 },
+    [`${origin}/staryy-adres`]: { body: '', location: '/otkrytki/prazdniki', status: 301 },
     [`${origin}/sitemap.xml`]: { body: '<sitemapindex></sitemapindex>', status: 200 },
   };
   return (url: string) =>

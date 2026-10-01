@@ -68,14 +68,14 @@ describe('первая граница: пустой узел не публику
   it('одна опубликованная открытка или один опубликованный ребёнок — уже не пусто', () => {
     expect(() =>
       assertNotEmptyForPublish({
-        path: '/podborki/prazdniki/8-marta',
+        path: '/otkrytki/prazdniki/8-marta',
         publishedCards: 1,
         publishedChildren: 0,
       }),
     ).not.toThrow();
     expect(() =>
       assertNotEmptyForPublish({
-        path: '/podborki/prazdniki',
+        path: '/otkrytki/prazdniki',
         publishedCards: 0,
         publishedChildren: 1,
       }),
@@ -85,12 +85,12 @@ describe('первая граница: пустой узел не публику
   it('ни открыток, ни детей — отказ, и он объясняет 404 и битую ссылку', () => {
     const error = expectRefusal('empty-for-publish', () =>
       assertNotEmptyForPublish({
-        path: '/podborki/prazdniki/8-marta',
+        path: '/otkrytki/prazdniki/8-marta',
         publishedCards: 0,
         publishedChildren: 0,
       }),
     );
-    expect(error.message).toContain('/podborki/prazdniki/8-marta');
+    expect(error.message).toContain('/otkrytki/prazdniki/8-marta');
     expect(error.message).toContain('404');
     expect(error.message).toContain('битую внутреннюю ссылку');
   });
@@ -101,7 +101,7 @@ describe('первая граница: пустой узел не публику
     // этот тест.
     expect(() =>
       assertNotEmptyForPublish({
-        path: '/podborki/prazdniki/8-marta',
+        path: '/otkrytki/prazdniki/8-marta',
         publishedCards: 5,
         publishedChildren: 0,
       }),
@@ -115,7 +115,7 @@ describe('вторая граница: порог п. 5.1 на переходе 
       expect(() =>
         assertEnoughCardsForIndex({
           nodeKind: 'occasion',
-          path: '/podborki/prazdniki/8-marta',
+          path: '/otkrytki/prazdniki/8-marta',
           publishedCards,
           threshold: 20,
         }),
@@ -127,7 +127,7 @@ describe('вторая граница: порог п. 5.1 на переходе 
     const error = expectRefusal('thin-content-for-index', () =>
       assertEnoughCardsForIndex({
         nodeKind: 'occasion',
-        path: '/podborki/prazdniki/8-marta',
+        path: '/otkrytki/prazdniki/8-marta',
         publishedCards: 7,
         threshold: 20,
       }),
@@ -150,7 +150,7 @@ describe('вторая граница: порог п. 5.1 на переходе 
     const error = expectRefusal('thin-content-for-index', () =>
       assertEnoughCardsForIndex({
         nodeKind: 'group',
-        path: '/podborki/prazdniki',
+        path: '/otkrytki/prazdniki',
         publishedCards: 3,
         threshold: 20,
       }),

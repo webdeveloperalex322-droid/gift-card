@@ -95,14 +95,14 @@ describe('сравнение записи «до» и «после»', () => {
 
   it('переезд узла подборки фиксируется по path, а не только по slug', () => {
     const changes = diffSeoFields(
-      { path: '/podborki/prazdniki/8-marta/mame', slug: 'mame' },
-      { path: '/podborki/adresaty/mame', slug: 'mame' },
+      { path: '/otkrytki/prazdniki/8-marta/mame', slug: 'mame' },
+      { path: '/otkrytki/adresaty/mame', slug: 'mame' },
     );
     expect(changes).toEqual([
       {
         field: 'path',
-        nextValue: '/podborki/adresaty/mame',
-        previousValue: '/podborki/prazdniki/8-marta/mame',
+        nextValue: '/otkrytki/adresaty/mame',
+        previousValue: '/otkrytki/prazdniki/8-marta/mame',
       },
     ]);
   });

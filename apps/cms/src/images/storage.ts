@@ -46,27 +46,16 @@ export {
   derivativeCacheHeaders,
   derivativeKeyFromPublicPath,
   derivativePublicPath,
+  DERIVATIVE_KEY_PREFIX,
   IMMUTABLE_CACHE_CONTROL,
+  isDerivativeKey,
+  isOriginalKey,
   isStorageKey,
   MEDIA_ROUTE_PREFIX,
+  ORIGINAL_KEY_PREFIX,
 } from '@otkritka/images/media';
 
 import { derivativePublicPath } from '@otkritka/images/media';
-
-/**
- * Префикс пространства ПУБЛИЧНЫХ производных внутри хранилища.
- *
- * Константа, а не параметр окружения: префикс — часть постоянного URL файла
- * (ТЗ §6.3). Настраиваемость означала бы, что смена значения в `.env` переносит
- * все уже опубликованные изображения на другие адреса.
- */
-export const DERIVATIVE_KEY_PREFIX = 'cards';
-
-/**
- * Префикс пространства НЕПУБЛИЧНЫХ оригиналов внутри хранилища оригиналов.
- * Публичного адреса у этого пространства нет вообще.
- */
-export const ORIGINAL_KEY_PREFIX = 'originals';
 
 /**
  * Абсолютный адрес производной. Хост берётся ТОЛЬКО из `SITE_URL` через
@@ -95,6 +84,8 @@ export interface ImageStorage {
   putOriginal(key: string, data: Buffer): Promise<void>;
   /** Читает оригинал: нужен перегенерации производных без повторной загрузки. */
   readOriginal(key: string): Promise<Buffer>;
+  /** Читает производную для защищённых серверных потребителей (например, админки). */
+  readDerivative(key: string): Promise<Buffer>;
   deleteDerivative(key: string): Promise<void>;
   deleteOriginal(key: string): Promise<void>;
   hasDerivative(key: string): Promise<boolean>;

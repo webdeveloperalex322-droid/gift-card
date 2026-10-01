@@ -152,6 +152,7 @@ export function requireEnv(name, source) {
  * самого адаптера, и дефолт у него есть намеренно (см. {@link databasePush}).
  */
 export const DB_PUSH_ENV_KEY = 'PAYLOAD_DB_PUSH';
+export const DB_DISABLE_CREATE_ENV_KEY = 'PAYLOAD_DB_DISABLE_CREATE';
 
 /**
  * Накатывать ли схему в БД при подключении (`push` адаптера Postgres).
@@ -194,6 +195,27 @@ export function databasePush(source) {
     `Переменная окружения ${DB_PUSH_ENV_KEY} принимает только true/false ` +
       `(допустимы 1/0, on/off), получено: «${raw}». Непонятное значение не трактуется ` +
       'как «накатывать»: тогда опечатка молча включала бы правку схемы БД.',
+  );
+}
+
+/**
+ * Запрещает адаптеру Postgres автоматически создавать отсутствующую БД.
+ * Обычный запуск сохраняет поведение Payload; read-only CLI включает запрет
+ * явно до импорта payload.config.ts.
+ *
+ * @param {Record<string, string | undefined>} [source]
+ * @returns {boolean}
+ */
+export function databaseCreateDisabled(source) {
+  const env = source ?? process.env;
+  const raw = env[DB_DISABLE_CREATE_ENV_KEY];
+  if (typeof raw !== 'string' || raw.trim() === '') return false;
+  const value = raw.trim().toLowerCase();
+  if (value === 'false' || value === '0' || value === 'off') return false;
+  if (value === 'true' || value === '1' || value === 'on') return true;
+  throw new Error(
+    `Переменная окружения ${DB_DISABLE_CREATE_ENV_KEY} принимает только true/false ` +
+      `(допустимы 1/0, on/off), получено: «${raw}».`,
   );
 }
 

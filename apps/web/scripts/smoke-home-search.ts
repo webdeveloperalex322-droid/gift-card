@@ -682,9 +682,9 @@ async function main(): Promise<void> {
     await publish('cards', futureCardId);
     await publish('collections', future.id);
 
-    const seasonalPath = `/podborki/${PREFIX}-gruppa/${PREFIX}-sezonnaya`;
-    const halfOpenPath = `/podborki/${PREFIX}-gruppa/${PREFIX}-poluotkrytaya`;
-    const futurePath = `/podborki/${PREFIX}-gruppa/${PREFIX}-budushchaya`;
+    const seasonalPath = `/otkrytki/${PREFIX}-gruppa/${PREFIX}-sezonnaya`;
+    const halfOpenPath = `/otkrytki/${PREFIX}-gruppa/${PREFIX}-poluotkrytaya`;
+    const futurePath = `/otkrytki/${PREFIX}-gruppa/${PREFIX}-budushchaya`;
 
     /* ------------------------------------------------------------ */
     /* Собранный сервер                                             */

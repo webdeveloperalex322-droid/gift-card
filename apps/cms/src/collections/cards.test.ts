@@ -157,6 +157,26 @@ describe('cards: поля, управляющие индексацией, зак
 });
 
 describe('cards: служебные поля не пишутся снаружи', () => {
+  it('ключ общего импорта уникален, скрыт и доступен только системному хуку', () => {
+    const field = findField(Cards.fields, 'sourceImportKey');
+    expect('unique' in field ? field.unique : undefined).toBe(true);
+    expect('index' in field ? field.index : undefined).toBe(true);
+    expect('access' in field ? field.access?.create : undefined).toBe(systemFieldAccess);
+    expect('access' in field ? field.access?.update : undefined).toBe(systemFieldAccess);
+    expect('admin' in field && field.admin && 'hidden' in field.admin ? field.admin.hidden : undefined).toBe(true);
+  });
+
+  it('ключ pilot-импорта уникален в базе, скрыт и не пишется через API', () => {
+    const field = findField(Cards.fields, 'pilotImportKey');
+    expect('unique' in field ? field.unique : undefined).toBe(true);
+    expect('index' in field ? field.index : undefined).toBe(true);
+    expect('access' in field ? field.access?.create : undefined).toBe(systemFieldAccess);
+    expect('access' in field ? field.access?.update : undefined).toBe(systemFieldAccess);
+    expect('admin' in field && field.admin && 'hidden' in field.admin
+      ? field.admin.hidden
+      : undefined).toBe(true);
+  });
+
   it('pHash закрыт и на создании, и на обновлении', () => {
     const pHash = findField(Cards.fields, 'pHash');
     const access = 'access' in pHash ? pHash.access : undefined;

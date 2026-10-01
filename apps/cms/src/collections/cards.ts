@@ -9,10 +9,17 @@ import {
   systemFieldAccess,
 } from '../access/policies';
 import { cardImageHooks } from '../images/card-image-hooks';
+import { assignTrustedPilotImportKey } from '../import/pilot-import-identity';
+import { assignTrustedSourceImportKey } from '../import/source-import-identity';
 import { imageVariantFields } from '../images/image-mirror';
 import { CARD_PATH_PREFIX, contentDocumentPath } from '../seo/paths';
 import { attachCollectionsInBulk } from './card-collections';
 import { collectFieldNames, contentHooks } from './content-hooks';
+import {
+  assignContentPathClaimKey,
+  contentPathClaimKeyField,
+  reserveContentDocumentPath,
+} from './content-path-claims';
 import {
   canonicalField,
   headingField,
@@ -33,10 +40,9 @@ import { CARD_REVIEW_REQUIREMENTS } from './status-model';
  * Карточка открытки (задача Э1-04, ТЗ §8.1).
  *
  * Канонический URL карточки — `/otkrytki/<slug>`, один навсегда (ТЗ §5.4).
- * Пространства имён карточек и подборок разведены решением человека от
- * 2026-08-22: подборки живут под `/podborki`, поэтому коллизия «карточка против
- * подборки» здесь структурно невозможна, и проверять её не нужно — нужна только
- * уникальность slug внутри `cards` (обеспечена `unique` на поле).
+ * Карточки и подборки делят `/otkrytki`, поэтому уникальности slug внутри
+ * `cards` недостаточно: серверный claim-хук атомарно закрывает коллизии с
+ * итоговыми путями `collections`.
  *
  * Чего в коллекции НЕТ и почему (это не забытые поля, а адресованные пробелы):
  *
@@ -81,6 +87,22 @@ import { CARD_REVIEW_REQUIREMENTS } from './status-model';
  */
 const cardFields: Field[] = [
   {
+    name: 'pilotImportKey',
+    type: 'text',
+    unique: true,
+    index: true,
+    access: { create: systemFieldAccess, update: systemFieldAccess },
+    admin: { hidden: true },
+  },
+  {
+    name: 'sourceImportKey',
+    type: 'text',
+    unique: true,
+    index: true,
+    access: { create: systemFieldAccess, update: systemFieldAccess },
+    admin: { hidden: true },
+  },
+  {
     name: 'title',
     type: 'text',
     required: true,
@@ -96,6 +118,7 @@ const cardFields: Field[] = [
   // стоит в хуке (`contentHooks`, опция `forbidYearInSlug`) — валидацию поля
   // Payload умеет пропускать при сохранении черновиков версий, хук — нет.
   slugField({ forbidYear: true, prefix: CARD_PATH_PREFIX }),
+  contentPathClaimKeyField(),
   {
     name: 'image',
     type: 'upload',
@@ -461,12 +484,20 @@ function cardHooks(): NonNullable<CollectionConfig['hooks']> {
 
   return {
     ...base,
-    beforeChange: [...base.beforeChange, ...image.beforeChange],
+    beforeChange: [reserveContentDocumentPath('cards'), ...base.beforeChange, ...image.beforeChange],
     beforeOperation: [...base.beforeOperation, ...image.beforeOperation],
-    // Привязка подборок идёт ПЕРВОЙ в фазе: она переписывает значение связи, и
-    // все правила ниже обязаны видеть итоговый список, а не «одну подборку на
-    // всю выборку», которую прислал пакет (задача Э5-06).
-    beforeValidate: [attachCollectionsInBulk(), ...base.beforeValidate, ...image.beforeValidate],
+    // Системный ключ пути назначается до контентных правил. Сразу после него
+    // привязка подборок переписывает значение связи, и все следующие правила
+    // обязаны видеть итоговый список, а не «одну подборку на всю выборку»,
+    // которую прислал пакет (задача Э5-06).
+    beforeValidate: [
+      assignTrustedPilotImportKey(),
+      assignTrustedSourceImportKey(),
+      assignContentPathClaimKey,
+      attachCollectionsInBulk(),
+      ...base.beforeValidate,
+      ...image.beforeValidate,
+    ],
   };
 }
 

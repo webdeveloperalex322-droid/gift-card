@@ -31,10 +31,13 @@ import {
   searchPageView,
 } from '../seo/search-page.js';
 import { searchCards, searchCollections } from './content.js';
-import { type CardTile, cardTiles, collectionLinks } from './page-data.js';
+import { type CardTile, cardTiles, type CatalogSection, collectionLinks } from './page-data.js';
+import { siteCategoryNav } from './site-nav.js';
 
 export interface SearchPageContent {
   readonly view: SearchPageView;
+  /** Категории бокового меню (`../components/SiteSidebar.astro`) — см. `./site-nav.ts`. */
+  readonly categorySections: readonly CatalogSection[];
   /** Найденные открытки плитками. Пустой массив — блока нет. */
   readonly cards: readonly CardTile[];
   /** Найденные подборки ссылками. Пустой массив — блока нет. */
@@ -62,12 +65,14 @@ export async function searchPage(rawQuery: string | null): Promise<SearchPageCon
   const view = searchPageView(query);
 
   if (query === null) {
-    return { cards: [], collections: [], nothingFound: false, truncated: false, view };
+    const categorySections = await siteCategoryNav();
+    return { cards: [], categorySections, collections: [], nothingFound: false, truncated: false, view };
   }
 
-  const [cards, collections] = await Promise.all([
+  const [cards, collections, categorySections] = await Promise.all([
     searchCards(query, SEARCH_RESULTS_LIMIT),
     searchCollections(query, SEARCH_RESULTS_LIMIT),
+    siteCategoryNav(),
   ]);
 
   const tiles = cardTiles(cards);
@@ -75,6 +80,7 @@ export async function searchPage(rawQuery: string | null): Promise<SearchPageCon
 
   return {
     cards: tiles,
+    categorySections,
     collections: links,
     nothingFound: tiles.length === 0 && links.length === 0,
     truncated: cards.length >= SEARCH_RESULTS_LIMIT || collections.length >= SEARCH_RESULTS_LIMIT,
