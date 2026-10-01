@@ -1,6 +1,6 @@
 import { mkdtemp, readdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import sharp from 'sharp';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -521,12 +521,17 @@ describe('pilot import CLI contract', () => {
       CONTENT_IMPORT_AI_EDITOR_EMAIL: 'pilot-ai@example.test',
     }, 'D:/workspace', initializePayload)).rejects.toThrow(/CONTENT_IMPORT_ASSET_ROOT/);
     expect(initializePayload).not.toHaveBeenCalled();
+    // assetRoot считается production-кодом через path.resolve(cwd, raw), поэтому
+    // ожидаемое значение берём тем же resolve, а не хардкодим разделители одной ОС:
+    // «D:/workspace» на Linux не абсолютен и резолвится от cwd — тест обязан быть
+    // переносимым (иначе CI на Linux краснеет, а Windows-машина зеленеет).
+    const workspace = 'D:/workspace';
     expect(requirePilotImportEnvironment({
       CONTENT_IMPORT_AI_EDITOR_EMAIL: ' pilot-ai@example.test ',
       CONTENT_IMPORT_ASSET_ROOT: ' content/pilot/final ',
-    }, 'D:/workspace')).toEqual({
+    }, workspace)).toEqual({
       actorEmail: 'pilot-ai@example.test',
-      assetRoot: 'D:\\workspace\\content\\pilot\\final',
+      assetRoot: resolve(workspace, 'content/pilot/final'),
     });
   });
 
