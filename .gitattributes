@@ -1,0 +1,6 @@
+# Скрипты и конфиги, исполняемые на Linux-сервере, всегда LF — иначе CR ломает
+# shebang и `read` в deploy.sh и приводит к «\r command not found».
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+deploy/** text eol=lf
