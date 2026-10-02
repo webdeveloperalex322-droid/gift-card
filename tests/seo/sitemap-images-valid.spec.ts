@@ -35,6 +35,7 @@ import { expect, test } from '@playwright/test';
 import { fetchRaw } from './support/http.js';
 import {
   annotateEmptyRun,
+  IMAGE_SITEMAP_EMPTY_REASON,
   isImageSitemapUrl,
   readSitemapTree,
 } from './support/sitemap-tree.js';
@@ -56,6 +57,7 @@ test('image sitemap объявляет пространство имён и у �
     annotateEmptyRun(
       testInfo,
       'Image sitemap НЕ проверен: индекс не называет ни одного такого файла.',
+      IMAGE_SITEMAP_EMPTY_REASON,
     );
     return;
   }
@@ -108,7 +110,11 @@ test('каждый <image:loc> отдаётся изображением с ко
   ];
 
   if (imageLocs.length === 0) {
-    annotateEmptyRun(testInfo, 'Отдача файлов из image sitemap НЕ проверена: адресов в ней нет.');
+    annotateEmptyRun(
+      testInfo,
+      'Отдача файлов из image sitemap НЕ проверена: адресов в ней нет.',
+      IMAGE_SITEMAP_EMPTY_REASON,
+    );
     return;
   }
 
