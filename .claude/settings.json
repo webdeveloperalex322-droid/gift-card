@@ -32,6 +32,8 @@
       "Bash(pnpm exec vitest run:*)",
       "Bash(pnpm exec playwright test:*)",
       "Bash(pnpm exec tsc:*)",
+      "Bash(pnpm exec payload run:*)",
+      "Bash(pnpm --filter @otkritka/cms exec payload run:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)"

@@ -27,6 +27,15 @@ if [ -f src.new/deploy/deploy.sh ]; then cp src.new/deploy/deploy.sh "$ROOT/depl
 set -a; . "$ENV_FILE"; set +a
 COMPOSE="deploy/docker-compose.prod.yml"
 
+# Путь админки записан в vhost nginx строкой (location /admin). При другом
+# значении настоящая админка уедет в location / (web) — отдаст 404 и окажется
+# БЕЗ Basic Auth. Лучше остановить деплой, чем молча снять защиту.
+if [ "${PAYLOAD_ADMIN_PATH:-}" != "/admin" ]; then
+  echo "PAYLOAD_ADMIN_PATH=${PAYLOAD_ADMIN_PATH:-<пусто>} не совпадает с location /admin в deploy/nginx/dobrye-otkrytki.ru.conf"
+  echo "Поправь vhost и этот guard вместе, иначе админка останется без Basic Auth"
+  exit 4
+fi
+
 cd "$ROOT/src.new"
 
 # db должен быть поднят ДО сборки: astro build пререндерит /404, middleware
