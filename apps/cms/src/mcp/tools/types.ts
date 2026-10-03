@@ -85,7 +85,7 @@ function sameValue(requested: unknown, saved: unknown): boolean {
       list
         .map((item) =>
           typeof item === 'object' && item !== null && 'id' in item
-            ? String((item as { id: unknown }).id)
+            ? String((item).id)
             : String(item),
         )
         .sort();

@@ -43,7 +43,7 @@ function refusal(call: () => unknown): McpProtocolError {
   } catch (error) {
     return error as McpProtocolError;
   }
-  return expect.unreachable('разбор обязан был отказать') as never;
+  return expect.unreachable('разбор обязан был отказать');
 }
 
 describe('decodeHeaderValue', () => {
@@ -151,7 +151,7 @@ describe('parseEnvelope, modern-эра', () => {
   });
 
   it('отвергает неподдерживаемую версию, перечисляя свои', () => {
-    const body = modernBody({
+    const body: Record<string, unknown> = modernBody({
       params: {
         _meta: { [META_VERSION_KEY]: '1900-01-01' },
         arguments: {},
@@ -166,10 +166,9 @@ describe('parseEnvelope, modern-эра', () => {
     );
     expect(error.code).toBe(MCP_ERROR_CODES.unsupportedVersion);
     expect(error.httpStatus).toBe(400);
-    expect(error.data).toEqual({
-      requested: '1900-01-01',
-      supported: expect.arrayContaining([MODERN_PROTOCOL_VERSION]),
-    });
+    const data = error.data as { requested: string; supported: readonly string[] };
+    expect(data.requested).toBe('1900-01-01');
+    expect(data.supported).toContain(MODERN_PROTOCOL_VERSION);
   });
 
   it('отвергает заголовок modern-версии без метаданных в теле', () => {

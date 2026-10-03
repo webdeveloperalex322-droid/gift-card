@@ -111,7 +111,10 @@ export function createGateway(args: {
       ...(findArgs.sort === undefined ? {} : { sort: findArgs.sort }),
       ...(findArgs.where === undefined ? {} : { where: findArgs.where }),
     });
-    return { docs: page.docs as readonly T[], totalDocs: page.totalDocs };
+    // Приведение через unknown: `find` типизирован объединением трёх коллекций,
+    // а вызывающий знает, какую именно просил. Сузить объединение параметром
+    // нельзя, не продублировав сигнатуру на каждую коллекцию.
+    return { docs: page.docs as unknown as readonly T[], totalDocs: page.totalDocs };
   };
 
   return {
@@ -122,14 +125,14 @@ export function createGateway(args: {
         ...guarded,
         collection: 'cards',
         data: data as never,
-      })) as Card,
+      })),
 
     createCollection: async (data) =>
       (await req.payload.create({
         ...guarded,
         collection: 'collections',
         data: data as never,
-      })) as Collection,
+      })),
 
     findCardImages: async (findArgs) => find<CardImage>('card-images', findArgs),
 
@@ -141,16 +144,16 @@ export function createGateway(args: {
       (await req.payload.update({
         ...guarded,
         collection: 'cards',
-        data: data as never,
+        data: data,
         id,
-      })) as Card,
+      })),
 
     updateCollection: async ({ data, id }) =>
       (await req.payload.update({
         ...guarded,
         collection: 'collections',
-        data: data as never,
+        data: data,
         id,
-      })) as Collection,
+      })),
   };
 }

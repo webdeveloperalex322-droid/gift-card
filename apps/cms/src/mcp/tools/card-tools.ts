@@ -127,7 +127,7 @@ function relationIds(value: unknown): (number | string)[] {
     return [value];
   }
   if (typeof value === 'object' && value !== null && 'id' in value) {
-    const id = (value as { id: unknown }).id;
+    const id = (value).id;
     return typeof id === 'number' || typeof id === 'string' ? [id] : [];
   }
   return [];

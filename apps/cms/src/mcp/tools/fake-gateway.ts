@@ -117,49 +117,51 @@ export function createFakeGateway(args: {
     calls,
     rows,
 
-    createCard: async (data) => {
+    createCard: (data) => {
       calls.createCard.push({ ...data });
       if (duplicatePending) {
         duplicatePending = false;
         const slug = String(data.slug);
         rows.cards.push({ ...data, id: nextId++, slug });
-        throw new Error('duplicate key value violates unique constraint "cards_slug_idx"');
+        return Promise.reject(
+          new Error('duplicate key value violates unique constraint "cards_slug_idx"'),
+        );
       }
       const created = { ...data, id: nextId++ };
       rows.cards.push(created);
-      return created as never;
+      return Promise.resolve(created as never);
     },
 
-    createCollection: async (data) => {
+    createCollection: (data) => {
       calls.createCollection.push({ ...data });
       const created = { ...data, id: nextId++, path: `/otkrytki/${String(data.slug)}` };
       rows.collections.push(created);
-      return created as never;
+      return Promise.resolve(created as never);
     },
 
-    findCardImages: async (findArgs) => {
+    findCardImages: (findArgs) => {
       calls.findCardImages.push(findArgs);
-      return page(rows.cardImages, findArgs);
+      return Promise.resolve(page(rows.cardImages, findArgs));
     },
 
-    findCards: async (findArgs) => {
+    findCards: (findArgs) => {
       calls.findCards.push(findArgs);
-      return page(rows.cards, findArgs);
+      return Promise.resolve(page(rows.cards, findArgs));
     },
 
-    findCollections: async (findArgs) => {
+    findCollections: (findArgs) => {
       calls.findCollections.push(findArgs);
-      return page(rows.collections, findArgs);
+      return Promise.resolve(page(rows.collections, findArgs));
     },
 
-    updateCard: async ({ data, id }) => {
+    updateCard: ({ data, id }) => {
       calls.updateCard.push({ data: { ...data }, id });
-      return update(rows.cards, id, data as Row) as never;
+      return Promise.resolve(update(rows.cards, id, data) as never);
     },
 
-    updateCollection: async ({ data, id }) => {
+    updateCollection: ({ data, id }) => {
       calls.updateCollection.push({ data: { ...data }, id });
-      return update(rows.collections, id, data as Row) as never;
+      return Promise.resolve(update(rows.collections, id, data) as never);
     },
   };
 }

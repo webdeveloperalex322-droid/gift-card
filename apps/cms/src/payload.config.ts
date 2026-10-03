@@ -30,6 +30,8 @@ import {
   requireEnv,
 } from './env.mjs';
 import { seoInventoryEndpoint } from './export/endpoint';
+import { mcpEndpoint, mcpMethodNotAllowedEndpoint } from './mcp/endpoint';
+import { resolveMcpConfig } from './mcp/config';
 import { SiteSettings } from './globals/site-settings';
 import { resolveApiRateLimit } from './http/api-rate-limit';
 import { MAX_UPLOAD_BYTES } from './images/upload-validation';
@@ -93,6 +95,19 @@ reservedRoutes();
  */
 resolveApiRateLimit();
 
+/**
+ * Параметры MCP-слоя (Ч-35) разбираются ТОЖЕ ПРИ СТАРТЕ.
+ *
+ * Довод тот же, что у `resolveApiRateLimit`: мусорное значение `MCP_*` обязано
+ * валить запуск. При ленивом разборе опечатка в `MCP_AUTH_FAILURE_LIMIT`
+ * дожидалась бы первого запроса внешней LLM и приходила бы к ней ответом `500`,
+ * а на установке, где MCP за смену никто не дёргал, не проявлялась бы вовсе.
+ *
+ * Результат не используется намеренно: саму конфигурацию ручка читает на каждом
+ * запросе, здесь проверяется только её пригодность.
+ */
+resolveMcpConfig();
+
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const config = buildConfig({
@@ -151,7 +166,15 @@ const config = buildConfig({
   // часть колонок отчёта — фактический ответ живого сайта, выразить это запросом
   // к коллекции нельзя. Записи она читает с overrideAccess: false, то есть через
   // тот же access control, что REST и GraphQL, и анониму не отвечает вовсе.
-  endpoints: [seoInventoryEndpoint],
+  // Выгрузка SEO-инвентаря и ручка MCP для внешнего AI-редактора (Ч-35). Обе
+  // живут под `/api`, поэтому обе проходят через `api/[...slug]/route.ts` и
+  // наследуют ограничение частоты на ключ (Ч-14) без отдельной обёртки.
+  //
+  // MCP зарегистрирован ДВАЖДЫ — на POST и на GET — намеренно. Payload
+  // сопоставляет метод вместе с путём, и без регистрации на GET запрос ушёл бы в
+  // общий обработчик коллекций: клиент получил бы отказ про неизвестную
+  // коллекцию вместо `405`, то есть не отличил бы «так нельзя» от «адреса нет».
+  endpoints: [seoInventoryEndpoint, mcpEndpoint, mcpMethodNotAllowedEndpoint],
 
   // Глобалы. «Настройки сайта» (Э3-00) — единственное место, где живут значения,
   // вынесенные решениями человека из кода в админку: данные организации (Ч-17),

@@ -24,8 +24,16 @@ import { contentDocumentPath } from '../../seo/paths';
 import type { ToolSchema } from '../schema';
 import { type ToolContext, type ToolDefinition, ToolRefusal, truncation } from './types';
 
-/** Поля подборки, которые читают инструменты. */
+/**
+ * Поля подборки, которые читают инструменты.
+ *
+ * Индексная подпись стоит здесь не для вольности: запись уходит в
+ * `contentDocumentPath`, который принимает произвольный документ, и без подписи
+ * каждый такой вызов требовал бы приведения типа. Приведение в десяти местах
+ * прячет ошибку лучше, чем одна честная подпись.
+ */
 interface NodeRecord {
+  readonly [key: string]: unknown;
   readonly id: number | string;
   readonly metaDescription?: string | null;
   readonly nodeKind?: string | null;
@@ -38,6 +46,7 @@ interface NodeRecord {
 }
 
 interface CardRecord {
+  readonly [key: string]: unknown;
   readonly alt?: string | null;
   readonly caption?: string | null;
   readonly collections?: unknown;
@@ -62,15 +71,12 @@ function relationIds(value: unknown): (number | string)[] {
     return [value];
   }
   if (typeof value === 'object' && value !== null && 'id' in value) {
-    const id = (value as { id: unknown }).id;
+    const id = (value).id;
     return typeof id === 'number' || typeof id === 'string' ? [id] : [];
   }
   return [];
 }
 
-function isPublished(doc: { readonly status?: string | null }): boolean {
-  return doc.status === 'published';
-}
 
 /* ------------------------------------------------------------------ */
 /* catalog_overview                                                    */
@@ -100,17 +106,17 @@ async function runCatalogOverview(
     sort: 'path',
     ...(nodeKind === undefined ? {} : { where: { nodeKind: { equals: nodeKind } } }),
   });
-  const nodes = nodesPage.docs as readonly NodeRecord[];
+  const nodes = nodesPage.docs as unknown as readonly NodeRecord[];
 
   // Все узлы нужны для счёта по поддереву: у группирующего узла своих открыток
   // нет, и без полного дерева его объём оказался бы нулевым всегда.
   const allNodesPage = nodeKind === undefined ? nodesPage : await ctx.gateway.findCollections({});
-  const allNodes = allNodesPage.docs as readonly NodeRecord[];
+  const allNodes = allNodesPage.docs as unknown as readonly NodeRecord[];
 
   const cardsPage = await ctx.gateway.findCards({
     where: { status: { equals: 'published' } },
   });
-  const publishedCards = cardsPage.docs as readonly CardRecord[];
+  const publishedCards = cardsPage.docs as unknown as readonly CardRecord[];
 
   const ownPublished = new Map<string, number>();
   for (const card of publishedCards) {
@@ -162,7 +168,7 @@ async function runCatalogOverview(
       // человеком, и решение всё равно его.
       missingForIndex: Math.max(0, threshold - published),
       nodeKind: node.nodeKind ?? null,
-      path: contentDocumentPath('collections', node as Record<string, unknown>),
+      path: contentDocumentPath('collections', node),
       publishedCards: published,
       robots: node.robots ?? null,
       status: node.status ?? null,
@@ -203,7 +209,7 @@ async function findNode(
     limit: 1,
     where: id === undefined ? { path: { equals: path } } : { id: { equals: id } },
   });
-  const node = page.docs[0] as NodeRecord | undefined;
+  const node = page.docs[0] as unknown as NodeRecord | undefined;
   if (node === undefined) {
     throw new ToolRefusal(
       `Узел не найден: ${id === undefined ? `path «${String(path)}»` : `id «${String(id)}»`}. ` +
@@ -228,10 +234,10 @@ async function runCollectionGet(
   });
 
   return {
-    cards: (cardsPage.docs as readonly CardRecord[]).map((card) => ({
+    cards: (cardsPage.docs as unknown as readonly CardRecord[]).map((card) => ({
       hasImage: relationIds(card.image).length > 0,
       id: card.id,
-      path: contentDocumentPath('cards', card as Record<string, unknown>),
+      path: contentDocumentPath('cards', card),
       robots: card.robots ?? null,
       status: card.status ?? null,
       title: card.title ?? null,
@@ -240,10 +246,10 @@ async function runCollectionGet(
       returned: cardsPage.docs.length,
       total: cardsPage.totalDocs,
     }),
-    children: (childrenPage.docs as readonly NodeRecord[]).map((child) => ({
+    children: (childrenPage.docs as unknown as readonly NodeRecord[]).map((child) => ({
       id: child.id,
       nodeKind: child.nodeKind ?? null,
-      path: contentDocumentPath('collections', child as Record<string, unknown>),
+      path: contentDocumentPath('collections', child),
       status: child.status ?? null,
       title: child.title ?? null,
     })),
@@ -252,7 +258,7 @@ async function runCollectionGet(
       metaDescription: node.metaDescription ?? null,
       nodeKind: node.nodeKind ?? null,
       parentId: relationIds(node.parent)[0] ?? null,
-      path: contentDocumentPath('collections', node as Record<string, unknown>),
+      path: contentDocumentPath('collections', node),
       robots: node.robots ?? null,
       slug: node.slug ?? null,
       status: node.status ?? null,
@@ -283,7 +289,7 @@ export async function findCard(
     limit: 1,
     where: id === undefined ? { slug: { equals: slug } } : { id: { equals: id } },
   });
-  const card = page.docs[0] as CardRecord | undefined;
+  const card = page.docs[0] as unknown as CardRecord | undefined;
   if (card === undefined) {
     throw new ToolRefusal(
       `Карточка не найдена: ${id === undefined ? `slug «${String(slug)}»` : `id «${String(id)}»`}.`,
@@ -306,7 +312,7 @@ async function runCardGet(
     id: card.id,
     imageId: relationIds(card.image)[0] ?? null,
     metaDescription: card.metaDescription ?? null,
-    path: contentDocumentPath('cards', card as Record<string, unknown>),
+    path: contentDocumentPath('cards', card),
     robots: card.robots ?? null,
     slug: card.slug ?? null,
     status: card.status ?? null,
@@ -363,9 +369,9 @@ async function runFindWeakContent(
     ...(limit === undefined ? {} : { limit }),
   });
 
-  const cards = cardsPage.docs as readonly CardRecord[];
-  const nodes = nodesPage.docs as readonly NodeRecord[];
-  const all = [...cards, ...nodes] as readonly Readonly<Record<string, unknown>>[];
+  const cards = cardsPage.docs as unknown as readonly CardRecord[];
+  const nodes = nodesPage.docs as unknown as readonly NodeRecord[];
+  const all: readonly Readonly<Record<string, unknown>>[] = [...cards, ...nodes];
 
   const duplicates = new Map<string, Set<string>>();
   for (const field of META_DUPLICATE_FIELDS) {
@@ -459,11 +465,11 @@ async function runCheckDuplicates(
   const candidates: { collection: 'cards' | 'collections'; doc: Record<string, unknown> }[] = [
     ...cardsPage.docs.map((doc) => ({
       collection: 'cards' as const,
-      doc: doc as Record<string, unknown>,
+      doc: doc as unknown as Record<string, unknown>,
     })),
     ...nodesPage.docs.map((doc) => ({
       collection: 'collections' as const,
-      doc: doc as Record<string, unknown>,
+      doc: doc as unknown as Record<string, unknown>,
     })),
   ];
 

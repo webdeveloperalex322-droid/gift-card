@@ -54,11 +54,10 @@ describe('create_collection_draft', () => {
 
   it('отказ сервера про недопустимого родителя передаётся наружу дословно', async () => {
     const gateway = createFakeGateway({});
-    gateway.createCollection = async () => {
-      throw new Error(
-        'Группирующий узел живёт только в корне /otkrytki: родитель задан, а вид — group.',
+    gateway.createCollection = () =>
+      Promise.reject(
+        new Error('Группирующий узел живёт только в корне /otkrytki: родитель задан, а вид — group.'),
       );
-    };
     await expect(
       tool('create_collection_draft').run(
         { gateway },
@@ -125,12 +124,13 @@ describe('send_to_review', () => {
     const gateway = createFakeGateway({
       cards: [{ ...FULL_CARD, caption: null, metaDescription: null }],
     });
-    gateway.updateCard = async () => {
-      throw new Error(
-        'Перевод в review невозможен: не заполнено — meta description, подпись или текст ' +
-          'поздравления.',
+    gateway.updateCard = () =>
+      Promise.reject(
+        new Error(
+          'Перевод в review невозможен: не заполнено — meta description, подпись или текст ' +
+            'поздравления.',
+        ),
       );
-    };
 
     await expect(tool('send_to_review').run({ gateway }, { id: '7', kind: 'card' })).rejects.toThrow(
       /meta description/,

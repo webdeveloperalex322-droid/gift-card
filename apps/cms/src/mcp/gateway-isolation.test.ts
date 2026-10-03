@@ -24,13 +24,32 @@ const ALLOWED_FILES = new Set([
   // без права упомянуть эту строку он не смог бы её и проверить.
   'gateway.test.ts',
   'gateway-isolation.test.ts',
+  // Поиск владельца API-ключа. Единственное место слоя с `overrideAccess: true`, и
+  // оно неизбежно: коллекция `users` закрыта от анонима, а пользователь на момент
+  // проверки токена ещё не установлен. Исключение не на доверии — ниже стоит
+  // отдельная проверка, что файл делает ровно один читающий запрос и ни одного
+  // записывающего.
+  'actor-lookup.ts',
+  'actor-lookup.test.ts',
 ]);
 
+/**
+ * Запрещён ПУТЬ К ДАННЫМ, а не упоминание имени.
+ *
+ * `req.payload.logger` из списка исключён намеренно: журнал — не доступ к
+ * записям, и ручке он нужен, чтобы писать отпечаток отказа. Запрет на него
+ * заставил бы либо отказаться от журнала, либо протащить логгер через лишний
+ * параметр ради прохождения стража — то есть страж начал бы портить код вместо
+ * того, чтобы его защищать.
+ */
 const FORBIDDEN: readonly { readonly pattern: RegExp; readonly why: string }[] = [
-  { pattern: /\breq\.payload\b/, why: 'обращение к Payload мимо шлюза' },
-  { pattern: /\bpayload\.(find|create|update|delete|count)\b/, why: 'операция Payload мимо шлюза' },
+  { pattern: /\breq\.payload\.(?!logger\b)/u, why: 'обращение к данным Payload мимо шлюза' },
   {
-    pattern: /overrideAccess/,
+    pattern: /\bpayload\.(find|create|update|delete|count)\b/u,
+    why: 'операция Payload мимо шлюза',
+  },
+  {
+    pattern: /overrideAccess/u,
     why: 'переключение проверки прав; оно существует ровно в одном месте — в шлюзе',
   },
 ];
@@ -42,7 +61,15 @@ async function collectLayerFiles(dir: string): Promise<string[]> {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...(await collectLayerFiles(full)));
-    } else if (entry.name.endsWith('.ts') && !ALLOWED_FILES.has(entry.name)) {
+    } else if (
+      entry.name.endsWith('.ts') &&
+      // Тесты проверяются отдельно и по другому правилу: они строят РУКОПИСНЫЕ
+      // ДВОЙНИКИ Payload, и без права назвать `find`, `create` и `update` двойник
+      // не написать. В продакшн они не попадают, а запрет прав держится на
+      // продуктовых файлах — именно их и просматривает этот обход.
+      !entry.name.endsWith('.test.ts') &&
+      !ALLOWED_FILES.has(entry.name)
+    ) {
       files.push(full);
     }
   }
@@ -65,6 +92,25 @@ describe('изоляция шлюза', () => {
     }
 
     expect(offenders).toEqual([]);
+  });
+
+  it('исключение actor-lookup.ts остаётся одним читающим запросом', async () => {
+    const source = await readFile(join(LAYER_ROOT, 'actor-lookup.ts'), 'utf8');
+
+    // Ровно один запрос к Payload, и он читающий.
+    expect(source.match(/req\.payload\.\w+/gu)).toEqual(['req.payload.find']);
+
+    // Ни одной записывающей операции — даже в комментарии: имя операции в коде
+    // этого файла означало бы, что исключение расширили.
+    for (const operation of ['payload.create', 'payload.update', 'payload.delete']) {
+      expect(source).not.toContain(operation);
+    }
+
+    // Поиск только по отпечатку ключа и только нужных полей; расшифровываемое
+    // поле `apiKey` в выборку не попадает.
+    expect(source).toContain('apiKeyIndex: { equals: fingerprint }');
+    expect(source).toContain('limit: 1');
+    expect(source).not.toContain('apiKey: true');
   });
 
   it('шлюз действительно зашивает overrideAccess: false', async () => {

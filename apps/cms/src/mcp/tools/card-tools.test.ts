@@ -21,14 +21,10 @@ const FULL_ARGS = {
 
 describe('diffApplied', () => {
   it('ловит молчаливо проигнорированное поле', () => {
-    expect(diffApplied({ requested: { title: 'Новый' }, saved: { title: 'Старый' } })).toEqual([
-      {
-        actual: 'Старый',
-        field: 'title',
-        reason: expect.stringContaining('не применилось'),
-        requested: 'Новый',
-      },
-    ]);
+    const ignored = diffApplied({ requested: { title: 'Новый' }, saved: { title: 'Старый' } });
+    expect(ignored).toHaveLength(1);
+    expect(ignored[0]).toMatchObject({ actual: 'Старый', field: 'title', requested: 'Новый' });
+    expect(ignored[0]?.reason).toMatch(/не применилось/);
   });
 
   it('совпадающие значения расхождением не считает', () => {
@@ -194,11 +190,10 @@ describe('attach_image', () => {
       cardImages: [{ id: 9 }],
       cards: [{ id: 7, image: 1, slug: 'a', status: 'published' }],
     });
-    const original = gateway.updateCard;
-    gateway.updateCard = async ({ id }) => {
-      void original;
-      return gateway.rows.cards.find((row) => String(row.id) === String(id)) as never;
-    };
+    gateway.updateCard = ({ id }) =>
+      Promise.resolve(
+        gateway.rows.cards.find((row) => String(row.id) === String(id)) as never,
+      );
 
     const result = (await tool('attach_image').run(
       { gateway },

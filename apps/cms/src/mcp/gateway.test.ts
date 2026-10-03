@@ -12,9 +12,9 @@ const ACTOR: McpActor = { id: 42, role: 'ai-editor' };
 
 function fakeRequest(): { calls: RecordedCall[]; req: PayloadRequest } {
   const calls: RecordedCall[] = [];
-  const record = (operation: string) => async (args: Readonly<Record<string, unknown>>) => {
+  const record = (operation: string) => (args: Readonly<Record<string, unknown>>) => {
     calls.push({ args, operation });
-    return { docs: [], id: 1, totalDocs: 0 };
+    return Promise.resolve({ docs: [], id: 1, totalDocs: 0 });
   };
   const req = {
     payload: { create: record('create'), find: record('find'), update: record('update') },
