@@ -146,12 +146,17 @@ export {
   renderableAdSlots,
   resolveSiteName,
   richTextPlainText,
+  type SiteCountersFacts,
+  siteCountersCode,
   type SiteName,
   type SiteNameSource,
+  SITE_COUNTERS_MARKER_END,
+  SITE_COUNTERS_MARKER_START,
   SITE_SETTINGS_SLUG,
   validateAdSlotRows,
   validateImageCreatorKind,
   validateProfileUrl,
+  validateSiteCountersCode,
   validateSiteRootPath,
 } from './site-settings-rules.js';
 

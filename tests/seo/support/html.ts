@@ -103,6 +103,18 @@ export interface ScriptTag {
   readonly type: string | null;
   /** Значение `src`, либо `null` у инлайнового скрипта. */
   readonly src: string | null;
+  /**
+   * Смещение открывающего тега в ответе.
+   *
+   * Нужно ровно одному потребителю — послаблению «скрипт допустим внутри области
+   * счётчиков» (`support/counters.ts`, решение Ч-36), — и нужно ИМЕННО полем, а
+   * не поиском тега по строке. `html.indexOf(script.tag)` отвечает смещением
+   * ПЕРВОГО текстуально такого же тега: два одинаковых `<script src="…">` на
+   * странице получили бы одно и то же смещение, и скрипт вне области унаследовал
+   * бы разрешение от своего двойника внутри неё. То есть послабление по МЕСТУ
+   * начало бы работать по СОДЕРЖИМОМУ — ровно то, чего Ч-36 избегает.
+   */
+  readonly at: number;
 }
 
 /**
@@ -111,11 +123,15 @@ export interface ScriptTag {
  * по ТЗ и появятся на карточке и подборке), а не клиентский JS.
  */
 export function scriptTags(html: string): ScriptTag[] {
-  return openingTags(html, 'script').map((tag) => ({
-    tag,
-    type: attributeValue(tag, 'type')?.trim().toLowerCase() ?? null,
-    src: attributeValue(tag, 'src'),
-  }));
+  return [...html.matchAll(/<script\b[^>]*>/gi)].map((match) => {
+    const tag = match[0];
+    return {
+      at: match.index,
+      src: attributeValue(tag, 'src'),
+      tag,
+      type: attributeValue(tag, 'type')?.trim().toLowerCase() ?? null,
+    };
+  });
 }
 
 export interface AnchorTag {

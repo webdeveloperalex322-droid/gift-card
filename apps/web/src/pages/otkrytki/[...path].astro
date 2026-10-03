@@ -21,6 +21,7 @@ import {
   relationId,
   relationIds,
   siteCategoryNav,
+  siteCountersFor,
 } from '../../data';
 import { parseViewParams } from '../../routing/view-params';
 import { adRows } from '../../seo/ad-slots';
@@ -64,6 +65,7 @@ if (resolved.kind === 'card') {
     card: resolved.card,
     categorySections,
     content,
+    counters: siteCountersFor(settings),
     kind: 'card' as const,
     trail,
   };
@@ -109,6 +111,7 @@ if (resolved.kind === 'card') {
     ads: adRows(settings.adSlots),
     categorySections,
     content,
+    counters: siteCountersFor(settings),
     kind: 'collection' as const,
     trail,
   };
@@ -121,6 +124,7 @@ if (resolved.kind === 'card') {
         card={page.card}
         categorySections={page.categorySections}
         content={page.content}
+        counters={page.counters}
         trail={page.trail}
       />
     )
@@ -129,6 +133,7 @@ if (resolved.kind === 'card') {
         ads={page.ads}
         categorySections={page.categorySections}
         content={page.content}
+        counters={page.counters}
         trail={page.trail}
       />
     )}

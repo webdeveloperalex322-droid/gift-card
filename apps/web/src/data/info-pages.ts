@@ -25,6 +25,7 @@ import type { InfoPageFacts, InfoPageKey } from '@otkritka/shared';
 
 import { readSiteSettings } from './content.js';
 import type { CatalogSection } from './page-data.js';
+import { siteCountersFor } from './site-counters.js';
 import { siteCategoryNav } from './site-nav.js';
 import { type InfoPageView, infoPageView } from '../seo/info-pages.js';
 
@@ -55,9 +56,19 @@ export interface InfoPageContent {
   readonly view: InfoPageView;
   /** Категории бокового меню (`../components/SiteSidebar.astro`) — см. `./site-nav.ts`. */
   readonly categorySections: readonly CatalogSection[];
+  /**
+   * Код сторонних счётчиков из настроек (Ч-36) либо `null` — печатать нечего.
+   * Значение отдаётся в `BaseLayout`, трактовка «печатать или промолчать» живёт
+   * в `@otkritka/shared`.
+   */
+  readonly counters: string | null;
 }
 
 export async function infoPage(key: InfoPageKey): Promise<InfoPageContent> {
   const [settings, categorySections] = await Promise.all([readSiteSettings(), siteCategoryNav()]);
-  return { categorySections, view: infoPageView(key, infoPageFacts(settings, key)) };
+  return {
+    categorySections,
+    counters: siteCountersFor(settings),
+    view: infoPageView(key, infoPageFacts(settings, key)),
+  };
 }

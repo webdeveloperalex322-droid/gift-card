@@ -45,6 +45,7 @@ import {
   readSiteSettings,
 } from './content.js';
 import { type CardTile, cardTiles, type CatalogSection, seasonalLinks } from './page-data.js';
+import { siteCountersFor } from './site-counters.js';
 import { catalogSectionsFrom } from './site-nav.js';
 
 /**
@@ -96,6 +97,12 @@ export interface HomePageContent {
    * страницы (тот же довод, что у `SITE_NAV`).
    */
   readonly categorySections: readonly CatalogSection[];
+  /**
+   * Код сторонних счётчиков из настроек (Ч-36) либо `null` — печатать нечего.
+   * Значение отдаётся в `BaseLayout`, трактовка «печатать или промолчать» живёт
+   * в `@otkritka/shared`.
+   */
+  readonly counters: string | null;
   /** Свежие открытки плитками. Пустой массив — блока нет. */
   readonly recent: readonly CardTile[];
   readonly jsonLd: HomePageJsonLd;
@@ -135,6 +142,7 @@ export async function homePage(today: Date, env?: SharedEnv): Promise<HomePageCo
 
   return {
     categorySections,
+    counters: siteCountersFor(settings),
     jsonLd: homePageJsonLd(
       {
         // Передаются СЫРЫЕ данные глобала: из одного поля выводятся два разных

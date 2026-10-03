@@ -18,10 +18,12 @@ interface Props {
   /** Категории бокового меню (`./SiteSidebar.astro`) — см. `../data/site-nav.ts`. */
   categorySections: readonly CatalogSection[];
   content: CollectionPageContent;
+  /** Код счётчиков (Ч-36) либо `null` — см. проп `counters` у `BaseLayout`. */
+  counters: string | null;
   trail: BreadcrumbTrail;
 }
 
-const { ads, categorySections, content, trail } = Astro.props;
+const { ads, categorySections, content, counters, trail } = Astro.props;
 const intro = richTextBlocks(content.intro);
 const jsonLd = content.jsonLd === null ? null : jsonLdScriptText(content.jsonLd);
 const filterQuery = viewParamsQuery(content.filter);
@@ -38,6 +40,7 @@ const updatedLabel =
   canonicalPath={content.canonicalPath}
   robots={content.robots}
   categorySections={categorySections}
+  counters={counters}
 >
   <Breadcrumbs trail={trail} />
   <h1>{content.heading}</h1>

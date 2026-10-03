@@ -24,6 +24,8 @@ import {
   INFO_PAGE_PATHS,
   type InfoPageFacts,
   MAX_AD_SLOTS_PER_POSITION,
+  SITE_COUNTERS_MARKER_END,
+  SITE_COUNTERS_MARKER_START,
   SITE_SETTINGS_SLUG,
   aiDisclosureText,
   imageCreatorJsonLd,
@@ -40,7 +42,9 @@ import {
   organizationJsonLdGaps,
   renderableAdSlots,
   richTextPlainText,
+  siteCountersCode,
   validateAdSlotRows,
+  validateSiteCountersCode,
   validateSiteRootPath,
 } from '@otkritka/shared';
 
@@ -392,5 +396,156 @@ describe('путь от корня сайта в полях глобала', () 
   it('путь от корня принимается — и для страницы, и для файла', () => {
     expect(validateSiteRootPath('/usloviya')).toBe(true);
     expect(validateSiteRootPath('/media/site/logo.svg')).toBe(true);
+  });
+});
+
+describe('Ч-36: сторонние счётчики — код из админки', () => {
+  it('выключатель выключен — кода нет, даже если поле заполнено', () => {
+    expect(siteCountersCode({ code: '<script>counter()</script>', enabled: false })).toBeNull();
+    expect(siteCountersCode({ code: '<script>counter()</script>' })).toBeNull();
+    expect(siteCountersCode({ code: '<script>counter()</script>', enabled: null })).toBeNull();
+  });
+
+  it('согласием считается только `true`: «похожее на да» решает за человека', () => {
+    expect(siteCountersCode({ code: '<script>c()</script>', enabled: 'true' as never })).toBeNull();
+    expect(siteCountersCode({ code: '<script>c()</script>', enabled: 1 as never })).toBeNull();
+  });
+
+  it('пустой код при включённом выключателе — тоже молчание, а не пустая область', () => {
+    expect(siteCountersCode({ code: '', enabled: true })).toBeNull();
+    expect(siteCountersCode({ code: '   \n  ', enabled: true })).toBeNull();
+    expect(siteCountersCode({ enabled: true })).toBeNull();
+    expect(siteCountersCode(null)).toBeNull();
+    expect(siteCountersCode(undefined)).toBeNull();
+  });
+
+  it('включено и заполнено — код отдаётся обрезанным по краям', () => {
+    expect(siteCountersCode({ code: '  <script>c()</script>\n', enabled: true })).toBe(
+      '<script>c()</script>',
+    );
+  });
+
+  it('пустое поле — норма: валидация не требует заполнять то, чего человек не хочет', () => {
+    expect(validateSiteCountersCode(undefined, undefined)).toBe(true);
+    expect(validateSiteCountersCode('', { enabled: false })).toBe(true);
+    expect(validateSiteCountersCode('   ', undefined)).toBe(true);
+  });
+
+  it('обычный код счётчика принимается', () => {
+    expect(
+      validateSiteCountersCode(
+        '<script>(function(m,e,t,r,i,k,a){})(window,document,"script");</script>',
+        { enabled: true },
+      ),
+    ).toBe(true);
+  });
+
+  it('noscript-пиксель отклоняется: он валит приёмку изображений (п. 22)', () => {
+    const withPixel =
+      '<script>c()</script><noscript><div><img src="https://mc.yandex.ru/watch/1" ' +
+      'style="position:absolute; left:-9999px;" alt="" /></div></noscript>';
+    expect(validateSiteCountersCode(withPixel, { enabled: true })).toEqual(expect.any(String));
+    // Каждая половина отклоняется и по отдельности: убрать только `noscript`,
+    // оставив `img`, означало бы изображение без width/height в ответе сервера.
+    expect(validateSiteCountersCode('<img src="/watch/1">', { enabled: true })).toEqual(
+      expect.any(String),
+    );
+    expect(validateSiteCountersCode('<NOSCRIPT>x</NOSCRIPT>', { enabled: true })).toEqual(
+      expect.any(String),
+    );
+    expect(validateSiteCountersCode('<IMG SRC="/watch/1">', { enabled: true })).toEqual(
+      expect.any(String),
+    );
+  });
+
+  it('теги, ломающие требования приёмки, отклоняются целым набором', () => {
+    // Каждый из них ломает требование, за которым стоит тест, и ломает его на
+    // ВСЕХ страницах сразу: код счётчика печатается на каждой.
+    for (const tag of [
+      '<base href="https://chuzhoy.test/">',
+      '<link rel="canonical" href="https://chuzhoy.test/">',
+      '<meta name="robots" content="index,follow">',
+      '<title>Счётчик</title>',
+      '<h1>Счётчик</h1>',
+    ]) {
+      expect(validateSiteCountersCode(`<script>m()</script>${tag}`, { enabled: true })).toEqual(
+        expect.any(String),
+      );
+    }
+    // Регистр не спасает.
+    expect(validateSiteCountersCode('<BASE HREF="/">', { enabled: true })).toEqual(
+      expect.any(String),
+    );
+    // `<style>` и `<iframe>` в наборе НЕ значатся намеренно: проверяемого
+    // требования они не ломают, и запрет был бы вкусовым (см. шапку набора).
+    expect(validateSiteCountersCode('<style>.x{}</style>', { enabled: true })).toBe(true);
+  });
+
+  it('маркер области внутри кода отклоняется: иначе код вынес бы себя за приёмку', () => {
+    expect(
+      validateSiteCountersCode(`<!-- ${SITE_COUNTERS_MARKER_END} --><script>c()</script>`, {
+        enabled: true,
+      }),
+    ).toEqual(expect.any(String));
+    expect(
+      validateSiteCountersCode(`<script>c()</script><!-- ${SITE_COUNTERS_MARKER_START} -->`, {
+        enabled: true,
+      }),
+    ).toEqual(expect.any(String));
+  });
+
+  it('включённый выключатель при пустом коде отклоняется: тихого «ничего» не остаётся', () => {
+    expect(validateSiteCountersCode('', { enabled: true })).toEqual(expect.any(String));
+    expect(validateSiteCountersCode(undefined, { enabled: true })).toEqual(expect.any(String));
+  });
+
+  it('частичная запись без поля кода не отклоняется: сохранённый код виден в siblingData', () => {
+    // Так выглядит `updateGlobal`, правящий ДРУГУЮ группу настроек: `value`
+    // поля не приходит вовсе, а слитые данные несут сохранённый код.
+    expect(
+      validateSiteCountersCode(undefined, {
+        enabled: true,
+        code: '<script>m()</script>',
+      }),
+    ).toBe(true);
+    // Явная очистка поля при включённом выключателе — по-прежнему отказ.
+    expect(
+      validateSiteCountersCode('', { enabled: true, code: '<script>m()</script>' }),
+    ).toEqual(expect.any(String));
+    expect(
+      validateSiteCountersCode(null, { enabled: true, code: '<script>m()</script>' }),
+    ).toEqual(expect.any(String));
+  });
+
+  it('внешний скрипт без async/defer отклоняется: он конкурирует с первым экраном', () => {
+    expect(
+      validateSiteCountersCode('<script src="https://mc.yandex.ru/metrika/tag.js"></script>', {
+        enabled: true,
+      }),
+    ).toEqual(expect.any(String));
+    // `async` и `defer` — любой из двух, в любом регистре и без значения.
+    expect(
+      validateSiteCountersCode('<script async src="https://example.test/t.js"></script>', {
+        enabled: true,
+      }),
+    ).toBe(true);
+    expect(
+      validateSiteCountersCode('<script SRC="https://example.test/t.js" DEFER></script>', {
+        enabled: true,
+      }),
+    ).toBe(true);
+    // Инлайновый скрипт ограничения не касается: грузить ему нечего. Именно так
+    // устроен штатный код Метрики — тег со `src` он создаёт сам, уже в рантайме.
+    expect(
+      validateSiteCountersCode('<script>(function(m,e){})(window,document);</script>', {
+        enabled: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('маркеры отличаются друг от друга и не пусты', () => {
+    expect(SITE_COUNTERS_MARKER_START).not.toBe(SITE_COUNTERS_MARKER_END);
+    expect(SITE_COUNTERS_MARKER_START.length).toBeGreaterThan(0);
+    expect(SITE_COUNTERS_MARKER_END.length).toBeGreaterThan(0);
   });
 });

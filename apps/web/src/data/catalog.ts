@@ -58,6 +58,7 @@ import {
 import { type CollectionPageJsonLd, collectionPageJsonLd } from '../seo/collection-page.js';
 import { listCatalogCards, newNodeContentMemo, readSiteSettings } from './content.js';
 import { type CardTile, cardTiles, type CatalogSection, catalogSectionItems } from './page-data.js';
+import { siteCountersFor } from './site-counters.js';
 import { siteCategoryNav } from './site-nav.js';
 
 /** Что маршрут каталога обязан ответить. */
@@ -96,6 +97,12 @@ export interface CardCatalogBody extends CatalogPageHead {
    * тогда шаблон не печатает ни контейнера, ни подписи.
    */
   readonly ads: AdRows;
+  /**
+   * Код сторонних счётчиков из настроек (Ч-36) либо `null` — печатать нечего.
+   * Значение отдаётся в `BaseLayout`, трактовка «печатать или промолчать» живёт
+   * в `@otkritka/shared`.
+   */
+  readonly counters: string | null;
 }
 
 /**
@@ -155,6 +162,7 @@ export async function cardCatalogPage(
   return {
     ads: adRows(settings.adSlots),
     categorySections,
+    counters: siteCountersFor(settings),
     jsonLd: collectionPageJsonLd(
       {
         canonicalPath: view.canonicalPath,

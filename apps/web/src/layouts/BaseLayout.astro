@@ -213,6 +213,8 @@ import SiteSidebar from '../components/SiteSidebar.astro';
 import StampMark from '../components/StampMark.astro';
 import SiteNav from '../components/SiteNav.astro';
 import type { CatalogSection } from '../data';
+import { SITE_COUNTERS_MARKER_END, SITE_COUNTERS_MARKER_START } from '@otkritka/shared';
+
 import { canonicalUrlFor } from '../routing/canonical';
 import type { PageRobots } from '../seo/robots-directive';
 import { serverEnv } from '../server-env';
@@ -292,9 +294,35 @@ interface Props {
    * состояния, а не забывчивость.
    */
   categorySections: readonly CatalogSection[] | null;
+  /**
+   * Код сторонних счётчиков из настроек сайта (решение Ч-36) либо `null`, если
+   * печатать нечего: человек не включил выключатель или не вставил код.
+   *
+   * Проп ОБЯЗАТЕЛЬНЫЙ и без значения по умолчанию — по той же причине, что
+   * `robots`. Дефолт `null` означал бы, что шаблон, автор которого забыл
+   * передать значение, молча теряет счётчик: страница отвечает 200, выглядит
+   * верно, и узнать об этом можно только по недостающей статистике. Решение
+   * «на этой странице счётчика нет» бывает осознанным (404 пререндерена, базы
+   * на сборке нет), и тогда `null` пишется явно.
+   *
+   * Значение печатается КАК ЕСТЬ (`set:html`): это исполняемый код, который
+   * человек вставил осознанно. Экранирование сломало бы его молча, а
+   * «санитизация» произвольного HTML здесь — иллюзия защиты: гарантия в правах
+   * на запись (только роль `admin`, см. `apps/cms/src/globals/site-settings.ts`),
+   * а не в фильтре шаблона. Запреты на содержимое, которые ПРОВЕРЯЕМЫ, стоят на
+   * вводе: `validateSiteCountersCode` в `@otkritka/shared` отклоняет пиксель
+   * `<img>`/`<noscript>` (он валит приёмку изображений) и служебные маркеры.
+   *
+   * Область обведена маркерами и стоит ПОСЛЕДНЕЙ в документе. Маркеры нужны
+   * приёмке: `tests/seo/no-client-javascript.spec.ts` разрешает исполняемый
+   * `<script>` ровно между ними, а любой другой по-прежнему валит её. Поясняющего
+   * HTML-комментария рядом с самой областью нет намеренно — он уезжал бы в каждый
+   * ответ сервера на каждой странице (то же правило, что у блока `is:inline`).
+   */
+  counters: string | null;
 }
 
-const { canonicalPath, categorySections, description, robots, title } = Astro.props;
+const { canonicalPath, categorySections, counters, description, robots, title } = Astro.props;
 
 // ОДНО значение решает и разметку (рендерить ли рельс), и CSS (атрибут
 // `data-sidebar` на теге body — им включается двухколоночная сетка, см.
@@ -892,5 +920,14 @@ const descriptionText = description?.trim() ?? '';
          той же причине, что и меню: условие «входит в навигацию» из п. 5.1.
          Состав — src/seo/info-pages.ts. -->
     <SiteFooter currentPath={canonicalPath} />
+    {
+      counters === null ? null : (
+        <Fragment
+          set:html={`<!-- ${SITE_COUNTERS_MARKER_START} -->
+${counters}
+<!-- ${SITE_COUNTERS_MARKER_END} -->`}
+        />
+      )
+    }
   </body>
 </html>

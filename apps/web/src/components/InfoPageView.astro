@@ -34,9 +34,11 @@ interface Props {
   view: InfoPageView;
   /** Категории бокового меню (`./SiteSidebar.astro`) — см. `../data/site-nav.ts`. */
   categorySections: readonly CatalogSection[];
+  /** Код счётчиков (Ч-36) либо `null` — см. проп `counters` у `BaseLayout`. */
+  counters: string | null;
 }
 
-const { categorySections, view } = Astro.props;
+const { categorySections, counters, view } = Astro.props;
 
 const trail = infoPageBreadcrumbTrail(view);
 // Разбор тела — тот же, что у вводного текста подборки. Узел, содержимое которого
@@ -51,6 +53,7 @@ const body = richTextBlocks(view.body);
   canonicalPath={view.path}
   robots={view.robots}
   categorySections={categorySections}
+  counters={counters}
 >
   <Breadcrumbs trail={trail} />
 

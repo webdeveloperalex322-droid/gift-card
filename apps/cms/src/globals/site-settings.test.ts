@@ -21,10 +21,13 @@ import {
   INFO_PAGE_INDEXING_FIELD,
   INFO_PAGE_KEYS,
   type InfoPageFacts,
+  SITE_COUNTERS_MARKER_END,
+  SITE_COUNTERS_MARKER_START,
   SITE_SETTINGS_SLUG,
   isImageLicenseComplete,
   isInfoPageIndexable,
   isOrganizationJsonLdRendered,
+  siteCountersCode,
 } from '@otkritka/shared';
 
 import { ROLES } from '../access/roles';
@@ -120,12 +123,12 @@ function fieldAccess(path: string, name: 'create' | 'read' | 'update'): AccessFn
   return access as AccessFn;
 }
 
-function callValidate(path: string, value: unknown): unknown {
+function callValidate(path: string, value: unknown, options: unknown = {}): unknown {
   const validate = fieldAt(path).validate;
   if (typeof validate !== 'function') {
     throw new Error(`у поля «${path}» нет валидации`);
   }
-  return (validate as (value: unknown, options: unknown) => unknown)(value, {});
+  return (validate as (value: unknown, options: unknown) => unknown)(value, options);
 }
 
 function callBeforeChange(path: string, req: PayloadRequest): unknown {
@@ -153,12 +156,13 @@ describe('Э3-00: подключение глобала', () => {
     expect(SiteSettings.versions).toEqual({ drafts: false, max: 50 });
   });
 
-  it('объявлены все четыре группы решений плюс аудит', () => {
+  it('объявлены все группы решений плюс аудит', () => {
     expect(childFields(SiteSettings).map((field) => field.name)).toEqual([
       'organization',
       'imageLicense',
       'infoPages',
       'adSlots',
+      'counters',
       'audit',
     ]);
   });
@@ -221,6 +225,9 @@ describe('Э3-00: все поля пустые по умолчанию', () => {
         value: false,
       })),
       { path: 'adSlots.enabled', value: false },
+      // Ч-36: счётчик не включается сам — он передаёт данные посетителей
+      // третьей стороне, и решение об этом принимает человек.
+      { path: 'counters.enabled', value: false },
     ]);
     expect(defaults.every((entry) => entry.value === false)).toBe(true);
   });
@@ -409,6 +416,77 @@ describe('Э3-00: валидация полей глобала', () => {
       (option: unknown) => asRecord(option).value,
     );
     expect(values).toEqual([...AD_SLOT_POSITIONS]);
+  });
+});
+
+describe('Ч-36: поле с кодом сторонних счётчиков', () => {
+  it('группа подключена к глобалу, в ней выключатель и код', () => {
+    const names = childFields(fieldAt('counters')).map((field) => field.name);
+    expect(names).toEqual(['enabled', 'code']);
+  });
+
+  it('читать может аноним, писать — только admin, и это ВТОРОЙ слой прав', () => {
+    for (const path of ['counters.code', 'counters.enabled']) {
+      // Чтение открыто: шаблон читает глобал анонимом, и доступ на уровне ПОЛЯ
+      // срезал бы значение МОЛЧА — страница перестала бы печатать счётчик, а
+      // админка показывала бы заполненное поле.
+      expect(asRecord(fieldAt(path).access).read).toBeUndefined();
+      // Запись закрыта на уровне поля вдобавок к `access.update` глобала: поле с
+      // произвольным исполняемым JS обязано остаться закрытым и после того, как
+      // право записи в глобал кому-то расширят.
+      for (const phase of ['create', 'update'] as const) {
+        expect(fieldAccess(path, phase)({ req: requestOf(ROLES.admin) })).toBe(true);
+        expect(fieldAccess(path, phase)({ req: requestOf(ROLES.aiEditor) })).toBe(false);
+        expect(fieldAccess(path, phase)({ req: requestOf(null) })).toBe(false);
+      }
+    }
+  });
+
+  it('обычный код счётчика принимается', () => {
+    expect(
+      callValidate('counters.code', '<script>metrika()</script>', {
+        siblingData: { enabled: true },
+      }),
+    ).toBe(true);
+  });
+
+  it('noscript-пиксель отклоняется на вводе, а не красной приёмкой на проде', () => {
+    const withPixel =
+      '<script>m()</script><noscript><div><img src="https://mc.yandex.ru/watch/1" ' +
+      'alt="" /></div></noscript>';
+    expect(callValidate('counters.code', withPixel, { siblingData: { enabled: true } })).toEqual(
+      expect.any(String),
+    );
+  });
+
+  it('служебный маркер внутри кода отклоняется', () => {
+    for (const marker of [SITE_COUNTERS_MARKER_START, SITE_COUNTERS_MARKER_END]) {
+      expect(
+        callValidate('counters.code', `<!-- ${marker} --><script>m()</script>`, {
+          siblingData: { enabled: true },
+        }),
+      ).toEqual(expect.any(String));
+    }
+  });
+
+  it('включённый выключатель при пустом коде отклоняется', () => {
+    expect(callValidate('counters.code', '', { siblingData: { enabled: true } })).toEqual(
+      expect.any(String),
+    );
+    // Выключатель снят — пустое поле норма, это «человек не заполнил».
+    expect(callValidate('counters.code', '', { siblingData: { enabled: false } })).toBe(true);
+  });
+
+  it('предикат на данных глобала: выключено — молчание, включено — код', () => {
+    const settings = {
+      counters: { enabled: false, code: '<script>m()</script>' },
+    } as unknown as SiteSetting;
+    expect(siteCountersCode(settings.counters ?? {})).toBeNull();
+
+    const live = {
+      counters: { enabled: true, code: '<script>m()</script>' },
+    } as unknown as SiteSetting;
+    expect(siteCountersCode(live.counters ?? {})).toBe('<script>m()</script>');
   });
 });
 

@@ -127,6 +127,8 @@ export {
  */
 export { infoPage, infoPageFacts } from './info-pages.js';
 
+export { siteCountersFor } from './site-counters.js';
+
 /**
  * Внутренний поиск (Э3-10). Страница отвечает 200 всегда и всегда `noindex`:
  * обоснование в шапке `./search.ts`.

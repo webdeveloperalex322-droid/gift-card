@@ -30,14 +30,21 @@ import {
   type SearchPageView,
   searchPageView,
 } from '../seo/search-page.js';
-import { searchCards, searchCollections } from './content.js';
+import { readSiteSettings, searchCards, searchCollections } from './content.js';
 import { type CardTile, cardTiles, type CatalogSection, collectionLinks } from './page-data.js';
+import { siteCountersFor } from './site-counters.js';
 import { siteCategoryNav } from './site-nav.js';
 
 export interface SearchPageContent {
   readonly view: SearchPageView;
   /** Категории бокового меню (`../components/SiteSidebar.astro`) — см. `./site-nav.ts`. */
   readonly categorySections: readonly CatalogSection[];
+  /**
+   * Код сторонних счётчиков из настроек (Ч-36) либо `null` — печатать нечего.
+   * Значение отдаётся в `BaseLayout`, трактовка «печатать или промолчать» живёт
+   * в `@otkritka/shared`.
+   */
+  readonly counters: string | null;
   /** Найденные открытки плитками. Пустой массив — блока нет. */
   readonly cards: readonly CardTile[];
   /** Найденные подборки ссылками. Пустой массив — блока нет. */
@@ -64,15 +71,26 @@ export async function searchPage(rawQuery: string | null): Promise<SearchPageCon
   const query = normalizeSearchQuery(rawQuery);
   const view = searchPageView(query);
 
+  // Настройки нужны обеим ветвям: счётчик (Ч-36) печатается и на пустой странице
+  // поиска — она такая же страница сайта, как остальные.
   if (query === null) {
-    const categorySections = await siteCategoryNav();
-    return { cards: [], categorySections, collections: [], nothingFound: false, truncated: false, view };
+    const [categorySections, settings] = await Promise.all([siteCategoryNav(), readSiteSettings()]);
+    return {
+      cards: [],
+      categorySections,
+      collections: [],
+      counters: siteCountersFor(settings),
+      nothingFound: false,
+      truncated: false,
+      view,
+    };
   }
 
-  const [cards, collections, categorySections] = await Promise.all([
+  const [cards, collections, categorySections, settings] = await Promise.all([
     searchCards(query, SEARCH_RESULTS_LIMIT),
     searchCollections(query, SEARCH_RESULTS_LIMIT),
     siteCategoryNav(),
+    readSiteSettings(),
   ]);
 
   const tiles = cardTiles(cards);
@@ -82,6 +100,7 @@ export async function searchPage(rawQuery: string | null): Promise<SearchPageCon
     cards: tiles,
     categorySections,
     collections: links,
+    counters: siteCountersFor(settings),
     nothingFound: tiles.length === 0 && links.length === 0,
     truncated: cards.length >= SEARCH_RESULTS_LIMIT || collections.length >= SEARCH_RESULTS_LIMIT,
     view,

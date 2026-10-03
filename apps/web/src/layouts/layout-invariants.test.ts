@@ -136,6 +136,45 @@ function neverRenders(file: string): boolean {
 
 const RENDERING_TEMPLATES = PAGE_TEMPLATES.filter((file) => !neverRenders(file));
 
+describe('Ч-36: счётчик печатает layout, и проп передают ВСЕ его потребители', () => {
+  /** Файлы, которые рендерят `BaseLayout` сами: страницы и компоненты страниц. */
+  const consumers = filesUnder(WEB_SRC, '.astro').filter((file) =>
+    /<BaseLayout\b/.test(readFileSync(file, 'utf8')),
+  );
+
+  it('потребители layout вообще найдены: пустая выборка проверкой не является', () => {
+    expect(consumers.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it.each(consumers)('%s передаёт проп counters', (file) => {
+    // Проп обязательный и без дефолта, поэтому пропуск валит `astro check`. Тест
+    // ловит другое: передачу `undefined` «чтобы собралось» и новый шаблон,
+    // скопированный с чужого без этого пропа. Забытый счётчик не ломает
+    // страницу — он просто перестаёт считать, и заметно это только по пустой
+    // статистике.
+    expect(readFileSync(file, 'utf8')).toMatch(/counters=\{/u);
+  });
+
+  it('layout обводит код маркерами и печатает его последним в документе', () => {
+    const layout = readFileSync(join(WEB_SRC, 'layouts', 'BaseLayout.astro'), 'utf8');
+    const markup = markupOf(layout);
+
+    // Область маркирована: по ней приёмка отличает разрешённый счётчик от
+    // клиентского JS, которого на сайте быть не должно.
+    expect(markup).toContain('SITE_COUNTERS_MARKER_START');
+    expect(markup).toContain('SITE_COUNTERS_MARKER_END');
+    // Печать без обработки: экранирование сломало бы код молча.
+    expect(markup).toMatch(/set:html=\{`<!-- \$\{SITE_COUNTERS_MARKER_START\}/u);
+    // `null` — печатать нечего, и тогда в ответе нет даже маркеров.
+    expect(markup).toMatch(/counters === null \? null/u);
+    // Последним в документе: внешний домен не должен стоять в очереди перед
+    // содержимым страницы (LCP, раздел «Производительность»).
+    const countersAt = markup.indexOf('SITE_COUNTERS_MARKER_START');
+    expect(countersAt).toBeGreaterThan(markup.indexOf('<SiteFooter'));
+    expect(markup.slice(countersAt)).not.toMatch(/<(?:main|SiteNav|SiteSidebar|SiteFooter)\b/u);
+  });
+});
+
 describe('инварианты всех шаблонов страниц', () => {
   it('шаблоны страниц вообще найдены: пустая выборка проверкой не является', () => {
     expect(PAGE_TEMPLATES.length).toBeGreaterThanOrEqual(5);

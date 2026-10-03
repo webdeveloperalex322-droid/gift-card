@@ -17,10 +17,12 @@ interface Props {
   /** Категории бокового меню (`./SiteSidebar.astro`) — см. `../data/site-nav.ts`. */
   categorySections: readonly CatalogSection[];
   content: CardPageContent;
+  /** Код счётчиков (Ч-36) либо `null` — см. проп `counters` у `BaseLayout`. */
+  counters: string | null;
   trail: BreadcrumbTrail;
 }
 
-const { card, categorySections, content, trail } = Astro.props;
+const { card, categorySections, content, counters, trail } = Astro.props;
 const shares = shareTargets({
   title: content.heading,
   url: canonicalUrlFor(content.canonicalPath, serverEnv()),
@@ -34,6 +36,7 @@ const jsonLd = jsonLdScriptText(content.jsonLd);
   canonicalPath={content.canonicalPath}
   robots={content.robots}
   categorySections={categorySections}
+  counters={counters}
 >
   <Breadcrumbs trail={trail} />
   <h1>{content.heading}</h1>

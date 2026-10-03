@@ -22,7 +22,7 @@ import { infoPage } from '../data';
 
 export const prerender = false;
 
-const { categorySections, view } = await infoPage('terms');
+const { categorySections, counters, view } = await infoPage('terms');
 ---
 
-<InfoPageView categorySections={categorySections} view={view} />
+<InfoPageView categorySections={categorySections} counters={counters} view={view} />
