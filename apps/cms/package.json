@@ -12,6 +12,8 @@
     "audit:links": "payload run ./scripts/run-link-audit.ts",
     "audit:links:scheduled": "payload jobs:run --handle-schedules --queue seo-audit",
     "build": "next build",
+    "cards:index:apply": "payload run ./scripts/open-category.ts -- --apply",
+    "cards:index:report": "payload run ./scripts/open-category.ts --",
     "check": "tsc --noEmit && tsc --noEmit -p ../../tests/api/tsconfig.json",
     "content:import:apply": "payload run ./scripts/import-pilot-content.ts -- --apply",
     "content:import:dry-run": "payload run ./scripts/import-pilot-content.ts -- --dry-run",
