@@ -9,7 +9,7 @@
  *
  * Фильтрация реализована ровно в том объёме, который нужен инструментам:
  * `equals` по полю, `exists` (им отличается КОРНЕВОЙ узел от вложенного), `in` по
- * связи и `and` из двух условий. Полноценный движок
+ * связи, `and` и `or`. Полноценный движок
  * `Where` здесь был бы имитацией базы — а инструменты проверяются не на том, как
  * Payload фильтрует, а на том, что они просят и как поступают с ответом.
  */
@@ -42,6 +42,10 @@ function matches(row: Row, where: unknown): boolean {
 
   if (Array.isArray(clause.and)) {
     return clause.and.every((part) => matches(row, part));
+  }
+
+  if (Array.isArray(clause.or)) {
+    return clause.or.some((part) => matches(row, part));
   }
 
   for (const [field, condition] of Object.entries(clause)) {

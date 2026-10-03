@@ -468,6 +468,20 @@ const CHECK_DUPLICATES_SCHEMA = {
   title: { kind: 'string', description: 'Проверяемый заголовок' },
 } as const satisfies ToolSchema;
 
+/**
+ * Совпадения ищутся ЗАПРОСОМ ПО НОРМАЛИЗОВАННЫМ КЛЮЧАМ, а не сверкой выборки.
+ *
+ * Сначала инструмент выгружал каталог (с потолком 200 карточек и 200 подборок) и
+ * сравнивал значения в памяти. Для инструмента, единственное назначение которого —
+ * найти дубль, это означало ложное «конфликтов нет» всюду за окном выборки.
+ * Находка ревью 2026-10-03.
+ *
+ * Искать есть по чему: `titleKey` и `metaDescriptionKey` — индексированные поля, в
+ * которых лежит ровно `normalizeMetaValue` от соответствующего текста, и тот же
+ * способ использует хук проверки дублей (`collections/content-hooks.ts`). Поэтому
+ * здесь не появляется второго правила о том, что считать дублем: нормализация
+ * одна, поля те же.
+ */
 async function runCheckDuplicates(
   ctx: ToolContext,
   args: Readonly<Record<string, unknown>>,
@@ -477,24 +491,26 @@ async function runCheckDuplicates(
     typeof args.metaDescription === 'string' ? args.metaDescription : undefined;
   const excludeId = typeof args.excludeId === 'string' ? args.excludeId : undefined;
 
-  if (title === undefined && metaDescription === undefined) {
-    throw new ToolRefusal('Нужно передать хотя бы title или metaDescription.');
+  const titleKey = normalizeMetaValue(title);
+  const descriptionKey = normalizeMetaValue(metaDescription);
+
+  if (titleKey === null && descriptionKey === null) {
+    throw new ToolRefusal(
+      'Нужно передать хотя бы title или metaDescription непустым значением.',
+    );
   }
 
-  const cardsPage = await ctx.gateway.findCards({});
-  const nodesPage = await ctx.gateway.findCollections({});
-  const candidates: { collection: 'cards' | 'collections'; doc: Record<string, unknown> }[] = [
-    ...cardsPage.docs.map((doc) => ({
-      collection: 'cards' as const,
-      doc: doc as unknown as Record<string, unknown>,
-    })),
-    ...nodesPage.docs.map((doc) => ({
-      collection: 'collections' as const,
-      doc: doc as unknown as Record<string, unknown>,
-    })),
+  const keyMatch = [
+    ...(titleKey === null ? [] : [{ titleKey: { equals: titleKey } }]),
+    ...(descriptionKey === null ? [] : [{ metaDescriptionKey: { equals: descriptionKey } }]),
   ];
+  const where = { or: keyMatch };
 
-  const wanted: Readonly<Record<string, string | undefined>> = { metaDescription, title };
+  const [cardsPage, nodesPage] = await Promise.all([
+    ctx.gateway.findCards({ where }),
+    ctx.gateway.findCollections({ where }),
+  ]);
+
   const conflicts: {
     collection: string;
     field: string;
@@ -504,16 +520,22 @@ async function runCheckDuplicates(
     title: string | null;
   }[] = [];
 
-  for (const { collection, doc } of candidates) {
-    if (excludeId !== undefined && String(doc.id) === excludeId) {
-      continue;
-    }
-    for (const field of META_DUPLICATE_FIELDS) {
-      const incoming = normalizeMetaValue(wanted[field]);
-      if (incoming === null) {
+  const collect = (
+    docs: readonly Readonly<Record<string, unknown>>[],
+    collection: 'cards' | 'collections',
+  ): void => {
+    for (const doc of docs) {
+      if (excludeId !== undefined && String(doc.id) === excludeId) {
         continue;
       }
-      if (normalizeMetaValue(doc[field]) === incoming) {
+      for (const field of META_DUPLICATE_FIELDS) {
+        const incoming = field === 'title' ? titleKey : descriptionKey;
+        if (incoming === null) {
+          continue;
+        }
+        if (normalizeMetaValue(doc[field]) !== incoming) {
+          continue;
+        }
         conflicts.push({
           collection,
           field,
@@ -524,19 +546,30 @@ async function runCheckDuplicates(
         });
       }
     }
-  }
+  };
+
+  collect(cardsPage.docs as unknown as readonly Readonly<Record<string, unknown>>[], 'cards');
+  collect(
+    nodesPage.docs as unknown as readonly Readonly<Record<string, unknown>>[],
+    'collections',
+  );
+
+  const total = cardsPage.totalDocs + nodesPage.totalDocs;
+  const returned = cardsPage.docs.length + nodesPage.docs.length;
 
   return {
     checked: { metaDescription: metaDescription ?? null, title: title ?? null },
     conflicts,
     note:
-      'Проверка текстовая. Визуально похожие изображения этот инструмент не ищет: pHash ' +
-      'считается при загрузке файла, а загрузка изображений через MCP не идёт (решение Ч-35c). ' +
-      'Похожие открытки показывает админка при загрузке.',
-    scanned: truncation({
-      returned: candidates.length,
-      total: cardsPage.totalDocs + nodesPage.totalDocs,
-    }),
+      'Поиск идёт запросом по индексированным нормализованным ключам (titleKey, ' +
+      'metaDescriptionKey), то есть по всему каталогу, а не по части выборки. Регистр и ' +
+      'повторные пробелы на результат не влияют — нормализация та же, что у хука проверки ' +
+      'дублей. Визуально похожие изображения этот инструмент не ищет: pHash считается при ' +
+      'загрузке файла, а загрузка изображений через MCP не идёт (решение Ч-35c).',
+    // Усечение возможно только если СОВПАДЕНИЙ больше потолка выборки. Это уже
+    // означает «дубль есть», поэтому вывод инструмента от усечения не меняется, —
+    // но признак всё равно отдаётся, а не скрывается.
+    matches: truncation({ returned, total }),
   };
 }
 

@@ -403,6 +403,39 @@ describe('разрешённое: черновик создаётся и поп�
   });
 });
 
+describe('check_duplicates живым запросом', () => {
+  it('находит дубль заголовка опубликованной карточки по нормализованному ключу', async () => {
+    // Юнит-тест этого доказать не может: поиск идёт по `titleKey`, а заполняет его
+    // хук коллекции. Двойник шлюза заполнил бы поле сам и подтвердил бы то, чего в
+    // базе могло не быть.
+    const card = await stored('cards', fixture.cardId);
+    const title = String(card.title);
+
+    const response = await mcpCall({
+      arguments: { title: `  ${title.toUpperCase()}  ` },
+      method: 'tools/call',
+      tool: 'check_duplicates',
+    });
+
+    const result = toolResult(response);
+    expect(result.isError).toBe(false);
+    const conflicts = (result.structured as { conflicts: { field: string; id: number }[] })
+      .conflicts;
+    expect(conflicts.map((conflict) => String(conflict.id))).toContain(String(fixture.cardId));
+    expect(conflicts.every((conflict) => conflict.field === 'title')).toBe(true);
+  });
+
+  it('уникальный заголовок конфликтов не даёт', async () => {
+    const response = await mcpCall({
+      arguments: { title: `Заведомо уникальный заголовок ${run}` },
+      method: 'tools/call',
+      tool: 'check_duplicates',
+    });
+    const conflicts = (toolResult(response).structured as { conflicts: unknown[] }).conflicts;
+    expect(conflicts).toEqual([]);
+  });
+});
+
 describe('протокол живым запросом', () => {
   it('расхождение заголовка и тела отвергается кодом -32020', async () => {
     const raw = await restRaw({

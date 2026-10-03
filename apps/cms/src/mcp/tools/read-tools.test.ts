@@ -262,9 +262,13 @@ describe('find_weak_content', () => {
 });
 
 describe('check_duplicates', () => {
+  // `titleKey` и `metaDescriptionKey` — индексированные поля, в которых лежит
+  // нормализованное значение; их заполняет хук коллекции. В фикстурах они заданы
+  // явно, потому что поиск идёт ПО НИМ, а не по сырому тексту: двойник обязан
+  // изображать ту же форму записи, что отдаёт база.
   it('находит совпадение title независимо от регистра и пробелов', async () => {
     const gateway = createFakeGateway({
-      cards: [{ id: 11, slug: 'a', title: 'Открытка маме' }],
+      cards: [{ id: 11, slug: 'a', title: 'Открытка маме', titleKey: 'открытка маме' }],
     });
     const result = (await tool('check_duplicates').run(
       { gateway },
@@ -275,8 +279,25 @@ describe('check_duplicates', () => {
     ]);
   });
 
+  it('ищет запросом по нормализованным ключам, а не сверкой выборки каталога', async () => {
+    // Раньше инструмент выгружал каталог и сравнивал в памяти — с потолком 200
+    // записей, то есть отвечал «конфликтов нет» всюду за окном выборки.
+    const gateway = createFakeGateway({});
+    await tool('check_duplicates').run({ gateway }, { metaDescription: 'Описание', title: 'Заголовок' });
+
+    expect(gateway.calls.findCards[0]?.where).toEqual({
+      or: [
+        { titleKey: { equals: 'заголовок' } },
+        { metaDescriptionKey: { equals: 'описание' } },
+      ],
+    });
+    expect(gateway.calls.findCollections[0]?.where).toEqual(gateway.calls.findCards[0]?.where);
+  });
+
   it('не считает совпадением саму правимую запись', async () => {
-    const gateway = createFakeGateway({ cards: [{ id: 11, slug: 'a', title: 'Открытка' }] });
+    const gateway = createFakeGateway({
+      cards: [{ id: 11, slug: 'a', title: 'Открытка', titleKey: 'открытка' }],
+    });
     const result = (await tool('check_duplicates').run(
       { gateway },
       { excludeId: '11', title: 'Открытка' },
@@ -287,6 +308,13 @@ describe('check_duplicates', () => {
   it('без title и metaDescription отказывает', async () => {
     const gateway = createFakeGateway({});
     await expect(tool('check_duplicates').run({ gateway }, {})).rejects.toThrow(
+      /хотя бы title или metaDescription/,
+    );
+  });
+
+  it('пустая строка значением не считается', async () => {
+    const gateway = createFakeGateway({});
+    await expect(tool('check_duplicates').run({ gateway }, { title: '   ' })).rejects.toThrow(
       /хотя бы title или metaDescription/,
     );
   });
