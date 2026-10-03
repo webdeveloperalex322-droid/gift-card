@@ -124,8 +124,28 @@ describe('Э6-03: распознавание ключа в заголовке', 
   });
 
   it('чужая схема авторизации ключом не считается', () => {
-    expect(presentedApiKey(headers('Bearer eyJhbGciOi'))).toBeNull();
     expect(presentedApiKey(headers('JWT eyJhbGciOi'))).toBeNull();
+    expect(presentedApiKey(headers('Basic dXNlcjpwYXNz'))).toBeNull();
+  });
+
+  it('схема Bearer считается ключом: так предъявляет ключ MCP-ручка (Ч-35)', () => {
+    // До этой ветки ограничение Ч-14 не действовало на `/api/mcp` вовсе: успешные
+    // вызовы по Bearer не попадали ни в один бакет — и это на единственном входе,
+    // с которого снят Basic Auth. Находка ревью 2026-10-03.
+    expect(presentedApiKey(headers('Bearer abc-key'))).toBe('abc-key');
+  });
+
+  it('Bearer без значения ключом не считается', () => {
+    expect(presentedApiKey(headers('Bearer '))).toBeNull();
+    expect(presentedApiKey(headers('Bearer    '))).toBeNull();
+  });
+
+  it('MCP и прямой REST с одним ключом попадают в ОДИН бакет', () => {
+    // Отпечаток считается от значения ключа, а не от формы заголовка, поэтому
+    // клиент не удваивает свою квоту, сменив схему предъявления.
+    expect(presentedApiKey(headers('Bearer odin-i-tot-zhe'))).toBe(
+      presentedApiKey(headers(`${API_KEY_AUTH_PREFIX}odin-i-tot-zhe`)),
+    );
   });
 
   it('пустое значение после префикса ключом не считается', () => {

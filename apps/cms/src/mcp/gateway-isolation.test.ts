@@ -13,12 +13,19 @@
  * каждый вызов; и этот файл, где запрещённые строки живут шаблонами поиска.
  */
 import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const LAYER_ROOT = import.meta.dirname;
 
-const ALLOWED_FILES = new Set([
+/**
+ * Исключения сверяются по ОТНОСИТЕЛЬНОМУ ПУТИ, а не по имени файла.
+ *
+ * По имени страж обходился переименованием: любой `tools/gateway.ts` или
+ * `tools/actor-lookup.ts` попадал в исключение, потому что совпадало имя.
+ * Находка ревью 2026-10-03.
+ */
+const ALLOWED_PATHS = new Set([
   'gateway.ts',
   // Тест шлюза доказывает, что `overrideAccess: false` уходит в каждый вызов, —
   // без права упомянуть эту строку он не смог бы её и проверить.
@@ -48,6 +55,17 @@ const FORBIDDEN: readonly { readonly pattern: RegExp; readonly why: string }[] =
     pattern: /\bpayload\.(find|create|update|delete|count)\b/u,
     why: 'операция Payload мимо шлюза',
   },
+  // `const db = req.payload;` с последующим `db.find(...)` прежние шаблоны не
+  // ловили: имя переменной может быть любым. Запрещается сам захват объекта —
+  // то есть `req.payload`, за которым НЕ следует точка. Находка ревью 2026-10-03.
+  {
+    pattern: /\breq\.payload\s*(?:[;,)]|$)/mu,
+    why: 'захват объекта Payload в переменную — обход шлюза через псевдоним',
+  },
+  {
+    pattern: /\bgetPayload\s*\(/u,
+    why: 'поднятие собственного экземпляра Payload мимо шлюза',
+  },
   {
     pattern: /overrideAccess/u,
     why: 'переключение проверки прав; оно существует ровно в одном месте — в шлюзе',
@@ -68,7 +86,7 @@ async function collectLayerFiles(dir: string): Promise<string[]> {
       // не написать. В продакшн они не попадают, а запрет прав держится на
       // продуктовых файлах — именно их и просматривает этот обход.
       !entry.name.endsWith('.test.ts') &&
-      !ALLOWED_FILES.has(entry.name)
+      !ALLOWED_PATHS.has(relative(LAYER_ROOT, full).split(sep).join('/'))
     ) {
       files.push(full);
     }

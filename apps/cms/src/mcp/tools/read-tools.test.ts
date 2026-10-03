@@ -65,6 +65,45 @@ describe('catalog_overview', () => {
     expect(result.nodes[0]?.publishedCards).toBe(0);
   });
 
+  it('объём считается агрегатом, а не длиной выборки документов', async () => {
+    const gateway = createFakeGateway({
+      cards: [{ collections: [1], id: 11, status: 'published' }],
+      collections: [{ id: 1, nodeKind: 'occasion', path: '/otkrytki/a' }],
+    });
+    await tool('catalog_overview').run({ gateway }, {});
+
+    // Запрос на счёт ушёл по узлу и со статусом — то есть число не ограничено
+    // потолком выборки документов.
+    expect(gateway.calls.countCards[0]).toEqual({
+      and: [{ status: { equals: 'published' } }, { collections: { in: [1] } }],
+    });
+    // Выгрузки всех опубликованных карточек в память больше нет.
+    expect(gateway.calls.findCards).toHaveLength(0);
+  });
+
+  it('при усечённом дереве объём поддерева не называется числом', async () => {
+    const gateway = createFakeGateway({
+      collections: [
+        { id: 1, nodeKind: 'group', path: '/otkrytki/prazdniki' },
+        { id: 2, nodeKind: 'occasion', parent: 1, path: '/otkrytki/prazdniki/8-marta' },
+      ],
+    });
+    // Дерево отдано не целиком: честнее не назвать число, чем назвать меньшее.
+    gateway.countCollections = () => Promise.resolve(999);
+
+    const result = (await tool('catalog_overview').run({ gateway }, { nodeKind: 'group' })) as {
+      nodes: { missingForIndex: number | null; publishedCards: number | null; volumeKnown: boolean }[];
+      tree: { truncated: boolean };
+    };
+
+    expect(result.tree.truncated).toBe(true);
+    expect(result.nodes[0]).toMatchObject({
+      missingForIndex: null,
+      publishedCards: null,
+      volumeKnown: false,
+    });
+  });
+
   it('признак усечения выставляется, когда отдано не всё', async () => {
     const gateway = createFakeGateway({
       collections: [

@@ -8,7 +8,8 @@
  * дорожкой к данным.
  *
  * Фильтрация реализована ровно в том объёме, который нужен инструментам:
- * `equals` по полю, `in` по связи и `and` из двух условий. Полноценный движок
+ * `equals` по полю, `exists` (им отличается КОРНЕВОЙ узел от вложенного), `in` по
+ * связи и `and` из двух условий. Полноценный движок
  * `Where` здесь был бы имитацией базы — а инструменты проверяются не на том, как
  * Payload фильтрует, а на том, что они просят и как поступают с ответом.
  */
@@ -17,6 +18,8 @@ import type { FindArgs, GatewayPage, McpActor, McpGateway } from '../gateway';
 export type Row = Record<string, unknown>;
 
 export interface GatewayCalls {
+  countCards: (Row | undefined)[];
+  countCollections: (Row | undefined)[];
   createCard: Row[];
   createCollection: Row[];
   findCardImages: FindArgs[];
@@ -58,6 +61,12 @@ function matches(row: Row, where: unknown): boolean {
         return false;
       }
     }
+    if ('exists' in spec) {
+      const present = row[field] !== undefined && row[field] !== null && row[field] !== '';
+      if (present !== (spec.exists === true)) {
+        return false;
+      }
+    }
     if ('in' in spec && Array.isArray(spec.in)) {
       const wanted = spec.in.map((item) => String(item));
       const actual = row[field];
@@ -84,6 +93,8 @@ export function createFakeGateway(args: {
     collections: [...(args.collections ?? [])],
   };
   const calls: GatewayCalls = {
+    countCards: [],
+    countCollections: [],
     createCard: [],
     createCollection: [],
     findCardImages: [],
@@ -116,6 +127,16 @@ export function createFakeGateway(args: {
     actor: args.actor ?? { id: 42, role: 'ai-editor' },
     calls,
     rows,
+
+    countCards: (where) => {
+      calls.countCards.push(where);
+      return Promise.resolve(rows.cards.filter((row) => matches(row, where)).length);
+    },
+
+    countCollections: (where) => {
+      calls.countCollections.push(where);
+      return Promise.resolve(rows.collections.filter((row) => matches(row, where)).length);
+    },
 
     createCard: (data) => {
       calls.createCard.push({ ...data });

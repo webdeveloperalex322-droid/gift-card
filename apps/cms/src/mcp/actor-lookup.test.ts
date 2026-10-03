@@ -69,12 +69,25 @@ describe('findActorByApiKey', () => {
     });
   });
 
-  it('роль берётся из аккаунта, а не подставляется константой ai-editor', async () => {
+  it('ключ администратора каналом НЕ принимается (Ч-35f)', async () => {
+    // Канал открыт одной роли. Ключом admin внешняя модель правила бы тексты уже
+    // опубликованных индексируемых страниц и меняла изображение опубликованной
+    // карточки мимо review: для роли admin правила прав этого не запрещают.
     const { req } = fakeRequest([
       { apiKeyIndex: index, enableAPIKey: true, id: 1, role: 'admin' },
     ]);
-    const result = await findActorByApiKey({ presentedKey: KEY, req, secret: SECRET });
-    expect(result).toMatchObject({ actor: { role: 'admin' } });
+    expect(await findActorByApiKey({ presentedKey: KEY, req, secret: SECRET })).toEqual({
+      outcome: 'forbidden-role',
+    });
+  });
+
+  it('неизвестная роль тоже не принимается', async () => {
+    const { req } = fakeRequest([
+      { apiKeyIndex: index, enableAPIKey: true, id: 1, role: 'editor' },
+    ]);
+    expect(await findActorByApiKey({ presentedKey: KEY, req, secret: SECRET })).toEqual({
+      outcome: 'forbidden-role',
+    });
   });
 
   it('неизвестный ключ', async () => {

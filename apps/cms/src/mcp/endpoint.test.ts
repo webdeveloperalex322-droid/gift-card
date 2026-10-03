@@ -10,7 +10,7 @@ import {
   META_VERSION_KEY,
   MODERN_PROTOCOL_VERSION,
 } from './protocol';
-import { mcpEndpoint, mcpMethodNotAllowedEndpoint, resetFailureStore } from './endpoint';
+import { mcpEndpoint, mcpMethodNotAllowedEndpoints, resetFailureStore } from './endpoint';
 
 const SECRET = 'endpoint-test-secret';
 const KEY = 'c0ffee00-0000-4000-8000-000000000002';
@@ -42,7 +42,7 @@ function harness(args: {
     ]),
   ];
   const headers = new Headers({
-    'x-forwarded-for': args.address ?? '203.0.113.7',
+    'x-real-ip': args.address ?? '203.0.113.7',
     ...(args.headers ?? {}),
   });
 
@@ -66,6 +66,8 @@ function harness(args: {
     json: () => Promise.resolve(args.body),
     method: args.method ?? 'POST',
     payload: {
+      count: (countArgs: Record<string, unknown>) =>
+        Promise.resolve({ totalDocs: countArgs.collection === 'cards' ? cards.length : 0 }),
       create: (createArgs: Record<string, unknown>) =>
         Promise.resolve({ ...(createArgs.data as Record<string, unknown>), id: 1001 }),
       find,
@@ -127,11 +129,26 @@ describe('выключатель', () => {
 });
 
 describe('метод и Origin', () => {
-  it('GET отдаёт 405 с заголовком Allow', async () => {
-    const h = harness({ ...modernRequest('tools/list'), method: 'GET' });
-    const response = (await mcpMethodNotAllowedEndpoint.handler(h.req));
-    expect(response.status).toBe(405);
-    expect(response.headers.get('Allow')).toBe('POST');
+  it('GET, PUT, PATCH, DELETE отдают 405 с заголовком Allow', async () => {
+    // Регистрируются ВСЕ эти методы, а не один GET: на входе, с которого снят
+    // Basic Auth, PATCH и DELETE иначе уходили бы в общий обработчик коллекций и
+    // отвечали бы «неизвестная коллекция» вместо «так нельзя».
+    expect(mcpMethodNotAllowedEndpoints.map((endpoint) => endpoint.method).sort()).toEqual([
+      'delete',
+      'get',
+      'patch',
+      'put',
+    ]);
+
+    for (const endpoint of mcpMethodNotAllowedEndpoints) {
+      const h = harness({
+        ...modernRequest('tools/list'),
+        method: (endpoint.method ?? 'get').toUpperCase(),
+      });
+      const response = await endpoint.handler(h.req);
+      expect(response.status).toBe(405);
+      expect(response.headers.get('Allow')).toBe('POST');
+    }
   });
 
   it('присланный Origin при пустом белом списке отвергается', async () => {
@@ -140,6 +157,20 @@ describe('метод и Origin', () => {
       harness({ ...base, headers: { ...base.headers, origin: 'https://evil.test' } }),
     );
     expect(response.status).toBe(403);
+  });
+
+  it('анонимный запрос с чужим Origin получает 401, а не отличимый 403', async () => {
+    // Иначе `403` подтверждал бы существование адреса тому, от кого его скрывает
+    // выключатель. Браузерная страница чужого сайта ключа не имеет, поэтому защита
+    // от DNS rebinding этим не ослабляется.
+    const base = modernRequest('tools/list');
+    const response = await call(
+      harness({
+        body: base.body,
+        headers: { ...base.headers, authorization: '', origin: 'https://evil.test' },
+      }),
+    );
+    expect(response.status).toBe(401);
   });
 
   it('разрешённый Origin проходит', async () => {
@@ -187,6 +218,25 @@ describe('аутентификация', () => {
     expect(new Set(bodies).size).toBe(1);
   });
 
+  it('ключ администратора получает тот же 401, что неизвестный ключ', async () => {
+    const base = modernRequest('tools/list');
+    const adminKeyIndex = KEY_INDEX;
+
+    const asAdmin = await call(
+      harness({
+        ...base,
+        users: [{ apiKeyIndex: adminKeyIndex, enableAPIKey: true, id: 1, role: 'admin' }],
+      }),
+    );
+    resetFailureStore();
+    const unknown = await call(
+      harness({ body: base.body, headers: { ...base.headers, authorization: 'Bearer nope' } }),
+    );
+
+    expect(asAdmin.status).toBe(401);
+    expect(await asAdmin.text()).toBe(await unknown.text());
+  });
+
   it('перебор упирается в 429 с Retry-After', async () => {
     process.env.MCP_AUTH_FAILURE_LIMIT = '2';
     resetFailureStore();
@@ -201,6 +251,42 @@ describe('аутентификация', () => {
     expect(Number(third.headers.get('Retry-After'))).toBeGreaterThan(0);
   });
 
+  it('исчерпанный предел не доходит до базы: перебор не стоит запроса к Postgres', async () => {
+    process.env.MCP_AUTH_FAILURE_LIMIT = '1';
+    resetFailureStore();
+    const base = modernRequest('tools/list');
+    const h = harness({
+      body: base.body,
+      headers: { ...base.headers, authorization: 'Bearer nope' },
+    });
+
+    const findCalls: string[] = [];
+    const payload = h.req.payload as unknown as { find: (args: Record<string, unknown>) => unknown };
+    const original = payload.find.bind(payload);
+    payload.find = (args: Record<string, unknown>) => {
+      findCalls.push(String(args.collection));
+      return original(args);
+    };
+
+    // Первая попытка: ключ ищется, значит один запрос к users уходит.
+    expect((await call(h)).status).toBe(401);
+    expect(findCalls.filter((name) => name === 'users')).toHaveLength(1);
+
+    // Вторая: предел исчерпан, и база спрашиваться НЕ должна.
+    expect((await call(h)).status).toBe(429);
+    expect(findCalls.filter((name) => name === 'users')).toHaveLength(1);
+  });
+
+  it('успешная аутентификация токен попыток не расходует', async () => {
+    process.env.MCP_AUTH_FAILURE_LIMIT = '1';
+    resetFailureStore();
+    // Десять успешных вызовов подряд при пределе в одну неудачную попытку: если
+    // успех тратил бы токен, второй вызов получил бы 429.
+    for (let i = 0; i < 10; i += 1) {
+      expect((await call(harness(modernRequest('tools/list')))).status).toBe(200);
+    }
+  });
+
   it('предъявленный токен в журнал не попадает', async () => {
     const base = modernRequest('tools/list');
     const h = harness({
@@ -210,6 +296,56 @@ describe('аутентификация', () => {
     await call(h);
     expect(h.logs.join(' ')).not.toContain('sekret-token-value');
     expect(h.logs.join(' ')).toMatch(/Отказ аутентификации/);
+  });
+
+  it('предел попыток не обходится подделкой X-Forwarded-For', async () => {
+    // Снипет прокси использует $proxy_add_x_forwarded_for: присланное клиентом
+    // значение СОХРАНЯЕТСЯ, а настоящий адрес дописывается в конец. Если ключ
+    // бакета брать из первого элемента, клиент выбирает себе новый бакет каждым
+    // запросом и перебирает токены без предела.
+    process.env.MCP_AUTH_FAILURE_LIMIT = '2';
+    resetFailureStore();
+    const base = modernRequest('tools/list');
+
+    const attempt = async (spoofed: string) =>
+      call(
+        harness({
+          body: base.body,
+          headers: {
+            ...base.headers,
+            authorization: 'Bearer nope',
+            // Клиент меняет подделку на каждом запросе, настоящий адрес один.
+            'x-forwarded-for': `${spoofed}, 203.0.113.7`,
+            'x-real-ip': '203.0.113.7',
+          },
+        }),
+      );
+
+    expect((await attempt('10.0.0.1')).status).toBe(401);
+    expect((await attempt('10.0.0.2')).status).toBe(401);
+    expect((await attempt('10.0.0.3')).status).toBe(429);
+  });
+
+  it('без X-Real-IP берётся последний элемент X-Forwarded-For, а не первый', async () => {
+    process.env.MCP_AUTH_FAILURE_LIMIT = '2';
+    resetFailureStore();
+    const base = modernRequest('tools/list');
+
+    const attempt = async (spoofed: string) =>
+      call(
+        harness({
+          body: base.body,
+          headers: {
+            ...base.headers,
+            authorization: 'Bearer nope',
+            'x-forwarded-for': `${spoofed}, 198.51.100.4`,
+          },
+        }),
+      );
+
+    expect((await attempt('10.0.0.1')).status).toBe(401);
+    expect((await attempt('10.0.0.2')).status).toBe(401);
+    expect((await attempt('10.0.0.3')).status).toBe(429);
   });
 
   it('адрес клиента в журнал не попадает', async () => {

@@ -172,6 +172,21 @@ const SCAN_LIMIT = 8;
 export interface RateLimitStore {
   /** Решение по ключу. Ключ — отпечаток, не сам API-ключ (см. `./api-rate-limit.ts`). */
   readonly consume: (key: string, nowMs: number) => RateLimitDecision;
+  /**
+   * Есть ли у ключа хотя бы один токен — БЕЗ расхода.
+   *
+   * Нужна там, где отказ надо вынести ДО дорогой работы, а расходовать токен за
+   * успешный запрос нельзя. Такой случай один и он настоящий: MCP-ручка обязана
+   * упереться в предел неудачных попыток ДО запроса к Postgres за владельцем
+   * ключа, иначе перебор поддельных токенов стоит запроса к базе на каждую
+   * попытку — на входе, с которого снят Basic Auth (находка ревью 2026-10-03).
+   * При этом успешная аутентификация токен попыток тратить не должна, поэтому
+   * `consume` на этом месте не годится.
+   *
+   * Отсутствующий бакет считается полным: неизвестный ключ не наказывается за
+   * незнание — то же правило, что у {@link fullBucket}.
+   */
+  readonly hasCapacity: (key: string, nowMs: number) => boolean;
   /** Сколько бакетов сейчас в памяти. Существует для теста об ограниченности. */
   readonly size: () => number;
 }
@@ -255,6 +270,18 @@ export function createRateLimitStore(args: {
 
       return decision;
     },
+
+    hasCapacity: (key, nowMs) => {
+      const stored = buckets.get(key);
+      if (stored === undefined) {
+        // Бакета нет — он полный по правилу `fullBucket`.
+        return true;
+      }
+      // Пополнение считается, но НЕ записывается: проверка обязана быть
+      // неразрушающей целиком, иначе она превратилась бы в скрытый расход.
+      return refillBucket(stored, settings, nowMs).tokens >= 1;
+    },
+
     size: () => buckets.size,
   };
 }

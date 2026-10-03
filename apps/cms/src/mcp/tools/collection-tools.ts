@@ -183,7 +183,13 @@ async function runCreateCollectionDraft(
     limit: 1,
     where:
       parentId === undefined
-        ? { slug: { equals: slug } }
+        // Родитель НЕ задан — ищем узел того же уровня, то есть корневой. Без
+        // условия `parent: { exists: false }` поиск по одному slug находил бы
+        // одноимённый узел, живущий под каким-то родителем, и вызов отвечал бы
+        // «уже существует на этом уровне», отдавая путь ЧУЖОГО узла. URL при этом
+        // не создавался и не менялся, но модель получала не ту запись, о которой
+        // спрашивала, — а дальше правила бы её тексты.
+        ? { and: [{ slug: { equals: slug } }, { parent: { exists: false } }] }
         : { and: [{ slug: { equals: slug } }, { parent: { equals: parentId } }] },
   });
   const existing = existingPage.docs[0] as Record<string, unknown> | undefined;

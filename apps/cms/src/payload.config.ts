@@ -30,7 +30,7 @@ import {
   requireEnv,
 } from './env.mjs';
 import { seoInventoryEndpoint } from './export/endpoint';
-import { mcpEndpoint, mcpMethodNotAllowedEndpoint } from './mcp/endpoint';
+import { mcpEndpoint, mcpMethodNotAllowedEndpoints } from './mcp/endpoint';
 import { resolveMcpConfig } from './mcp/config';
 import { SiteSettings } from './globals/site-settings';
 import { resolveApiRateLimit } from './http/api-rate-limit';
@@ -168,13 +168,19 @@ const config = buildConfig({
   // тот же access control, что REST и GraphQL, и анониму не отвечает вовсе.
   // Выгрузка SEO-инвентаря и ручка MCP для внешнего AI-редактора (Ч-35). Обе
   // живут под `/api`, поэтому обе проходят через `api/[...slug]/route.ts` и
-  // наследуют ограничение частоты на ключ (Ч-14) без отдельной обёртки.
+  // попадают под ограничение частоты (Ч-14) в той же точке, что REST и GraphQL.
   //
-  // MCP зарегистрирован ДВАЖДЫ — на POST и на GET — намеренно. Payload
-  // сопоставляет метод вместе с путём, и без регистрации на GET запрос ушёл бы в
-  // общий обработчик коллекций: клиент получил бы отказ про неизвестную
+  // Для MCP это потребовало отдельной правки, а не досталось само: лимитер
+  // распознавал ключ только в форме Payload (`users API-Key …`), а MCP предъявляет
+  // `Bearer` — на проде Basic Auth занимает тот же заголовок. Схема `Bearer`
+  // добавлена в `http/api-rate-limit.ts`; до этого успешные вызовы MCP не
+  // ограничивались ничем.
+  //
+  // MCP зарегистрирован на POST и, отдельно, на остальные методы — намеренно.
+  // Payload сопоставляет метод вместе с путём, и без этих регистраций запрос ушёл
+  // бы в общий обработчик коллекций: клиент получил бы отказ про неизвестную
   // коллекцию вместо `405`, то есть не отличил бы «так нельзя» от «адреса нет».
-  endpoints: [seoInventoryEndpoint, mcpEndpoint, mcpMethodNotAllowedEndpoint],
+  endpoints: [seoInventoryEndpoint, mcpEndpoint, ...mcpMethodNotAllowedEndpoints],
 
   // Глобалы. «Настройки сайта» (Э3-00) — единственное место, где живут значения,
   // вынесенные решениями человека из кода в админку: данные организации (Ч-17),

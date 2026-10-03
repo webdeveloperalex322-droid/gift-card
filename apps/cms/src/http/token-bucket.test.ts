@@ -192,3 +192,44 @@ describe('Э6-03: хранилище бакетов', () => {
     expect(store.size()).toBeLessThan(20);
   });
 });
+
+describe('hasCapacity: неразрушающая проверка', () => {
+  const settings: TokenBucketSettings = {
+    capacity: 2,
+    refillTokens: 2,
+    refillWindowMs: 60_000,
+  };
+
+  it('у неизвестного ключа ёмкость есть: неизвестность не наказывается', () => {
+    const store = createRateLimitStore({ maxKeys: 10, settings });
+    expect(store.hasCapacity('novyy', 0)).toBe(true);
+    // Проверка бакета не создала: иначе она сама стала бы каналом наполнения карты.
+    expect(store.size()).toBe(0);
+  });
+
+  it('не расходует токены: сто проверок подряд ничего не меняют', () => {
+    const store = createRateLimitStore({ maxKeys: 10, settings });
+    store.consume('kluch', 0);
+    for (let i = 0; i < 100; i += 1) {
+      expect(store.hasCapacity('kluch', 0)).toBe(true);
+    }
+    // Один токен из двух израсходован единственным consume, значит второй цел.
+    expect(store.consume('kluch', 0).allowed).toBe(true);
+    expect(store.consume('kluch', 0).allowed).toBe(false);
+  });
+
+  it('на исчерпанном бакете отвечает false', () => {
+    const store = createRateLimitStore({ maxKeys: 10, settings });
+    store.consume('kluch', 0);
+    store.consume('kluch', 0);
+    expect(store.hasCapacity('kluch', 0)).toBe(false);
+  });
+
+  it('учитывает пополнение за прошедшее время', () => {
+    const store = createRateLimitStore({ maxKeys: 10, settings });
+    store.consume('kluch', 0);
+    store.consume('kluch', 0);
+    expect(store.hasCapacity('kluch', 0)).toBe(false);
+    expect(store.hasCapacity('kluch', 60_000)).toBe(true);
+  });
+});

@@ -222,6 +222,15 @@ export function apiKeyFingerprint(apiKey: string, configSecret: string): string 
 export const API_KEY_AUTH_PREFIX = `${Users.slug} API-Key `;
 
 /**
+ * Вторая форма предъявления ключа — `Authorization: Bearer <ключ>`.
+ *
+ * Её использует MCP-ручка (Ч-35), и выбор схемы не произволен: на проде Basic
+ * Auth висит на остальном `/api`, занимая заголовок Authorization, поэтому
+ * внешний клиент физически не может предъявить форму Payload.
+ */
+export const BEARER_AUTH_PREFIX = 'Bearer ';
+
+/**
  * Ключ, предъявленный в заголовке, либо `null`.
  *
  * Значение берётся ДОСЛОВНО, ровно так, как его вырезает стратегия Payload:
@@ -236,11 +245,31 @@ export const API_KEY_AUTH_PREFIX = `${Users.slug} API-Key `;
  */
 export function presentedApiKey(headers: Headers): string | null {
   const authorization = headers.get('Authorization');
-  if (authorization === null || !authorization.startsWith(API_KEY_AUTH_PREFIX)) {
+  if (authorization === null) {
     return null;
   }
-  const key = authorization.slice(API_KEY_AUTH_PREFIX.length);
-  return key === '' ? null : key;
+  if (authorization.startsWith(API_KEY_AUTH_PREFIX)) {
+    const key = authorization.slice(API_KEY_AUTH_PREFIX.length);
+    return key === '' ? null : key;
+  }
+  // Схема Bearer принимается тоже, и это НЕ послабление. Так ключ предъявляет
+  // MCP-ручка `/api/mcp` (решение Ч-35): клиент не может выставить
+  // `users API-Key …`, потому что на проде Basic Auth занимает тот же заголовок
+  // Authorization, а двух таких заголовков в запросе не бывает.
+  //
+  // Пока этой ветки не было, ограничение Ч-14 не действовало на MCP ВООБСЕ:
+  // успешные вызовы по Bearer не попадали ни в один бакет, и это на единственном
+  // входе, с которого снят Basic Auth. Находка ревью 2026-10-03.
+  //
+  // Значение здесь используется только для вывода отпечатка бакета, поэтому
+  // «лишний» учёт постороннего Bearer-токена ничего не ломает: он получает свой
+  // бакет и свой предел. Обратная ошибка — не учитывать предъявленный ключ —
+  // стоит дороже.
+  if (authorization.startsWith(BEARER_AUTH_PREFIX)) {
+    const key = authorization.slice(BEARER_AUTH_PREFIX.length).trim();
+    return key === '' ? null : key;
+  }
+  return null;
 }
 
 /* ------------------------------------------------------------------ */

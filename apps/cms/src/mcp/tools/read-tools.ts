@@ -94,6 +94,22 @@ const CATALOG_OVERVIEW_SCHEMA = {
   limit: { kind: 'integer', description: 'Сколько узлов отдать, максимум 200', max: 200, min: 1 },
 } as const satisfies ToolSchema;
 
+/**
+ * Объём темы считается АГРЕГАТОМ, а не длиной выборки.
+ *
+ * Сначала здесь читались все опубликованные карточки одним `findCards` и
+ * раскладывались по узлам в памяти. У выборки есть потолок
+ * `GATEWAY_LIMIT_CEILING` = 200, поэтому при 200+ опубликованных карточках
+ * `publishedCards` занижался, `missingForIndex` завышался, а признака усечения по
+ * карточкам в ответе не было вовсе — то самое «молчаливое усечение», которое
+ * запрещает шапка `tools/types.ts`. Направление ошибки безопасно для индексации
+ * (тема выглядит недонаполненной), но оно толкало бы модель создавать открытки
+ * сверх ориентира 20–40 из п. 5.1. Совпавшая находка ревью и SEO-приёмки
+ * 2026-10-03.
+ *
+ * Теперь на каждый возвращаемый узел уходит один `count` — цена известна и
+ * ограничена пределом `limit` этого инструмента, а потолка у результата нет.
+ */
 async function runCatalogOverview(
   ctx: ToolContext,
   args: Readonly<Record<string, unknown>>,
@@ -108,28 +124,18 @@ async function runCatalogOverview(
   });
   const nodes = nodesPage.docs as unknown as readonly NodeRecord[];
 
-  // Все узлы нужны для счёта по поддереву: у группирующего узла своих открыток
-  // нет, и без полного дерева его объём оказался бы нулевым всегда.
-  const allNodesPage = nodeKind === undefined ? nodesPage : await ctx.gateway.findCollections({});
-  const allNodes = allNodesPage.docs as unknown as readonly NodeRecord[];
-
-  const cardsPage = await ctx.gateway.findCards({
-    where: { status: { equals: 'published' } },
-  });
-  const publishedCards = cardsPage.docs as unknown as readonly CardRecord[];
-
-  const ownPublished = new Map<string, number>();
-  for (const card of publishedCards) {
-    for (const id of relationIds(card.collections)) {
-      const key = String(id);
-      ownPublished.set(key, (ownPublished.get(key) ?? 0) + 1);
-    }
-  }
+  // Дерево целиком нужно для счёта по поддереву: у группирующего узла своих
+  // открыток нет, и без полного дерева его объём оказался бы нулевым всегда.
+  // Усечение САМОГО дерева тоже обязано быть видно — иначе сумма группы молча
+  // потеряла бы дальних детей.
+  const treePage = await ctx.gateway.findCollections({});
+  const tree = treePage.docs as unknown as readonly NodeRecord[];
+  const treeTotal = await ctx.gateway.countCollections();
+  const treeTruncated = tree.length < treeTotal;
 
   const childrenOf = new Map<string, NodeRecord[]>();
-  for (const node of allNodes) {
-    const parentIds = relationIds(node.parent);
-    for (const parentId of parentIds) {
+  for (const node of tree) {
+    for (const parentId of relationIds(node.parent)) {
       const key = String(parentId);
       const list = childrenOf.get(key) ?? [];
       list.push(node);
@@ -137,52 +143,67 @@ async function runCatalogOverview(
     }
   }
 
-  const subtreePublished = (node: NodeRecord, seen: Set<string>): number => {
-    const key = String(node.id);
-    if (seen.has(key)) {
-      return 0;
-    }
-    seen.add(key);
-    let total = ownPublished.get(key) ?? 0;
-    for (const child of childrenOf.get(key) ?? []) {
-      total += subtreePublished(child, seen);
-    }
-    return total;
+  /** Идентификаторы узла и всего его поддерева. */
+  const subtreeIds = (node: NodeRecord): (number | string)[] => {
+    const collected: (number | string)[] = [];
+    const seen = new Set<string>();
+    const walk = (current: NodeRecord): void => {
+      const key = String(current.id);
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      collected.push(current.id);
+      for (const child of childrenOf.get(key) ?? []) {
+        walk(child);
+      }
+    };
+    walk(node);
+    return collected;
   };
 
   const threshold = resolveMinPublishedCards();
 
-  const items = nodes.map((node) => {
-    const kind = (node.nodeKind ?? 'occasion') as CollectionNodeKind;
-    const scope = VOLUME_SCOPE[kind] ?? 'own';
-    const published =
-      scope === 'subtree'
-        ? subtreePublished(node, new Set())
-        : (ownPublished.get(String(node.id)) ?? 0);
-    return {
-      id: node.id,
-      indexThreshold: threshold,
-      // Сколько не хватает до порога Ч-06. Ноль означает «порог объёма выполнен»,
-      // а НЕ «можно открывать в индекс»: остальные условия п. 5.1 (спрос,
-      // уникальность текстов, навигация) машиной не проверяются и остаются за
-      // человеком, и решение всё равно его.
-      missingForIndex: Math.max(0, threshold - published),
-      nodeKind: node.nodeKind ?? null,
-      path: contentDocumentPath('collections', node),
-      publishedCards: published,
-      robots: node.robots ?? null,
-      status: node.status ?? null,
-      title: node.title ?? null,
-      volumeScope: scope,
-    };
-  });
+  const items = await Promise.all(
+    nodes.map(async (node) => {
+      const kind = (node.nodeKind ?? 'occasion') as CollectionNodeKind;
+      const scope = VOLUME_SCOPE[kind] ?? 'own';
+      const ids = scope === 'subtree' ? subtreeIds(node) : [node.id];
+      const published = await ctx.gateway.countCards({
+        and: [{ status: { equals: 'published' } }, { collections: { in: ids } }],
+      });
+      // При усечённом дереве сумма по поддереву неполна, и выдавать её за объём
+      // темы нельзя: честнее не называть число, чем назвать меньшее.
+      const volumeKnown = scope === 'own' || !treeTruncated;
+      return {
+        id: node.id,
+        indexThreshold: threshold,
+        // Сколько не хватает до порога Ч-06. Ноль означает «порог объёма выполнен»,
+        // а НЕ «можно открывать в индекс»: остальные условия п. 5.1 (спрос,
+        // уникальность текстов, навигация) машиной не проверяются и остаются за
+        // человеком, и решение всё равно его.
+        missingForIndex: volumeKnown ? Math.max(0, threshold - published) : null,
+        nodeKind: node.nodeKind ?? null,
+        path: contentDocumentPath('collections', node),
+        publishedCards: volumeKnown ? published : null,
+        robots: node.robots ?? null,
+        status: node.status ?? null,
+        title: node.title ?? null,
+        volumeKnown,
+        volumeScope: scope,
+      };
+    }),
+  );
 
   return {
     note:
       'missingForIndex = 0 означает выполненный порог объёма (решение Ч-06), а не разрешение ' +
       'открыть тему в index,follow: это решение принимает человек, и остальные условия п. 5.1 ' +
-      'машиной не проверяются.',
+      'машиной не проверяются. Числа считаются агрегатом по базе, а не по усечённой выборке. ' +
+      'volumeKnown: false означает, что дерево таксономии не влезло в выборку целиком и объём ' +
+      'поддерева назвать нечем — в этом случае publishedCards и missingForIndex равны null.',
     nodes: items,
+    tree: { returned: tree.length, total: treeTotal, truncated: treeTruncated },
     ...truncation({ returned: nodes.length, total: nodesPage.totalDocs }),
   };
 }

@@ -52,6 +52,29 @@ describe('create_collection_draft', () => {
     expect(result.created).toBe(true);
   });
 
+  it('создание корневой группы не находит одноимённый узел под родителем', async () => {
+    // Узел «prazdniki» уже есть, но он лежит ПОД родителем. Вызов на создание
+    // КОРНЕВОЙ группы с тем же slug обязан создать запись, а не отдать чужую:
+    // иначе модель получила бы путь не той подборки и дальше правила бы её тексты.
+    const gateway = createFakeGateway({
+      collections: [
+        { id: 5, parent: 1, path: '/otkrytki/adresaty/prazdniki', slug: 'prazdniki', status: 'draft' },
+      ],
+    });
+
+    const result = (await tool('create_collection_draft').run(
+      { gateway },
+      { nodeKind: 'group', slug: 'prazdniki', title: 'Праздники' },
+    )) as WriteOutcome;
+
+    expect(result.created).toBe(true);
+    expect(gateway.calls.createCollection).toHaveLength(1);
+    // Поиск шёл именно по «корневому» условию, а не по одному slug.
+    expect(gateway.calls.findCollections[0]?.where).toEqual({
+      and: [{ slug: { equals: 'prazdniki' } }, { parent: { exists: false } }],
+    });
+  });
+
   it('отказ сервера про недопустимого родителя передаётся наружу дословно', async () => {
     const gateway = createFakeGateway({});
     gateway.createCollection = () =>

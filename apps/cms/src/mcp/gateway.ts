@@ -22,13 +22,19 @@
  * Третий пункт — не придирка. Правило, живущее в комментарии, нарушается при
  * первой правке под давлением срока; правило, живущее в тесте, — нет.
  *
- * ═══ ПОЛЬЗОВАТЕЛЬ — ВЛАДЕЛЕЦ КЛЮЧА, А НЕ КОНСТАНТА `ai-editor` ═══
+ * ═══ ПОЛЬЗОВАТЕЛЬ — ВЛАДЕЛЕЦ КЛЮЧА, НО КАНАЛ ОТКРЫТ ОДНОЙ РОЛИ ═══
  *
- * Актор берётся из предъявленного API-ключа. Если ключ выпущен человеку с ролью
- * `admin`, шлюз пойдёт с правами `admin` — и это правильно: права принадлежат
- * аккаунту, а не каналу. Жёсткая подстановка `ai-editor` создала бы второй
- * источник правды о правах и разошлась бы с `seo-history`, где автором всё равно
- * оказался бы владелец ключа.
+ * Актор берётся из предъявленного API-ключа, а не подставляется константой: автор
+ * правки в `seo-history` обязан совпадать с владельцем ключа, иначе аудит теряет
+ * смысл. Но сам канал допускает только роль `ai-editor` — это ограничение решения
+ * Ч-35f, и оно проверяется до шлюза (`actor-lookup.ts`, {@link MCP_ALLOWED_ROLE}).
+ *
+ * Сначала здесь стоял довод «права принадлежат аккаунту, а не каналу», и ключ
+ * любого аккаунта принимался. Довод неверен по последствиям: ключом `admin`
+ * внешняя модель правила бы тексты уже опубликованных индексируемых страниц и
+ * меняла изображение опубликованной карточки, минуя `review`, — для роли `admin`
+ * правила прав этого не запрещают. Расширение канала на другие роли — решение
+ * человека со своим номером.
  *
  * ═══ ПОЧЕМУ У ВЫБОРКИ ЕСТЬ ПОТОЛОК, А НЕ ТОЛЬКО ДЕФОЛТ ═══
  *
@@ -66,6 +72,17 @@ export interface FindArgs {
 
 export interface McpGateway {
   readonly actor: McpActor;
+  /**
+   * Сколько карточек подходит под условие. Агрегат, а не длина выборки.
+   *
+   * Существует потому, что объём темы нельзя считать по выборке документов:
+   * у неё есть потолок {@link GATEWAY_LIMIT_CEILING}, и при 200+ опубликованных
+   * карточках порог Ч-06 считался бы по усечённому списку — то есть инструмент
+   * сообщал бы заниженный объём и завышенную нехватку. Находка ревью 2026-10-03.
+   */
+  countCards(where?: Where): Promise<number>;
+  /** Сколько узлов подходит под условие. Нужен, чтобы увидеть усечение дерева. */
+  countCollections(where?: Where): Promise<number>;
   createCard(data: Readonly<Record<string, unknown>>): Promise<Card>;
   createCollection(data: Readonly<Record<string, unknown>>): Promise<Collection>;
   findCardImages(args: FindArgs): Promise<GatewayPage<CardImage>>;
@@ -119,6 +136,24 @@ export function createGateway(args: {
 
   return {
     actor,
+
+    countCards: async (where) => {
+      const { totalDocs } = await req.payload.count({
+        ...guarded,
+        collection: 'cards',
+        ...(where === undefined ? {} : { where }),
+      });
+      return totalDocs;
+    },
+
+    countCollections: async (where) => {
+      const { totalDocs } = await req.payload.count({
+        ...guarded,
+        collection: 'collections',
+        ...(where === undefined ? {} : { where }),
+      });
+      return totalDocs;
+    },
 
     createCard: async (data) =>
       (await req.payload.create({

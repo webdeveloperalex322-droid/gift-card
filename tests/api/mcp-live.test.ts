@@ -198,6 +198,14 @@ describe('аутентификация живым запросом', () => {
     await removeUsers([victim.id]);
   });
 
+  it('ключ администратора каналом не принимается (Ч-35f), доказано живым запросом', async () => {
+    // admin.apiKey создаётся харнессом и проверяется ЗДЕСЬ, а не лежит
+    // неиспользованным: иначе ветка «ключ с другой ролью» не была бы покрыта
+    // вовсе, а именно она давала внешней модели права на опубликованные страницы.
+    const response = await mcpCall({ method: 'tools/list', token: admin.apiKey });
+    expect(response.status).toBe(401);
+  });
+
   it('GET на ручку отдаёт 405', async () => {
     const raw = await restRaw({
       actor: ANONYMOUS,
