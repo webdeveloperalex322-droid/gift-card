@@ -292,6 +292,13 @@ async function handle(req: PayloadRequest): Promise<Response> {
   // держать второй список ролей — он уже есть в `access/roles.ts`, и сужение
   // всё равно делают предикаты прав, которым эта запись и достаётся.
   (req as { user: unknown }).user = {
+    // `_strategy` обязателен, и это не формальность: по нему `seo-history`
+    // отличает приход ПО КЛЮЧУ от правки человеком в админке
+    // (`collections/seo-history-diff.ts`: `apiKey: user._strategy === 'api-key'`).
+    // Без него каждая правка внешней LLM выглядела бы в аудите как сделанная
+    // руками, и прослеживаемость шагов агента (ТЗ §9) держалась бы ни на чём.
+    // Живой набор `tests/api/mcp-live.test.ts` проверяет этот признак отдельно.
+    _strategy: 'api-key',
     collection: 'users',
     email: lookup.actor.email,
     id: lookup.actor.id,

@@ -14,7 +14,7 @@
  *   - одна операция (`find`) и ни одной записывающей. Создать, изменить или
  *     удалить что-либо этот модуль не может технически;
  *   - `limit: 1` и поиск по `apiKeyIndex` — не по email, не по роли, не по id;
- *   - `select` перечисляет четыре поля. Поля `apiKey` среди них НЕТ намеренно: у
+ *   - `select` перечисляет три поля. Поля `apiKey` среди них НЕТ намеренно: у
  *     него есть хук `afterRead`, расшифровывающий значение, и выбрать его значило
  *     бы поднять ключи в память процесса в открытом виде;
  *   - результат наружу не отдаётся: функция возвращает актора (id, роль, email)
@@ -31,7 +31,7 @@
  * поведение, «отозванный» ключ продолжал бы работать через MCP, и отзыв кнопкой в
  * админке — главный довод решения Ч-35f — перестал бы что-либо значить.
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import type { PayloadRequest } from 'payload';
 
 import { apiKeyFingerprint } from '../http/api-rate-limit';
@@ -61,21 +61,25 @@ export function readBearerToken(header: string | null): string | null {
 }
 
 /**
- * Сравнение отпечатков постоянного времени.
+ * ═══ ГДЕ СРАВНИВАЮТСЯ ОТПЕЧАТКИ — И ПОЧЕМУ НЕ ЗДЕСЬ ═══
  *
- * Поиск по индексу выполняет база, но сравнение повторяется здесь и намеренно:
- * равенство, в котором участвует секрет, не должно зависеть от того, как работает
- * оператор `===` на строках. Разная длина — сразу `false`, иначе `timingSafeEqual`
- * бросает.
+ * Сначала здесь стояла дополнительная сверка: прочитать `apiKeyIndex` из записи и
+ * сравнить его с вычисленным отпечатком через `timingSafeEqual`. Выяснилось живым
+ * прогоном, что Payload НЕ ОТДАЁТ это поле в чтении вовсе — ни `findByID`, ни
+ * `find` с явным `select` его не возвращают (замер: ключи ответа —
+ * `id, role, enableAPIKey, email, collection`). Сверка не могла пройти никогда и
+ * ломала аутентификацию целиком: любой действующий ключ получал `401`.
+ *
+ * Сравнение отпечатков выполняет САМ ЗАПРОС: `where` ищет точное равенство по
+ * индексированной колонке, в которой лежит HMAC. Это и есть сравнение, и оно
+ * выполняется в базе. Вычислять его повторно в процессе было нечем — значения
+ * второй стороны у нас нет.
+ *
+ * Про постоянное время. Опасность утечки по времени возникает там, где с секретом
+ * сравнивают посимвольно. Здесь в запрос уходит не ключ, а его HMAC: подобрать по
+ * времени ответа базы можно только отпечаток, а чтобы его вычислить, нужен уже
+ * сам ключ вместе с секретом установки.
  */
-export function fingerprintsEqual(left: string, right: string): boolean {
-  const a = Buffer.from(left, 'utf8');
-  const b = Buffer.from(right, 'utf8');
-  if (a.length !== b.length) {
-    return false;
-  }
-  return timingSafeEqual(a, b);
-}
 
 /** Отпечаток ключа — тот же HMAC, что Payload хранит в `users.apiKeyIndex`. */
 export function fingerprintOf(args: {
@@ -86,7 +90,6 @@ export function fingerprintOf(args: {
 }
 
 interface UserRow {
-  readonly apiKeyIndex?: string | null;
   readonly email?: string | null;
   readonly enableAPIKey?: boolean | null;
   readonly id: number | string;
@@ -110,17 +113,12 @@ export async function findActorByApiKey(args: {
     // установлен. Операция только чтение, по одному индексированному полю.
     overrideAccess: true,
     req,
-    select: { apiKeyIndex: true, email: true, enableAPIKey: true, role: true },
+    select: { email: true, enableAPIKey: true, role: true },
     where: { apiKeyIndex: { equals: fingerprint } },
   });
 
   const user = page.docs[0] as UserRow | undefined;
   if (user === undefined) {
-    return { outcome: 'unknown' };
-  }
-
-  const stored = typeof user.apiKeyIndex === 'string' ? user.apiKeyIndex : '';
-  if (!fingerprintsEqual(stored, fingerprint)) {
     return { outcome: 'unknown' };
   }
 

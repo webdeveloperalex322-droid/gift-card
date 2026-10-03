@@ -111,6 +111,7 @@ describe('изоляция шлюза', () => {
     expect(source).toContain('apiKeyIndex: { equals: fingerprint }');
     expect(source).toContain('limit: 1');
     expect(source).not.toContain('apiKey: true');
+    expect(source).toContain("select: { email: true, enableAPIKey: true, role: true }");
   });
 
   it('шлюз действительно зашивает overrideAccess: false', async () => {

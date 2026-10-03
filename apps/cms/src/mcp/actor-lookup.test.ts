@@ -2,12 +2,7 @@ import type { PayloadRequest } from 'payload';
 import { describe, expect, it } from 'vitest';
 
 import { apiKeyFingerprint } from '../http/api-rate-limit';
-import {
-  findActorByApiKey,
-  fingerprintsEqual,
-  logFingerprint,
-  readBearerToken,
-} from './actor-lookup';
+import { findActorByApiKey, logFingerprint, readBearerToken } from './actor-lookup';
 
 const SECRET = 'test-secret-value';
 const KEY = 'a4f1c0de-0000-4000-8000-000000000001';
@@ -57,20 +52,6 @@ describe('readBearerToken', () => {
 
   it('заголовок Payload «users API-Key ...» этой ручкой не принимается', () => {
     expect(readBearerToken('users API-Key abc')).toBeNull();
-  });
-});
-
-describe('fingerprintsEqual', () => {
-  it('равные значения совпадают', () => {
-    expect(fingerprintsEqual('abc', 'abc')).toBe(true);
-  });
-
-  it('разная длина не ломает сравнение', () => {
-    expect(fingerprintsEqual('abc', 'abcd')).toBe(false);
-  });
-
-  it('разные значения одной длины', () => {
-    expect(fingerprintsEqual('abc', 'abd')).toBe(false);
   });
 });
 
@@ -129,12 +110,11 @@ describe('findActorByApiKey', () => {
     expect(args.collection).toBe('users');
     expect(args.limit).toBe(1);
     expect(args.where).toEqual({ apiKeyIndex: { equals: index } });
-    expect(args.select).toEqual({
-      apiKeyIndex: true,
-      email: true,
-      enableAPIKey: true,
-      role: true,
-    });
+    expect(args.select).toEqual({ email: true, enableAPIKey: true, role: true });
+    // `apiKeyIndex` в выборке НЕ запрашивается: Payload его в чтении не отдаёт
+    // (замер живым прогоном), и запрос поля, которого не будет в ответе, означал
+    // бы проверку, которая не может пройти.
+    expect(args.select).not.toHaveProperty('apiKeyIndex');
     expect(args.select).not.toHaveProperty('apiKey');
   });
 
