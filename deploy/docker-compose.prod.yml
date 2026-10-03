@@ -46,6 +46,16 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE}
+      # MCP-вход внешнего редактора (Ч-35). Только здесь: ручка POST /api/mcp —
+      # маршрут Next в apps/cms, и host nginx проксирует её на 127.0.0.1:3011.
+      # В web те же переменные не передаются намеренно: своей ручки у Astro нет,
+      # флаг там был бы ничем, а мусорное значение валило бы ещё и отдачу сайта.
+      # Пусто = выключено (404). Любое значение кроме true/false валит старт cms.
+      MCP_ENABLED: ${MCP_ENABLED:-}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
+      MCP_AUTH_FAILURE_LIMIT: ${MCP_AUTH_FAILURE_LIMIT:-}
+      MCP_AUTH_FAILURE_WINDOW_SECONDS: ${MCP_AUTH_FAILURE_WINDOW_SECONDS:-}
+      MCP_AUTH_FAILURE_MAX_KEYS: ${MCP_AUTH_FAILURE_MAX_KEYS:-}
       # cms умеет накатывать схему (в отличие от собранного web): пусть пушит.
       PAYLOAD_DB_PUSH: "true"
     volumes:
