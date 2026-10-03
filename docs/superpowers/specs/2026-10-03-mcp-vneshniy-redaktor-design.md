@@ -56,7 +56,7 @@
    │  POST https://dobrye-otkrytki.ru/api/mcp
    │  Authorization: Bearer <API-ключ ai-editor>
    ▼
-nginx:  location ^~ /api/mcp { auth_basic off; }      ← единственное снятие Basic Auth
+nginx:  location = /api/mcp { auth_basic off; }       ← единственное снятие Basic Auth
    ▼
 apps/cms/src/mcp/
    endpoint.ts      Payload Endpoint: метод, Origin, токен, лимит попыток
@@ -195,22 +195,35 @@ access control на том же действии, уже реализованн�
 
 На 2026-10-03 прод в закрытом режиме: Basic Auth висит на всём `server`-блоке
 (`deploy/nginx/dobrye-otkrytki.ru.conf`), плюс `X-Robots-Tag: noindex, nofollow`
-на все ответы. Добавляется ровно одна локация:
+на все ответы. Добавляются две локации — сам адрес и его форма с завершающим
+слешем, которую Next отдаёт одиночным 308:
 
 ```nginx
 # MCP-вход внешней LLM. auth_basic off НАМЕРЕННО: клиент не может предъявить
 # и Basic, и собственный токен — заголовок Authorization один, и Basic его
-# занимает. ^~ даёт приоритет над location /api и location /, поэтому
-# остальной периметр (включая /api/users, /api/graphql, /admin) не ослабляется.
-location ^~ /api/mcp {
+# занимает.
+location = /api/mcp {
+    auth_basic off;
+    proxy_pass http://127.0.0.1:3011;
+    include /etc/nginx/snippets/otkritka-proxy.conf;
+}
+location = /api/mcp/ {
     auth_basic off;
     proxy_pass http://127.0.0.1:3011;
     include /etc/nginx/snippets/otkritka-proxy.conf;
 }
 ```
 
+**Совпадение точное (`=`), а не префиксное.** Первая редакция этого раздела
+предлагала `location ^~ /api/mcp` — форма опасная и отвергнутая ревью
+2026-10-03: префикс не ограничен границей сегмента, поэтому под снятый Basic
+Auth попадали и `/api/mcpx`, и `/api/mcp-<что угодно>`, и `/api/mcp/<что
+угодно>`, то есть будущая коллекция с именем на `mcp` оказалась бы доступна
+анонимно. Ручка живёт по одному адресу, поэтому и локаций ровно две; всё
+остальное `/api/mcp…` падает обратно в `location /api` под Basic Auth.
+
 Это единственное место во всей конфигурации, где снимается Basic Auth (кроме
-ACME-челленджа), и снимается он для одного пути.
+ACME-челленджа), и снимается он для одного адреса.
 
 ### 7.2 Проверка токена
 
