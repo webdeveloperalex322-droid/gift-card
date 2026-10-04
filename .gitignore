@@ -26,3 +26,4 @@ content/pilot-2026-08/import-report.json
 # истории нет, а `git add -A` утащил бы его в коммит.
 *.log
 *.log.err
+.pnpm-store/
