@@ -56,8 +56,10 @@ services:
       MCP_AUTH_FAILURE_LIMIT: ${MCP_AUTH_FAILURE_LIMIT:-}
       MCP_AUTH_FAILURE_WINDOW_SECONDS: ${MCP_AUTH_FAILURE_WINDOW_SECONDS:-}
       MCP_AUTH_FAILURE_MAX_KEYS: ${MCP_AUTH_FAILURE_MAX_KEYS:-}
-      # cms умеет накатывать схему (в отличие от собранного web): пусть пушит.
-      PAYLOAD_DB_PUSH: "true"
+      # В production Payload схему не пушит при любом значении (NODE_ENV) —
+      # схема идёт только миграциями, сервис migrate ниже. "false" явно, чтобы
+      # никто не решил, что новую колонку создаст старт cms.
+      PAYLOAD_DB_PUSH: "false"
     volumes:
       - storage:/data
     depends_on:
@@ -65,6 +67,36 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:3011:3011"
+    networks: [internal]
+
+  # Разовый прогон миграций схемы (deploy.sh, до сборки основного образа).
+  # Профиль tools: `up -d` его не поднимает, только `run --rm migrate`.
+  # Окружение — то же, что у cms: конфиг Payload валидирует его при загрузке.
+  migrate:
+    image: otkritka:migrate
+    profiles: [tools]
+    working_dir: /app/apps/cms
+    command: ["pnpm", "run", "migrate"]
+    environment:
+      NODE_ENV: production
+      PAYLOAD_DB_PUSH: "false"
+      DATABASE_URL: ${DATABASE_URL}
+      PAYLOAD_SECRET: ${PAYLOAD_SECRET}
+      PAYLOAD_ADMIN_PATH: ${PAYLOAD_ADMIN_PATH}
+      SITE_URL: ${SITE_URL}
+      IMAGE_STORAGE_DERIVATIVES_ROOT: ${IMAGE_STORAGE_DERIVATIVES_ROOT}
+      IMAGE_STORAGE_ORIGINALS_ROOT: ${IMAGE_STORAGE_ORIGINALS_ROOT}
+      IMAGE_STORAGE_DRIVER: ${IMAGE_STORAGE_DRIVER}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_REGION: ${S3_REGION}
+      S3_BUCKET_ORIGINALS: ${S3_BUCKET_ORIGINALS}
+      S3_BUCKET_DERIVATIVES: ${S3_BUCKET_DERIVATIVES}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE}
+    depends_on:
+      db:
+        condition: service_healthy
     networks: [internal]
 
   web:

@@ -123,4 +123,13 @@ export default tseslint.config(
       },
     },
   },
+  {
+    // Миграции Payload — сгенерированный код (`migrate:create`): шаблон всегда
+    // объявляет `{ db, payload, req }`, а SQL-миграция использует только `db`.
+    // Править аргументы в каждом файле руками — значит расходиться с генератором.
+    files: ['apps/cms/src/migrations/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-unused-vars': 'off',
+    },
+  },
 );

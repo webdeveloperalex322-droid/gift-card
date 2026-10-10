@@ -25,6 +25,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Lint + типы
         run: pnpm run check
+      - name: Схема совпадает с миграциями
+        # Поле без миграции = колонка, которой нет в прод-базе (Payload в
+        # production схему не пушит), и падение всего сайта после деплоя.
+        # migrate:create к базе не подключается — DATABASE_URL здесь заглушка,
+        # которую требует только загрузка конфига.
+        env:
+          DATABASE_URL: postgres://ci:ci@127.0.0.1:5432/ci
+          PAYLOAD_SECRET: ci-schema-drift-check
+          PAYLOAD_ADMIN_PATH: /admin
+        run: pnpm --filter @otkritka/cms run migrate:check
       - name: Юнит-тесты
         # Только проект unit (~2170 тестов). Проект api и tests/seo требуют
         # живого Postgres + env (PAYLOAD_ADMIN_PATH, DATABASE_URL, PAYLOAD_SECRET)

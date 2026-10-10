@@ -28,6 +28,10 @@
     "images:s3:apply": "tsx scripts/sync-images-to-s3.ts --apply",
     "images:s3:check": "tsx scripts/sync-images-to-s3.ts --check",
     "images:s3:dry-run": "tsx scripts/sync-images-to-s3.ts --dry-run",
+    "migrate": "payload migrate",
+    "migrate:check": "node scripts/migrate-create.mjs --check",
+    "migrate:create": "node scripts/migrate-create.mjs",
+    "migrate:status": "payload migrate:status",
     "start": "next start --port 3011"
   },
   "dependencies": {

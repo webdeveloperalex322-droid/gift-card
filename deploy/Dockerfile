@@ -26,15 +26,30 @@ COPY packages/shared/package.json packages/shared/package.json
 COPY packages/images/package.json packages/images/package.json
 RUN pnpm install --frozen-lockfile
 
+# ---- migrate (лёгкий образ миграций схемы) ----------------------------------
+# Собирается и запускается deploy.sh ДО стадии build: полная сборка сама читает
+# БД (пререндер /404 через middleware), поэтому схема обязана быть новой уже к
+# её началу. Здесь нет ни astro build, ни next build — только исходники и
+# скомпилированные workspace-пакеты, которых достаточно `payload migrate`.
+# В production Payload схему не пушит, так что это единственный путь новой
+# колонки в прод-базу (без него 2026-10-04 упал весь сайт).
+FROM deps AS migrate
+ENV NODE_ENV=production
+COPY . .
+RUN pnpm run build:libs
+WORKDIR /app/apps/cms
+CMD ["pnpm", "run", "migrate"]
+
 # ---- build ------------------------------------------------------------------
 FROM deps AS build
 # SITE_URL обязателен на сборке: пререндеренные маршруты (например 404) собирают
 # абсолютный canonical, а дефолта у хоста нет (packages/shared/site-url.ts).
 # DATABASE_URL тоже обязателен: пререндер /404 проходит через middleware, а тот
 # читает таблицу редиректов (apps/web/src/middleware.ts) — нужна ЖИВАЯ БД на
-# сборке. Поэтому образ собирается с `--network` на поднятый контейнер db, а
-# PAYLOAD_DB_PUSH=true даёт astro build создать схему через Payload Local API
-# (на этой стадии drizzle-kit доступен как devDep, в отличие от собранного web).
+# сборке. Поэтому образ собирается с `--network` на поднятый контейнер db.
+# Схему сборка НЕ создаёт: при NODE_ENV=production Payload push не выполняет
+# (прежний PAYLOAD_DB_PUSH=true здесь ничего не делал). К началу сборки схема
+# уже накатана стадией migrate — порядок задаёт deploy.sh.
 ARG SITE_URL
 ARG DATABASE_URL
 ARG PAYLOAD_SECRET=build-time-placeholder
@@ -43,7 +58,7 @@ ENV SITE_URL=$SITE_URL \
     DATABASE_URL=$DATABASE_URL \
     PAYLOAD_SECRET=$PAYLOAD_SECRET \
     PAYLOAD_ADMIN_PATH=$PAYLOAD_ADMIN_PATH \
-    PAYLOAD_DB_PUSH=true \
+    PAYLOAD_DB_PUSH=false \
     NODE_ENV=production
 COPY . .
 # build:libs (tsc -b) -> web build (astro build && tsc) -> cms build (next build)
